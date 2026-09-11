@@ -7,10 +7,13 @@ from app.core.config import get_settings
 settings = get_settings()
 
 # Railway may provide either postgres:// or postgresql:// URLs depending on the
-# service/template. SQLAlchemy's PostgreSQL dialect expects the latter form.
+# service/template. Explicitly select psycopg (v3); a bare PostgreSQL URL makes
+# SQLAlchemy fall back to the legacy psycopg2 dialect.
 database_url = settings.database_url
 if database_url.startswith("postgres://"):
-    database_url = "postgresql://" + database_url[len("postgres://"):]
+    database_url = "postgresql+psycopg://" + database_url[len("postgres://"):]
+elif database_url.startswith("postgresql://"):
+    database_url = "postgresql+psycopg://" + database_url[len("postgresql://"):]
 
 engine_kwargs: dict[str, object] = {
     "future": True,
