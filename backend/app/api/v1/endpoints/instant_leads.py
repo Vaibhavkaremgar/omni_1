@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,7 @@ from app.models.enums import EmployeeStatus, NumberStatus
 from app.models.instant_lead_source import InstantLeadSource
 from app.models.phone_number import PhoneNumber
 from app.services.auth import AuthenticatedUser
-from app.services.instant_leads import InstantLeadService, _parse_csv, _parse_xlsx
+from app.services.instant_leads import InstantLeadService, _parse_csv, _parse_xlsx, _parse_source
 
 router = APIRouter(prefix="/instant-leads", tags=["instant-leads"])
 
@@ -68,14 +69,37 @@ def get_source(current_user: AuthenticatedUser = Depends(get_current_user), db: 
 
 
 class SourceUpdate(BaseModel):
-    enabled: bool
+    enabled: bool | None = None
+    name: str | None = None
+    source_type: str | None = None
+    frequency_minutes: int | None = None
+    auto_call: bool | None = None
+    working_hours: dict | None = None
+    daily_call_limit: int | None = None
+    spreadsheet_id: str | None = None
+    sheet_name: str | None = None
+    integration_key: str | None = None
+    timezone: str | None = None
 
 
 @router.patch("/source/{source_id}")
 def update_source(source_id: str, payload: SourceUpdate, current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)):
     from uuid import UUID
     source = _source(UUID(source_id), current_user.tenant.id, db)
-    source.enabled = payload.enabled
+    if payload.enabled is not None: source.enabled = payload.enabled
+    if payload.name is not None: source.name = payload.name.strip()[:255]
+    if payload.source_type is not None: source.source_type = payload.source_type
+    if payload.frequency_minutes is not None:
+        if payload.frequency_minutes not in (1, 5, 15, 30): raise HTTPException(status_code=422, detail="Frequency must be 1, 5, 15, or 30 minutes.")
+        source.frequency_minutes = payload.frequency_minutes
+    if payload.auto_call is not None: source.auto_call = payload.auto_call
+    if payload.working_hours is not None: source.working_hours = payload.working_hours
+    if payload.daily_call_limit is not None and payload.daily_call_limit < 0: raise HTTPException(status_code=422, detail="Daily limit cannot be negative.")
+    if payload.daily_call_limit is not None: source.daily_call_limit = payload.daily_call_limit
+    if payload.spreadsheet_id is not None: source.spreadsheet_id = payload.spreadsheet_id.strip()
+    if payload.sheet_name is not None: source.sheet_name = payload.sheet_name.strip()
+    if payload.integration_key is not None: source.integration_key = payload.integration_key
+    if payload.timezone is not None: source.timezone = payload.timezone
     db.commit(); db.refresh(source)
     return InstantLeadService.status(source)
 
@@ -87,3 +111,12 @@ def check_source(source_id: str, current_user: AuthenticatedUser = Depends(get_c
         return InstantLeadService().check(db, UUID(source_id), current_user.tenant.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
+
+@router.post("/source/{source_id}/test")
+def test_source(source_id: str, current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    source = _source(UUID(source_id), current_user.tenant.id, db)
+    try:
+        rows = _parse_source(source, db)
+        return {"ok": True, "records_available": len(rows), "message": "Source configuration is valid."}
+    except Exception as exc:
+        return {"ok": False, "records_available": 0, "message": str(exc)[:200]}

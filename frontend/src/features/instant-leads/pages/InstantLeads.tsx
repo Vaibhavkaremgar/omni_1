@@ -12,7 +12,7 @@ interface CallResult {
   extracted_attributes?: Record<string, unknown> | null; ended_at?: string | null;
 }
 interface TenantSettings { instant_leads_enabled: boolean }
-interface LeadSource { id: string; filename: string; enabled: boolean; last_checked_at?: string | null; last_success_at?: string | null; last_status?: string | null; new_rows?: number }
+interface LeadSource { id: string; filename: string; enabled: boolean; name?: string; spreadsheet_id?: string | null; sheet_name?: string | null; timezone?: string | null; frequency_minutes?: number; auto_call?: boolean; working_hours?: { start?: string; end?: string }; daily_call_limit?: number | null; last_checked_at?: string | null; last_success_at?: string | null; last_status?: string | null; new_rows?: number; last_result?: { records_checked?: number; new_leads?: number; calls_queued?: number; skipped_duplicates?: number } }
 
 export default function InstantLeads() {
   const [searchParams] = useSearchParams();
@@ -34,6 +34,7 @@ export default function InstantLeads() {
   const [uploading, setUploading] = useState(false);
   const [selectedFilename, setSelectedFilename] = useState('');
   const [checking, setChecking] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -107,6 +108,22 @@ export default function InstantLeads() {
       setSource(await backendJson<LeadSource>(`/instant-leads/source/${source.id}/check`, { method: 'POST' }));
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to check the lead document.'); }
     finally { setChecking(false); }
+  };
+
+  const testSource = async () => {
+    if (!source) return;
+    setTesting(true); setError('');
+    try {
+      const result = await backendJson<{ ok: boolean; message: string }>(`/instant-leads/source/${source.id}/test`, { method: 'POST' });
+      if (!result.ok) setError(result.message); else setSource({ ...source, last_status: result.message });
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to test the source.'); }
+    finally { setTesting(false); }
+  };
+
+  const saveSource = async (changes: Partial<LeadSource>) => {
+    if (!source) return;
+    try { setSource(await backendJson<LeadSource>(`/instant-leads/source/${source.id}`, { method: 'PATCH', body: JSON.stringify(changes) })); setError(''); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Unable to save source configuration.'); }
   };
 
   const refreshResult = async () => {
@@ -228,10 +245,23 @@ export default function InstantLeads() {
             {source && <div className="text-xs text-gray-600 space-y-1">
               <div><strong>Source:</strong> {source.filename} · {source.enabled ? 'monitoring ON' : 'monitoring OFF'}</div>
               <div><strong>Status:</strong> {source.last_status || 'Not checked yet.'}</div>
+              <div><strong>Frequency:</strong> every {source.frequency_minutes || 5} minute(s) · <strong>Auto-call:</strong> {source.auto_call === false ? 'OFF' : 'ON'}</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
+                <input defaultValue={source.name || ''} placeholder="Source name" onBlur={e => void saveSource({ name: e.target.value })} className="rounded border border-gray-300 px-2 py-1.5" />
+                <input defaultValue={source.spreadsheet_id || ''} placeholder="Spreadsheet ID" onBlur={e => void saveSource({ spreadsheet_id: e.target.value })} className="rounded border border-gray-300 px-2 py-1.5" />
+                <input defaultValue={source.sheet_name || ''} placeholder="Sheet/tab name" onBlur={e => void saveSource({ sheet_name: e.target.value })} className="rounded border border-gray-300 px-2 py-1.5" />
+                <select value={source.frequency_minutes || 5} onChange={e => void saveSource({ frequency_minutes: Number(e.target.value) })} className="rounded border border-gray-300 px-2 py-1.5"><option value="1">Every 1 minute</option><option value="5">Every 5 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select>
+                <input defaultValue={source.working_hours?.start || ''} placeholder="Working start (09:00)" onBlur={e => void saveSource({ working_hours: { ...(source.working_hours || {}), start: e.target.value } })} className="rounded border border-gray-300 px-2 py-1.5" />
+                <input defaultValue={source.working_hours?.end || ''} placeholder="Working end (18:00)" onBlur={e => void saveSource({ working_hours: { ...(source.working_hours || {}), end: e.target.value } })} className="rounded border border-gray-300 px-2 py-1.5" />
+                <input defaultValue={source.timezone || ''} placeholder="Timezone (Asia/Calcutta)" onBlur={e => void saveSource({ timezone: e.target.value })} className="rounded border border-gray-300 px-2 py-1.5" />
+                <input type="number" min="0" defaultValue={source.daily_call_limit ?? ''} placeholder="Daily call limit" onBlur={e => void saveSource({ daily_call_limit: e.target.value ? Number(e.target.value) : null })} className="rounded border border-gray-300 px-2 py-1.5" />
+              </div>
+              {source.last_result && <div><strong>Last result:</strong> {source.last_result.records_checked || 0} checked, {source.last_result.new_leads || 0} new, {source.last_result.calls_queued || 0} queued, {source.last_result.skipped_duplicates || 0} duplicate(s)</div>}
               {source.last_checked_at && <div><strong>Last checked:</strong> {new Date(source.last_checked_at).toLocaleString()}</div>}
               <div className="flex flex-wrap gap-3 pt-1">
                 <button onClick={() => void toggleSource()} disabled={!enabled} className="rounded-lg border border-blue-200 px-3 py-1.5 font-semibold text-blue-700 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">Turn monitoring {source.enabled ? 'OFF' : 'ON'}</button>
                 <button onClick={() => void checkSource()} disabled={checking || !enabled} className="rounded-lg border border-gray-300 px-3 py-1.5 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">{checking ? 'Checking…' : 'Check now'}</button>
+                <button onClick={() => void testSource()} disabled={testing || !enabled} className="rounded-lg border border-gray-300 px-3 py-1.5 font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50">{testing ? 'Testing…' : 'Test connection'}</button>
               </div>
             </div>}
           </div>

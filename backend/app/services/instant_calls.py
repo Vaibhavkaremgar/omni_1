@@ -129,6 +129,8 @@ class InstantCallService:
                 call_context["lead_name"] = " ".join(part for part in (lead.first_name, lead.last_name) if part)
             if lead.company:
                 call_context["company"] = lead.company
+            if lead.profile_data:
+                call_context["lead_data"] = lead.profile_data
         metadata = {
             "local_call_id": str(call.id),
             "tenant_id": str(tenant_id),

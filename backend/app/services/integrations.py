@@ -67,6 +67,13 @@ CATALOG: list[dict[str, Any]] = [
         "connection_mode": CONNECTION_MODE_OAUTH,
     },
     {
+        "key": "google_sheets",
+        "name": "Google Sheets",
+        "category": "Lead sources",
+        "description": "Read new leads from a connected Google Sheet.",
+        "connection_mode": CONNECTION_MODE_OAUTH,
+    },
+    {
         "key": "cal_com",
         "name": "Cal.com",
         "category": "Scheduling",
@@ -140,6 +147,11 @@ OAUTH_PROVIDERS: dict[str, dict[str, str]] = {
         "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url": "https://oauth2.googleapis.com/token",
         "scopes": "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly",
+    },
+    "google_sheets": {
+        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "scopes": "https://www.googleapis.com/auth/spreadsheets.readonly",
     },
     "ghl": {
         "auth_url": "https://marketplace.gohighlevel.com/oauth/chooselocation",

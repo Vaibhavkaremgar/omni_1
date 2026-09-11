@@ -24,6 +24,7 @@ def init_db() -> None:
     _ensure_employee_builder_columns()
     _ensure_tenant_feature_columns()
     _ensure_integration_tables()
+    _ensure_instant_lead_columns()
     _ensure_campaign_execution_columns()
     _bootstrap_admin()
 
@@ -71,6 +72,27 @@ def _ensure_auth_columns() -> None:
     with engine.begin() as connection:
         if "must_change_password" not in existing:
             connection.execute(text("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE"))
+
+def _ensure_instant_lead_columns() -> None:
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    with engine.begin() as connection:
+        source_columns = {c["name"] for c in inspect(engine).get_columns("instant_lead_sources")}
+        additions = {
+            "name": ("VARCHAR(255)", "'Instant Leads source'"), "source_type": ("VARCHAR(32)", "'google_sheet'"),
+            "integration_key": ("VARCHAR(64)", "NULL"), "frequency_minutes": ("INTEGER", "5"),
+            "spreadsheet_id": ("VARCHAR(255)", "NULL"), "sheet_name": ("VARCHAR(255)", "NULL"),
+            "timezone": ("VARCHAR(64)", "NULL"),
+            "auto_call": ("BOOLEAN NOT NULL", "1"), "working_hours": ("JSON", "NULL"),
+            "daily_call_limit": ("INTEGER", "NULL"), "last_result": ("JSON", "NULL"),
+        }
+        for column, (kind, default) in additions.items():
+            if column not in source_columns:
+                connection.execute(text(f"ALTER TABLE instant_lead_sources ADD COLUMN {column} {kind} DEFAULT {default}"))
+        row_columns = {c["name"] for c in inspect(engine).get_columns("instant_lead_rows")}
+        for column, kind in {"external_record_id": "VARCHAR(255)", "status": "VARCHAR(32) NOT NULL DEFAULT 'new'"}.items():
+            if column not in row_columns:
+                connection.execute(text(f"ALTER TABLE instant_lead_rows ADD COLUMN {column} {kind}"))
 
 
 def _ensure_employee_provider_columns() -> None:
