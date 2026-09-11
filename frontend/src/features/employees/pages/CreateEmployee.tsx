@@ -19,7 +19,7 @@ type Session = {
   llm_used: boolean;
   answers?: Array<{ answer: string }>;
 };
-type Employee = { id: string; language: string };
+type Employee = { id: string; name: string; language: string };
 
 export default function CreateEmployee() {
   const navigate = useNavigate();
@@ -27,6 +27,7 @@ export default function CreateEmployee() {
   const ref = useRef<HTMLTextAreaElement>(null);
 
   const [language, setLanguage] = useState('');
+  const [name, setName] = useState('');
   const [employeeId, setEmployeeId] = useState(id ?? '');
   const [session, setSession] = useState<Session | null>(null);
   const [answeredQuestions, setAnsweredQuestions] = useState(0);
@@ -49,12 +50,12 @@ export default function CreateEmployee() {
   };
 
   const start = async () => {
-    if (!language) return;
+    if (!name.trim() || !language) return;
     setBusy(true);
     try {
       const employee = await backendJson<Employee>('/employees', {
         method: 'POST',
-        body: JSON.stringify({ language }),
+        body: JSON.stringify({ name: name.trim(), language }),
       });
       setEmployeeId(employee.id);
       window.history.replaceState(null, '', `/employees/${employee.id}`);
@@ -71,6 +72,7 @@ export default function CreateEmployee() {
     void (async () => {
       try {
         const employee = await backendJson<Employee>(`/employees/${id}`);
+        setName(employee.name);
         setLanguage(employee.language);
         setEmployeeId(employee.id);
         await loadSession(employee.id);
@@ -189,6 +191,9 @@ export default function CreateEmployee() {
               <p className="text-xs font-semibold text-blue-600 uppercase tracking-widest">Step 1 of 3</p>
               <h1 className="mt-2 text-2xl font-bold text-gray-900">What language should they speak?</h1>
               <p className="mt-2 text-sm text-gray-500">Choose the primary language Shabdha should use for this employee.</p>
+              <label className="block mt-8 text-sm font-semibold text-gray-700">Employee name
+                <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Maya, Sales Assistant" className="mt-2 w-full border border-gray-200 rounded-xl px-3 py-3 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400" />
+              </label>
               <div className="grid sm:grid-cols-3 gap-3 mt-8">
                 {languages.map(item => (
                   <button
@@ -206,7 +211,7 @@ export default function CreateEmployee() {
               </div>
               <button
                 onClick={() => void start()}
-                disabled={!language || busy}
+                disabled={!name.trim() || !language || busy}
                 className="mt-8 bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-6 py-3 text-sm font-semibold disabled:opacity-50 transition flex items-center gap-2"
               >
                 {busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Starting Shabdha…</> : 'Continue to Shabdha →'}
