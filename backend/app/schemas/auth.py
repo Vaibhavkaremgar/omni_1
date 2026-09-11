@@ -11,6 +11,7 @@ class AuthUserRead(BaseModel):
     full_name: str | None
     role: str
     status: str
+    must_change_password: bool
 
 
 class AuthTenantRead(BaseModel):
@@ -32,9 +33,8 @@ class AuthCredentials(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6, max_length=128)
 
-
-class AuthRegister(AuthCredentials):
-    tenant_name: str | None = Field(default=None, max_length=255)
+class PasswordChange(BaseModel):
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class AuthTokenRead(BaseModel):

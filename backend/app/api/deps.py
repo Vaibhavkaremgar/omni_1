@@ -33,4 +33,6 @@ def get_current_user(
 
 
 def get_current_tenant(current_user: AuthenticatedUser = Depends(get_current_user)):
+    if current_user.user.must_change_password:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Password change required")
     return current_user.tenant

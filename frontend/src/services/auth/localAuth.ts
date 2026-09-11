@@ -7,6 +7,7 @@ export interface LocalUser {
   full_name: string | null;
   role: string;
   status: string;
+  must_change_password: boolean;
 }
 
 interface AuthResponse {
@@ -22,7 +23,7 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_STORAGE_KEY);
 }
 
-export async function authenticate(path: 'login' | 'register', email: string, password: string): Promise<LocalUser> {
+export async function authenticate(path: 'login', email: string, password: string): Promise<LocalUser> {
   const response = await fetch(backendUrl(`/auth/${path}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

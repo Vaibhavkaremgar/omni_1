@@ -60,3 +60,8 @@ def resolve_authenticated_user(db: Session, token: str) -> AuthenticatedUser:
             headers={"WWW-Authenticate": "Bearer"},
         )
     return AuthenticatedUser(user=user, tenant=user.tenant)
+
+def require_admin(current_user: AuthenticatedUser) -> AuthenticatedUser:
+    if current_user.user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return current_user

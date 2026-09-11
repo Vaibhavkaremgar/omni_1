@@ -1,15 +1,21 @@
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, select
 
 from app.db.base import Base
 from app.db.session import engine
+from app.db.session import SessionLocal
 
 # Import models so SQLAlchemy registers all tables before create_all runs.
 from app import models  # noqa: F401
+from app.core.config import get_settings
+from app.services.auth import hash_password
+from app.models.tenant import Tenant
+from app.models.user import User
 
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _migrate_users_for_local_auth()
+    _ensure_auth_columns()
     _ensure_employee_provider_columns()
     _ensure_call_dispatch_columns()
     _ensure_billing_columns()
@@ -19,6 +25,7 @@ def init_db() -> None:
     _ensure_tenant_feature_columns()
     _ensure_integration_tables()
     _ensure_campaign_execution_columns()
+    _bootstrap_admin()
 
 
 def _column_type(type_name: str) -> str:
@@ -26,6 +33,20 @@ def _column_type(type_name: str) -> str:
     if engine.dialect.name == "postgresql":
         return type_name.replace("DATETIME", "TIMESTAMP")
     return type_name
+
+def _bootstrap_admin() -> None:
+    settings = get_settings()
+    if not settings.bootstrap_admin_email or not settings.bootstrap_admin_password:
+        return
+    with SessionLocal() as db:
+        email = settings.bootstrap_admin_email.lower()
+        if db.scalar(select(User.id).where(User.email == email)):
+            return
+        tenant = Tenant(name="Pontis Administration", slug="pontis-admin", status="active")
+        db.add(tenant)
+        db.flush()
+        db.add(User(tenant_id=tenant.id, email=email, password_hash=hash_password(settings.bootstrap_admin_password), role="admin", status="active"))
+        db.commit()
 
 
 def _migrate_users_for_local_auth() -> None:
@@ -41,7 +62,15 @@ def _migrate_users_for_local_auth() -> None:
     if "auth_user_id" not in columns or "password_hash" in columns:
         return
     with engine.begin() as connection:
-        connection.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
+                connection.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
+
+def _ensure_auth_columns() -> None:
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    existing = {column["name"] for column in inspect(engine).get_columns("users")}
+    with engine.begin() as connection:
+        if "must_change_password" not in existing:
+            connection.execute(text("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE"))
 
 
 def _ensure_employee_provider_columns() -> None:

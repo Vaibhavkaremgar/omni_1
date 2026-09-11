@@ -17,7 +17,6 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [isSignUp, setIsSignUp] = useState(false);
 
   useEffect(() => {
     if (getToken()) navigate(from, { replace: true });
@@ -29,9 +28,9 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const user = await authenticate(isSignUp ? 'register' : 'login', email, password);
+      const user = await authenticate('login', email, password);
       signIn(user);
-      navigate(from, { replace: true });
+      navigate(user.must_change_password ? '/change-password' : user.role === 'admin' ? '/admin' : from, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
     } finally {
@@ -84,10 +83,10 @@ export default function Login() {
           </div>
 
           <h2 className="text-2xl font-bold text-gray-900">
-            {isSignUp ? 'Create your account' : 'Welcome back'}
+            Welcome back
           </h2>
           <p className="mt-2 text-gray-500">
-            {isSignUp ? 'Start making AI-powered calls in under 5 minutes.' : 'Sign in to your AI calling dashboard.'}
+            Sign in to your Pontis account.
           </p>
 
           <form onSubmit={handleAuth} className="mt-6 space-y-4">
@@ -127,21 +126,10 @@ export default function Login() {
             >
               {loading ? (
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : isSignUp ? 'Create account' : 'Sign in'}
+              ) : 'Sign in'}
             </button>
           </form>
 
-          <p className="mt-4 text-center text-sm text-gray-500">
-            {isSignUp ? (
-              <>Already have an account?{' '}
-                <button type="button" onClick={() => setIsSignUp(false)} className="text-blue-600 font-medium hover:underline">Sign in</button>
-              </>
-            ) : (
-              <>Don't have an account?{' '}
-                <button type="button" onClick={() => setIsSignUp(true)} className="text-blue-600 font-medium hover:underline">Sign up free</button>
-              </>
-            )}
-          </p>
         </div>
       </div>
     </div>

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # intentionally development-only and invalidates sessions when the process restarts.
     auth_secret_key: str = Field(default_factory=lambda: token_urlsafe(32), validation_alias="AUTH_SECRET_KEY")
     auth_access_token_expire_minutes: int = Field(default=1440, validation_alias="AUTH_ACCESS_TOKEN_EXPIRE_MINUTES")
+    bootstrap_admin_email: str | None = Field(default=None, validation_alias="BOOTSTRAP_ADMIN_EMAIL")
+    bootstrap_admin_password: str | None = Field(default=None, validation_alias="BOOTSTRAP_ADMIN_PASSWORD")
     llm_provider: str | None = Field(default=None, validation_alias="LLM_PROVIDER")
     llm_api_key: str | None = Field(default=None, validation_alias="LLM_API_KEY")
     llm_model: str | None = Field(default=None, validation_alias="LLM_MODEL")

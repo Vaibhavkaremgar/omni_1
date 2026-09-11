@@ -15,11 +15,21 @@ import SettingsPage from '../features/settings/pages/SettingsPage';
 import CallsPage from '../features/calls/pages/CallsPage';
 import IntegrationsPage from '../features/integrations/pages/IntegrationsPage';
 import NotFound from '../features/not-found/pages/NotFound';
+import ChangePassword from '../features/auth/pages/ChangePassword';
+import { useAuth } from '../features/auth/hooks/useAuth';
+import AdminPage from '../features/admin/pages/AdminPage';
+
+function AdminOnly() {
+  const { user } = useAuth();
+  return user?.role === 'admin' ? <AdminPage /> : <Navigate to="/dashboard" replace />;
+}
 
 export default function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/change-password" element={<ChangePassword />} />
+      <Route path="/admin" element={<ProtectedRoute><AdminOnly /></ProtectedRoute>} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route
         element={

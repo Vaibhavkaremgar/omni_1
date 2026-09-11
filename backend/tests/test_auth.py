@@ -23,15 +23,17 @@ def test_authentication_lifecycle_and_tenant_isolation():
     app.dependency_overrides[get_db] = lambda: db
     try:
         with TestClient(app) as client:
-            response = client.post("/api/v1/auth/register", json={"email": "owner@example.com", "password": "safe-password"})
-            assert response.status_code == 201
+            tenant = Tenant(name="Tenant A", slug="tenant-a")
+            user = User(tenant=tenant, email="owner@example.com", password_hash=hash_password("safe-password"), status="active")
+            db.add(user)
+            db.commit()
+            response = client.post("/api/v1/auth/login", json={"email": "owner@example.com", "password": "safe-password"})
             payload = response.json()
             assert payload["access_token"]
             assert payload["user"]["email"] == "owner@example.com"
             user = db.get(User, UUID(payload["user"]["id"]))
             assert user.password_hash != "safe-password"
 
-            assert client.post("/api/v1/auth/register", json={"email": "owner@example.com", "password": "safe-password"}).status_code == 409
             assert client.post("/api/v1/auth/login", json={"email": "owner@example.com", "password": "wrong-password"}).status_code == 401
             login = client.post("/api/v1/auth/login", json={"email": "owner@example.com", "password": "safe-password"})
             assert login.status_code == 200
@@ -55,6 +57,12 @@ def test_authentication_lifecycle_and_tenant_isolation():
     finally:
         app.dependency_overrides.clear()
         db.close()
+
+
+def test_public_registration_is_removed():
+    with TestClient(app) as client:
+        response = client.post("/api/v1/auth/register", json={"email": "visitor@example.com", "password": "safe-password"})
+    assert response.status_code == 404
 
 
 def test_invalid_and_expired_tokens_are_rejected():

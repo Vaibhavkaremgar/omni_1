@@ -21,6 +21,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     role: Mapped[UserRole] = mapped_column(String(32), nullable=False, default=UserRole.member.value)
     status: Mapped[UserStatus] = mapped_column(String(32), nullable=False, default=UserStatus.invited.value)
     last_login_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    must_change_password: Mapped[bool] = mapped_column(default=False, nullable=False)
 
     tenant = relationship("Tenant", back_populates="users")
     created_employee_versions = relationship("AIEmployeeVersion", back_populates="created_by_user")
