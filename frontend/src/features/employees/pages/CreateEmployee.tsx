@@ -29,6 +29,7 @@ export default function CreateEmployee() {
   const [language, setLanguage] = useState('');
   const [employeeId, setEmployeeId] = useState(id ?? '');
   const [session, setSession] = useState<Session | null>(null);
+  const [answeredQuestions, setAnsweredQuestions] = useState(0);
   const [brief, setBrief] = useState('');
   const [busy, setBusy] = useState(Boolean(id));
   const [error, setError] = useState('');
@@ -43,6 +44,7 @@ export default function CreateEmployee() {
       body: '{}',
     });
     setSession(next);
+    setAnsweredQuestions(next.answers?.length ?? 0);
     setBrief(next.answers?.at(-1)?.answer ?? '');
   };
 
@@ -90,6 +92,7 @@ export default function CreateEmployee() {
         body: JSON.stringify({ question: 'What is this employee for?', answer: brief }),
       });
       setSession(next);
+      setAnsweredQuestions(next.answers?.length ?? 0);
     } catch {
       setError('Shabdha could not update your brief. Please try again.');
     } finally {
@@ -153,8 +156,8 @@ export default function CreateEmployee() {
     }
   };
 
-  const canBuild = Boolean(session?.is_complete);
-  const hasMinimumAnswers = (session?.answers?.length ?? 0) >= 3;
+  const canBuild = answeredQuestions >= 3;
+  const hasMinimumAnswers = answeredQuestions >= 3;
 
   // ── Language selection screen ──────────────────────────────────────────────
   if (!employeeId) {
