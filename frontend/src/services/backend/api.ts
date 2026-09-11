@@ -1,6 +1,5 @@
 import { getToken } from '../auth/localAuth';
-
-const backendUrl = import.meta.env.VITE_BACKEND_URL ?? 'http://127.0.0.1:8000';
+import { backendUrl } from './url';
 
 export async function backendFetch(path: string, init: RequestInit = {}) {
   const token = getToken();
@@ -10,7 +9,7 @@ export async function backendFetch(path: string, init: RequestInit = {}) {
     headers.set('Content-Type', 'application/json');
   }
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  return fetch(`${backendUrl}/api/v1${path}`, { ...init, headers });
+  return fetch(backendUrl(path), { ...init, headers });
 }
 
 export async function backendJson<T>(path: string, init: RequestInit = {}): Promise<T> {

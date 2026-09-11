@@ -1,5 +1,5 @@
 const TOKEN_STORAGE_KEY = 'pontis_access_token';
-const backendUrl = import.meta.env.VITE_BACKEND_URL ?? 'http://127.0.0.1:8000';
+import { backendUrl } from '../backend/url';
 
 export interface LocalUser {
   id: string;
@@ -23,7 +23,7 @@ export function clearToken(): void {
 }
 
 export async function authenticate(path: 'login' | 'register', email: string, password: string): Promise<LocalUser> {
-  const response = await fetch(`${backendUrl}/api/v1/auth/${path}`, {
+  const response = await fetch(backendUrl(`/auth/${path}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -38,7 +38,7 @@ export async function authenticate(path: 'login' | 'register', email: string, pa
 export async function getCurrentUser(): Promise<LocalUser | null> {
   const token = getToken();
   if (!token) return null;
-  const response = await fetch(`${backendUrl}/api/v1/auth/me`, {
+  const response = await fetch(backendUrl('/auth/me'), {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!response.ok) {
@@ -52,7 +52,7 @@ export async function getCurrentUser(): Promise<LocalUser | null> {
 export async function logout(): Promise<void> {
   const token = getToken();
   try {
-    if (token) await fetch(`${backendUrl}/api/v1/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    if (token) await fetch(backendUrl('/auth/logout'), { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
   } finally {
     clearToken();
   }
