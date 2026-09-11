@@ -143,7 +143,7 @@ export default function CreateEmployee() {
     setBusy(true);
     setError('');
     try {
-      const configuration = { ...(session.extracted_configuration ?? {}), language };
+      const configuration = { ...(session.extracted_configuration ?? {}), name: name.trim(), language };
       await backendJson(`/employees/${employeeId}`, {
         method: 'PATCH',
         body: JSON.stringify({ configuration }),
