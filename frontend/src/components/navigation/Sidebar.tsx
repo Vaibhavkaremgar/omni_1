@@ -33,7 +33,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         {!collapsed && (
           <Link to="/dashboard" className="flex items-center gap-2 font-semibold text-gray-900">
             <span className="w-7 h-7 rounded-md bg-blue-600 flex items-center justify-center text-white text-sm font-bold">
-              OC
+              PC
             </span>
             <span>Pontis Calls</span>
           </Link>
@@ -41,7 +41,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         {collapsed && (
           <Link to="/dashboard" className="flex items-center justify-center w-full">
             <span className="w-7 h-7 rounded-md bg-blue-600 flex items-center justify-center text-white text-sm font-bold">
-              OC
+              PC
             </span>
           </Link>
         )}
