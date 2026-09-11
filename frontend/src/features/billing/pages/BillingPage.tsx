@@ -1,0 +1,28 @@
+import { useEffect, useState } from 'react';
+import { CreditCard, Receipt } from 'lucide-react';
+import { backendJson } from '../../../services/backend/api';
+
+type Money = string | number;
+interface Wallet { balance: Money; currency: string; status: string; call_price_per_minute: Money; minimum_balance: Money }
+interface Transaction { id: string; transaction_type: string; amount: Money; currency: string; description: string | null; created_at: string }
+interface TopUpOrder { razorpay_order_id: string; amount: Money; currency: string; key_id: string }
+interface RazorpayResponse { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }
+declare global { interface Window { Razorpay?: new (options: Record<string, unknown>) => { open: () => void } } }
+const money = (value: Money | null | undefined) => Number(value ?? 0).toFixed(2);
+const date = (value: string) => new Date(value).toLocaleString();
+const loadCheckout = () => new Promise<void>((resolve, reject) => { if (window.Razorpay) return resolve(); const script = document.createElement('script'); script.src = 'https://checkout.razorpay.com/v1/checkout.js'; script.onload = () => resolve(); script.onerror = () => reject(new Error('Unable to load secure payment checkout.')); document.head.appendChild(script); });
+
+export default function BillingPage() {
+  const [wallet, setWallet] = useState<Wallet | null>(null); const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [amount, setAmount] = useState('500'); const [loading, setLoading] = useState(true); const [paying, setPaying] = useState(false); const [message, setMessage] = useState('');
+  const load = async () => { const [w, t] = await Promise.all([backendJson<Wallet>('/billing/wallet'), backendJson<Transaction[]>('/billing/transactions')]); setWallet(w); setTransactions(t); };
+  useEffect(() => { const timer = window.setTimeout(() => { void load().catch(e => setMessage(e instanceof Error ? e.message : 'Unable to load billing data.')).finally(() => setLoading(false)); }, 0); return () => window.clearTimeout(timer); }, []);
+  const addMoney = async () => {
+    const value = Number(amount); if (!Number.isFinite(value) || value < 10 || value > 100000) { setMessage('Enter an amount from ₹10.00 to ₹100,000.00.'); return; }
+    setPaying(true); setMessage('');
+    try { const order = await backendJson<TopUpOrder>('/billing/top-ups/order', { method: 'POST', body: JSON.stringify({ amount }) }); await loadCheckout(); if (!window.Razorpay) throw new Error('Secure payment checkout is unavailable.'); new window.Razorpay({ key: order.key_id, amount: Math.round(Number(order.amount) * 100), currency: order.currency, order_id: order.razorpay_order_id, name: 'Wallet top-up', description: 'Add calling credits', handler: async (payment: RazorpayResponse) => { try { await backendJson('/billing/top-ups/verify', { method: 'POST', body: JSON.stringify(payment) }); await load(); setMessage('Payment received. Wallet balance updated after verification.'); } catch { setMessage('Payment received. Your wallet will update after secure verification.'); } finally { setPaying(false); } }, modal: { ondismiss: () => setPaying(false) } }).open(); }
+    catch (e) { setMessage(e instanceof Error ? e.message : 'Unable to start payment.'); setPaying(false); }
+  };
+  if (loading) return <div className="flex-1 flex items-center justify-center text-sm text-gray-500">Loading billing...</div>;
+  return <div className="flex-1 overflow-y-auto"><header className="h-16 border-b border-gray-200 px-6 flex items-center gap-3 bg-white"><CreditCard className="w-5 h-5 text-amber-600" /><div><h1 className="text-lg font-bold">Billing</h1><p className="text-xs text-gray-500">Internal wallet and call usage</p></div></header><main className="p-6 space-y-6 max-w-4xl"><div className="bg-gradient-to-r from-amber-500 to-amber-600 rounded-xl p-5 text-white"><div className="text-sm text-amber-100">Current balance</div><div className="text-3xl font-bold">₹{money(wallet?.balance)}</div><div className="text-xs text-amber-100 mt-2">₹{money(wallet?.call_price_per_minute)} per minute · {wallet?.status}</div></div><section className="bg-white border border-gray-200 rounded-xl p-5"><h2 className="font-semibold">Add wallet credits</h2><p className="text-sm text-gray-500 mt-1">Minimum ₹10.00. Credits are added only after secure server verification.</p><div className="flex gap-3 mt-4"><input aria-label="Top-up amount in INR" value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" className="border rounded-lg px-3 py-2 flex-1" /><button onClick={() => void addMoney()} disabled={paying} className="bg-amber-600 text-white rounded-lg px-4 py-2 disabled:opacity-60">{paying ? 'Opening payment…' : 'Add Money'}</button></div>{message && <p className="mt-3 text-sm text-gray-600">{message}</p>}</section><section><h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Recent transactions</h2>{transactions.length === 0 ? <div className="bg-white border rounded-xl p-8 text-center text-sm text-gray-500"><Receipt className="w-5 h-5 mx-auto mb-2" />No transactions yet.</div> : <div className="bg-white border rounded-xl divide-y">{transactions.map(t => <div key={t.id} className="p-4 flex justify-between"><div><div className="font-medium text-sm">{t.description || t.transaction_type}</div><div className="text-xs text-gray-500">{date(t.created_at)}</div></div><div className={Number(t.amount) >= 0 ? 'text-emerald-600 font-semibold' : 'text-rose-600 font-semibold'}>{Number(t.amount) >= 0 ? '+' : ''}₹{money(t.amount)}</div></div>)}</div>}</section></main></div>;
+}

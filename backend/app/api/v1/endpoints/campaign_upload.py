@@ -1,0 +1,249 @@
+from __future__ import annotations
+
+import csv
+import io
+import re
+from typing import Any
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user, get_db
+from app.models.campaign import Campaign
+from app.models.campaign_contact import CampaignContact
+from app.models.enums import CampaignStatus, ContactStatus
+from app.services.auth import AuthenticatedUser
+
+router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+ALLOWED_MIME = {
+    "text/csv",
+    "application/csv",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+def _normalize_phone(raw: str) -> str:
+    cleaned = re.sub(r"[\s\-().+]", "", raw.strip())
+    if cleaned.startswith("00"):
+        cleaned = "+" + cleaned[2:]
+    elif not cleaned.startswith("+"):
+        cleaned = "+" + cleaned
+    else:
+        cleaned = "+" + re.sub(r"[^\d]", "", raw.strip())
+    return cleaned
+
+
+def _is_valid_e164(phone: str) -> bool:
+    return bool(E164_RE.match(phone))
+
+
+def _parse_csv(content: bytes) -> list[dict[str, str]]:
+    text = content.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    return [row for row in reader]
+
+
+def _parse_xlsx(content: bytes) -> list[dict[str, str]]:
+    try:
+        import openpyxl  # type: ignore
+    except ImportError as exc:
+        raise HTTPException(status_code=422, detail="XLSX support requires openpyxl.") from exc
+    wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return []
+    headers = [str(cell).strip().lower() if cell is not None else "" for cell in rows[0]]
+    result = []
+    for row in rows[1:]:
+        result.append({headers[i]: (str(cell).strip() if cell is not None else "") for i, cell in enumerate(row)})
+    return result
+
+
+def _find_column(row: dict[str, str], candidates: list[str]) -> str:
+    for key in candidates:
+        if key in row and row[key].strip():
+            return row[key].strip()
+    return ""
+
+
+def _process_rows(raw_rows: list[dict[str, str]]) -> dict[str, Any]:
+    valid: list[dict[str, str]] = []
+    invalid: list[dict[str, Any]] = []
+    seen_phones: set[str] = set()
+    duplicates = 0
+
+    for i, row in enumerate(raw_rows):
+        phone_raw = _find_column(row, ["phone", "phone_number", "mobile", "cell", "telephone", "number"])
+        if not phone_raw:
+            invalid.append({"row": i + 2, "reason": "Missing phone number", "data": row})
+            continue
+        phone = _normalize_phone(phone_raw)
+        if not _is_valid_e164(phone):
+            invalid.append({"row": i + 2, "reason": f"Invalid phone number: {phone_raw}", "data": row})
+            continue
+        if phone in seen_phones:
+            duplicates += 1
+            continue
+        seen_phones.add(phone)
+        valid.append({
+            "phone_number": phone,
+            "first_name": _find_column(row, ["first_name", "firstname", "first"]),
+            "last_name": _find_column(row, ["last_name", "lastname", "last"]),
+            "email": _find_column(row, ["email", "email_address"]),
+        })
+
+    return {
+        "total_rows": len(raw_rows),
+        "valid_count": len(valid),
+        "invalid_count": len(invalid),
+        "duplicate_count": duplicates,
+        "valid": valid,
+        "invalid_rows": invalid,
+    }
+
+
+class UploadPreview(BaseModel):
+    total_rows: int
+    valid_count: int
+    invalid_count: int
+    duplicate_count: int
+    valid_sample: list[dict]
+    invalid_rows: list[dict]
+    import_token: str  # opaque base64 payload for confirm step
+
+
+class ImportResult(BaseModel):
+    imported: int
+    skipped_duplicates: int
+
+
+def _get_campaign(campaign_id: UUID, tenant_id: UUID, db: Session) -> Campaign:
+    campaign = db.scalar(
+        select(Campaign).where(Campaign.id == campaign_id, Campaign.tenant_id == tenant_id)
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
+@router.post("/{campaign_id}/contacts/upload-preview", response_model=UploadPreview)
+async def upload_contacts_preview(
+    campaign_id: UUID,
+    file: UploadFile = File(...),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UploadPreview:
+    """Parse and validate an uploaded CSV/XLSX. Returns a preview without committing."""
+    _get_campaign(campaign_id, current_user.tenant.id, db)
+
+    content_type = (file.content_type or "").lower().split(";")[0].strip()
+    filename = (file.filename or "").lower()
+    is_xlsx = filename.endswith(".xlsx") or content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    is_csv = filename.endswith(".csv") or content_type in {"text/csv", "application/csv"}
+
+    if not is_csv and not is_xlsx:
+        raise HTTPException(status_code=422, detail="Only CSV and XLSX files are supported.")
+
+    raw_content = await file.read()
+    if len(raw_content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the 5 MB limit.")
+    if len(raw_content) == 0:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty.")
+
+    try:
+        raw_rows = _parse_xlsx(raw_content) if is_xlsx else _parse_csv(raw_content)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Unable to parse file: {exc}") from exc
+
+    if not raw_rows:
+        raise HTTPException(status_code=422, detail="File contains no data rows.")
+
+    result = _process_rows(raw_rows)
+
+    # Encode valid rows as a simple JSON token for the confirm step
+    import json, base64
+    token_data = {
+        "campaign_id": str(campaign_id),
+        "tenant_id": str(current_user.tenant.id),
+        "rows": result["valid"],
+    }
+    import_token = base64.b64encode(json.dumps(token_data).encode()).decode()
+
+    return UploadPreview(
+        total_rows=result["total_rows"],
+        valid_count=result["valid_count"],
+        invalid_count=result["invalid_count"],
+        duplicate_count=result["duplicate_count"],
+        valid_sample=result["valid"][:10],
+        invalid_rows=result["invalid_rows"][:20],
+        import_token=import_token,
+    )
+
+
+class ConfirmImport(BaseModel):
+    import_token: str
+
+
+@router.post("/{campaign_id}/contacts/upload-confirm", response_model=ImportResult, status_code=status.HTTP_201_CREATED)
+def upload_contacts_confirm(
+    campaign_id: UUID,
+    payload: ConfirmImport,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ImportResult:
+    """Commit a previously previewed upload. Validates token tenant/campaign match."""
+    import json, base64
+    try:
+        token_data = json.loads(base64.b64decode(payload.import_token).decode())
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Invalid import token.") from exc
+
+    # Security: verify token matches authenticated tenant and campaign
+    if str(token_data.get("tenant_id")) != str(current_user.tenant.id):
+        raise HTTPException(status_code=403, detail="Import token does not match your account.")
+    if str(token_data.get("campaign_id")) != str(campaign_id):
+        raise HTTPException(status_code=422, detail="Import token does not match this campaign.")
+
+    campaign = _get_campaign(campaign_id, current_user.tenant.id, db)
+
+    rows: list[dict] = token_data.get("rows", [])
+    if not rows:
+        raise HTTPException(status_code=422, detail="No valid contacts in import token.")
+
+    # Fetch existing phone numbers for this campaign to detect duplicates
+    existing_phones = set(
+        db.scalars(
+            select(CampaignContact.phone_number).where(CampaignContact.campaign_id == campaign.id)
+        ).all()
+    )
+
+    imported = 0
+    skipped = 0
+    for row in rows:
+        phone = row.get("phone_number", "")
+        if not phone or phone in existing_phones:
+            skipped += 1
+            continue
+        contact = CampaignContact(
+            tenant_id=current_user.tenant.id,
+            campaign_id=campaign.id,
+            phone_number=phone,
+            first_name=row.get("first_name") or None,
+            last_name=row.get("last_name") or None,
+            email=row.get("email") or None,
+            status=ContactStatus.pending.value,
+        )
+        db.add(contact)
+        existing_phones.add(phone)
+        imported += 1
+
+    db.commit()
+    return ImportResult(imported=imported, skipped_duplicates=skipped)

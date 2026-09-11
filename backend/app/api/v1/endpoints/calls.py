@@ -1,0 +1,83 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user, get_db
+from app.core.config import get_settings
+from app.integrations.omnidimension import OmniDimensionCallProvider, OmniDimensionClient
+from app.integrations.omnidimension.exceptions import OmniDimensionError
+from app.models.call import Call
+from app.schemas.call import CallRead, InstantCallRead, InstantCallRequest
+from app.services.auth import AuthenticatedUser
+from app.services.instant_calls import (
+    DuplicateInstantCallError,
+    InstantCallNotFoundError,
+    InstantCallService,
+    InstantCallValidationError,
+)
+
+
+router = APIRouter(prefix="/calls", tags=["calls"])
+instant_call_service: InstantCallService | None = None
+
+
+def get_instant_call_service() -> InstantCallService:
+    global instant_call_service
+    if instant_call_service is None:
+        instant_call_service = InstantCallService(OmniDimensionCallProvider(OmniDimensionClient(get_settings())))
+    return instant_call_service
+
+
+@router.post("/instant", response_model=InstantCallRead, status_code=status.HTTP_201_CREATED)
+def dispatch_instant_call(
+    payload: InstantCallRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> InstantCallRead:
+    try:
+        call = get_instant_call_service().dispatch(db, current_user.tenant.id, payload)
+    except InstantCallNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DuplicateInstantCallError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InstantCallValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OmniDimensionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to dispatch the call through the provider. Please retry.",
+        ) from exc
+    return call
+
+
+@router.get("", response_model=list[CallRead])
+def list_calls(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[Call]:
+    return list(
+        db.scalars(
+            select(Call)
+            .where(Call.tenant_id == current_user.tenant.id)
+            .order_by(Call.created_at.desc())
+            .limit(100)
+        ).all()
+    )
+
+
+@router.get("/{call_id}", response_model=CallRead)
+def get_call(
+    call_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Call:
+    try:
+        parsed_call_id = UUID(call_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Call not found.") from exc
+    call = db.scalar(select(Call).where(Call.id == parsed_call_id, Call.tenant_id == current_user.tenant.id))
+    if call is None:
+        raise HTTPException(status_code=404, detail="Call not found.")
+    return call

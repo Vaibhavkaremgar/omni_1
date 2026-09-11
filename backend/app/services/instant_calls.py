@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+from datetime import timedelta
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.integrations.omnidimension import OmniDimensionCallProvider, ProviderDispatchResult
+from app.models.ai_employee import AIEmployee
+from app.models.call import Call
+from app.models.enums import CallDirection, CallStatus, EmployeeStatus, NumberStatus
+from app.models.lead import Lead
+from app.models.phone_number import PhoneNumber
+from app.db.base import utc_now
+from app.schemas.call import InstantCallRequest
+from app.core.config import get_settings
+from app.services.wallets import InsufficientBalanceError, require_minimum_balance
+
+
+class InstantCallError(Exception):
+    """Base class for safe instant-call validation failures."""
+
+
+class InstantCallNotFoundError(InstantCallError):
+    pass
+
+
+class InstantCallValidationError(InstantCallError):
+    pass
+
+
+class DuplicateInstantCallError(InstantCallError):
+    pass
+
+
+class InstantCallService:
+    def __init__(self, provider: OmniDimensionCallProvider):
+        self.provider = provider
+
+    def dispatch(self, db: Session, tenant_id: UUID, request: InstantCallRequest) -> Call:
+        try:
+            require_minimum_balance(db, tenant_id, get_settings().minimum_call_balance_inr)
+        except InsufficientBalanceError as exc:
+            raise InstantCallValidationError(str(exc)) from exc
+        # Respect the tenant-level Instant Leads toggle
+        from sqlalchemy import select as _select
+        from app.models.tenant import Tenant as _Tenant
+        tenant = db.get(_Tenant, tenant_id)
+        if tenant is not None and not tenant.instant_leads_enabled:
+            raise InstantCallValidationError("Instant Leads is currently disabled for your account.")
+        employee = db.scalar(
+            select(AIEmployee).where(
+                AIEmployee.id == request.employee_id,
+                AIEmployee.tenant_id == tenant_id,
+            )
+        )
+        if employee is None:
+            raise InstantCallNotFoundError("Employee not found.")
+        if employee.status != EmployeeStatus.published.value or employee.published_version is None:
+            raise InstantCallValidationError("Only published employees can place calls.")
+        provider_agent_id = employee.published_version.provider_agent_id
+        if not provider_agent_id:
+            raise InstantCallValidationError("The published employee is not connected to a provider agent.")
+
+        phone_number = db.scalar(
+            select(PhoneNumber).where(
+                PhoneNumber.id == request.phone_number_id,
+                PhoneNumber.tenant_id == tenant_id,
+            )
+        )
+        if phone_number is None:
+            raise InstantCallNotFoundError("Phone number not found.")
+        if phone_number.status != NumberStatus.active.value or not phone_number.provider_phone_number_id:
+            raise InstantCallValidationError("The selected phone number is not available for calling.")
+
+        lead = None
+        if request.lead_id is not None:
+            lead = db.scalar(select(Lead).where(Lead.id == request.lead_id, Lead.tenant_id == tenant_id))
+            if lead is None:
+                raise InstantCallNotFoundError("Lead not found.")
+
+        try:
+            agent_id = int(provider_agent_id)
+            from_number_id = int(phone_number.provider_phone_number_id)
+        except (TypeError, ValueError) as exc:
+            raise InstantCallValidationError("The selected employee or phone number has an invalid provider identifier.") from exc
+
+        recent_duplicate = db.scalar(
+            select(Call).where(
+                Call.tenant_id == tenant_id,
+                Call.employee_id == employee.id,
+                Call.phone_number_id == phone_number.id,
+                Call.customer_phone_number == request.destination_phone_number,
+                Call.status == CallStatus.queued.value,
+                Call.created_at >= utc_now() - timedelta(seconds=30),
+            )
+        )
+        if recent_duplicate is not None:
+            raise DuplicateInstantCallError("A matching call is already being dispatched.")
+
+        call = Call(
+            tenant_id=tenant_id,
+            employee_id=employee.id,
+            employee_version_id=employee.published_version.id,
+            lead_id=lead.id if lead else None,
+            phone_number_id=phone_number.id,
+            direction=CallDirection.outbound.value,
+            status=CallStatus.queued.value,
+            customer_name=request.customer_name.strip() if request.customer_name else None,
+            customer_phone_number=request.destination_phone_number,
+            dispatch_metadata={
+                "source": "instant",
+                "employee_version_id": str(employee.published_version.id),
+                "context": request.context.strip() if request.context else None,
+            },
+        )
+        db.add(call)
+        db.commit()
+        db.refresh(call)
+
+        call_context = {}
+        if call.customer_name:
+            call_context["customer_name"] = call.customer_name
+        if request.context:
+            call_context["context"] = request.context.strip()
+        if lead:
+            if lead.first_name:
+                call_context["lead_name"] = " ".join(part for part in (lead.first_name, lead.last_name) if part)
+            if lead.company:
+                call_context["company"] = lead.company
+        metadata = {
+            "local_call_id": str(call.id),
+            "tenant_id": str(tenant_id),
+            "employee_id": str(employee.id),
+        }
+        if lead:
+            metadata["lead_id"] = str(lead.id)
+
+        try:
+            result = self.provider.dispatch(
+                agent_id=agent_id,
+                to_number=request.destination_phone_number,
+                from_number_id=from_number_id,
+                call_context=call_context,
+                metadata=metadata,
+            )
+        except Exception:
+            call.status = CallStatus.failed.value
+            call.dispatch_metadata = {**(call.dispatch_metadata or {}), "dispatch_failed": True}
+            db.commit()
+            raise
+
+        call.provider_call_id = result.provider_call_id
+        call.status = CallStatus.queued.value
+        call.dispatch_metadata = {
+            **(call.dispatch_metadata or {}),
+            "provider_status": result.status,
+        }
+        db.commit()
+        db.refresh(call)
+        return call
+
+
+def provider_dispatch_result(result: ProviderDispatchResult) -> dict[str, str]:
+    return {"provider_call_id": result.provider_call_id, "status": result.status}

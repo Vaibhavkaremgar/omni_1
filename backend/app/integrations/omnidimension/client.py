@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+import json
+import re
+
+import httpx
+import logging
+
+from app.core.config import Settings, get_settings
+
+from .exceptions import (
+    OmniDimensionAuthenticationError,
+    OmniDimensionClientError,
+    OmniDimensionConfigurationError,
+    OmniDimensionNetworkError,
+    OmniDimensionResponseError,
+    OmniDimensionServerError,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class OmniDimensionClient:
+    """Small authenticated HTTP client for future OmniDimension services."""
+
+    def __init__(
+        self,
+        settings: Settings | Any | None = None,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.settings = settings or get_settings()
+        self.api_key = (getattr(self.settings, "omnidimension_api_key", None) or "").strip()
+        self.base_url = (getattr(self.settings, "omnidimension_base_url", "") or "").strip().rstrip("/")
+        self.timeout = float(getattr(self.settings, "omnidimension_timeout_seconds", 15.0))
+        if not self.api_key:
+            raise OmniDimensionConfigurationError("OmniDimension API key is not configured.")
+        if not self.base_url:
+            raise OmniDimensionConfigurationError("OmniDimension base URL is not configured.")
+        if self.timeout <= 0:
+            raise OmniDimensionConfigurationError("OmniDimension timeout must be positive.")
+        self.client = client or httpx.Client(timeout=self.timeout)
+        logger.info(
+            "Omni configuration environment=%s omni_base_url=%s omni_auth_configured=%s auth_mechanism=bearer_api_key",
+            getattr(self.settings, "environment", "unknown"), self.base_url, bool(self.api_key),
+        )
+
+    def get(self, path: str, *, params: Mapping[str, Any] | None = None) -> Any:
+        return self._request("GET", path, params=params)
+
+    def post(self, path: str, *, json: Any = None, params: Mapping[str, Any] | None = None,
+             headers: Mapping[str, str] | None = None) -> Any:
+        return self._request("POST", path, json=json, params=params, extra_headers=headers)
+
+    def patch(self, path: str, *, json: Any = None, params: Mapping[str, Any] | None = None) -> Any:
+        return self._request("PATCH", path, json=json, params=params)
+
+    def put(self, path: str, *, json: Any = None, params: Mapping[str, Any] | None = None) -> Any:
+        return self._request("PUT", path, json=json, params=params)
+
+    def delete(self, path: str, *, params: Mapping[str, Any] | None = None) -> Any:
+        return self._request("DELETE", path, params=params)
+
+    def check_connectivity(self, path: str = "/") -> Any:
+        """Make a safe authenticated GET for internal readiness diagnostics."""
+
+        return self.get(path)
+
+    def close(self) -> None:
+        self.client.close()
+
+    def __enter__(self) -> "OmniDimensionClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        headers.update(kwargs.pop("extra_headers", None) or {})
+        if "json" in kwargs and kwargs["json"] is not None:
+            headers["Content-Type"] = "application/json"
+        try:
+            response = self.client.request(
+                method,
+                url,
+                headers=headers,
+                timeout=self.timeout,
+                **kwargs,
+            )
+        except httpx.TimeoutException as exc:
+            logger.warning(
+                "Omni HTTP diagnostic method=%s path=%s params=%s exception_class=%s exception_message=%s",
+                method, "/" + path.lstrip("/"), _safe_params(kwargs.get("params")), type(exc).__name__, _safe_exception(exc),
+            )
+            raise OmniDimensionNetworkError("Omni provider connection failed", exception_class=type(exc).__name__, exception_message=_safe_exception(exc)) from exc
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "Omni HTTP diagnostic method=%s path=%s params=%s exception_class=%s exception_message=%s",
+                method, "/" + path.lstrip("/"), _safe_params(kwargs.get("params")), type(exc).__name__, _safe_exception(exc),
+            )
+            raise OmniDimensionNetworkError("Omni provider connection failed", exception_class=type(exc).__name__, exception_message=_safe_exception(exc)) from exc
+
+        provider_code, provider_message = self._safe_error_details(response)
+        logger.warning(
+            "Omni HTTP diagnostic method=%s path=%s params=%s response_status=%s response_body=%s",
+            method, "/" + path.lstrip("/"), _safe_params(kwargs.get("params")), response.status_code, _safe_response_body(response),
+        )
+        if response.status_code >= 400:
+            logger.warning(
+                "Omni provider response path=%s status=%s code=%s message=%s",
+                "/" + path.lstrip("/"), response.status_code, provider_code, provider_message,
+            )
+        if response.status_code in (401, 403):
+            raise OmniDimensionAuthenticationError(response.status_code, provider_message)
+        if 400 <= response.status_code < 500:
+            raise OmniDimensionClientError(response.status_code, provider_code, provider_message)
+        if response.status_code >= 500:
+            raise OmniDimensionServerError(response.status_code, provider_code, provider_message)
+        if response.status_code == 204:
+            return None
+        try:
+            return response.json()
+        except (ValueError, TypeError) as exc:
+            raise OmniDimensionResponseError("OmniDimension returned malformed JSON.") from exc
+
+    @staticmethod
+    def _safe_error_details(response: httpx.Response) -> tuple[str | None, str | None]:
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            return None, None
+        if not isinstance(payload, dict):
+            return None, None
+        code = payload.get("code") or payload.get("error_code")
+        message = payload.get("message") or payload.get("error") or payload.get("detail")
+        return (str(code)[:120] if isinstance(code, (str, int)) else None,
+                str(message)[:500] if isinstance(message, str) else None)
+
+
+def _safe_params(params: Any) -> dict[str, str]:
+    if not isinstance(params, Mapping):
+        return {}
+    return {key: str(params[key])[:80] for key in ("region", "carrier") if key in params}
+
+
+def _safe_response_body(response: httpx.Response) -> str:
+    try:
+        value = response.json()
+    except (ValueError, TypeError):
+        value = response.text
+    return json.dumps(_redact(value), ensure_ascii=False)[:1000]
+
+
+def _redact(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): ("[redacted]" if str(key).lower() in {"authorization", "api_key", "token", "password", "pan", "aadhaar", "aadhar", "otp", "mobile", "email"} else _redact(item)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return value
+
+
+def _safe_exception(exc: Exception) -> str:
+    return re.sub(r"(?i)(bearer\s+|api[_-]?key=|token=)[^\s]+", r"\1[redacted]", str(exc))[:500]
