@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
+import { useAuth } from '../../features/auth/hooks/useAuth';
 
 const NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: '📊' },
@@ -19,6 +20,7 @@ interface SidebarProps {
 
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const location = useLocation();
+  const { user } = useAuth();
 
   return (
     <aside
@@ -94,12 +96,12 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <div className="px-3 py-3 border-t border-gray-200">
         <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
           <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 text-xs font-semibold flex-shrink-0">
-            JD
+              {(user?.full_name || user?.email || 'U').slice(0, 2).toUpperCase()}
           </div>
           {!collapsed && (
             <div className="text-sm leading-tight">
-              <div className="font-medium text-gray-900 truncate">Jacob Dale</div>
-              <div className="text-xs text-gray-500 truncate">jacob@acmecorp.com</div>
+              <div className="font-medium text-gray-900 truncate">{user?.full_name || user?.email}</div>
+              <div className="text-xs text-gray-500 truncate">{user?.email}</div>
             </div>
           )}
         </div>

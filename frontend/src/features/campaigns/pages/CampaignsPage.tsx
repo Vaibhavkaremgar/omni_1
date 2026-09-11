@@ -107,7 +107,7 @@ export default function CampaignsPage() {
             {campaigns.map(camp => {
               const cfg = statusConfig[camp.status as keyof typeof statusConfig] || statusConfig.draft;
               return (
-                <div key={camp.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-sm transition-shadow">
+                <Link key={camp.id} to={`/campaigns/${camp.id}`} className="block bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-blue-500/30">
                   <div className="p-4">
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1 min-w-0">
@@ -136,12 +136,10 @@ export default function CampaignsPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="px-4 pb-4 flex items-center justify-end gap-1">
-                    <Link to={`/campaigns/${camp.id}`} className="p-1.5 rounded-md hover:bg-gray-100 text-gray-500 transition-colors" title="View details">
-                      <ChevronRight className="w-4 h-4" />
-                    </Link>
+                  <div className="px-4 pb-4 flex items-center justify-end gap-1 text-gray-500">
+                    <ChevronRight className="w-4 h-4" />
                   </div>
-                </div>
+                </Link>
               );
             })}
           </div>

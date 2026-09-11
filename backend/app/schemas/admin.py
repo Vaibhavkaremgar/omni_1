@@ -19,3 +19,6 @@ class ClientRead(BaseModel):
 
 class ClientCreated(ClientRead):
     temporary_password: str
+
+class ClientStatusUpdate(BaseModel):
+    status: str

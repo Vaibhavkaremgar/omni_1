@@ -1,15 +1,63 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../features/auth/hooks/useAuth';
+import { backendJson } from '../../services/backend/api';
+
+type SearchResult = { label: string; sub: string; action: string };
 
 export default function TopBar() {
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchIndex, setSearchIndex] = useState<SearchResult[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notifications, setNotifications] = useState<Array<{ title: string; message: string }>>([]);
+  const notificationsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setNotificationsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [notificationsOpen]);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.allSettled([
+      backendJson<Array<{ id: string; name: string; purpose?: string }>>('/employees'),
+      backendJson<Array<{ id: string; name: string; status: string }>>('/campaigns'),
+      backendJson<Array<{ id: string; customer_name: string | null; customer_phone_number: string | null; status: string }>>('/calls'),
+      backendJson<Array<{ id: string; e164_number: string; status: string }>>('/phone-numbers'),
+    ]).then(([employees, campaigns, calls, numbers]) => {
+      if (cancelled) return;
+      setSearchIndex([
+        ...(employees.status === 'fulfilled' ? employees.value.map(item => ({ label: item.name, sub: `AI Employee${item.purpose ? ` · ${item.purpose}` : ''}`, action: `/employees/${item.id}` })) : []),
+        ...(campaigns.status === 'fulfilled' ? campaigns.value.map(item => ({ label: item.name, sub: `Campaign · ${item.status}`, action: `/campaigns/${item.id}` })) : []),
+        ...(calls.status === 'fulfilled' ? calls.value.map(item => ({ label: item.customer_name || item.customer_phone_number || `Call ${item.id.slice(0, 8)}`, sub: `Call · ${item.status}`, action: '/calls' })) : []),
+        ...(numbers.status === 'fulfilled' ? numbers.value.map(item => ({ label: item.e164_number, sub: `Phone number · ${item.status}`, action: '/numbers' })) : []),
+      ]);
+    });
+    return () => { cancelled = true; };
+  }, []);
   const searchResults = (() => {
     if (!searchQuery.trim()) return [];
     const q = searchQuery.toLowerCase();
-    const results: Array<{ label: string; sub: string; action?: string }> = [];
+    const pages: SearchResult[] = [
+      { label: 'Dashboard', sub: 'Overview', action: '/dashboard' },
+      { label: 'My Employees', sub: 'AI Employees', action: '/employees' },
+      { label: 'Instant Leads', sub: 'Call someone right now', action: '/instant' },
+      { label: 'Bulk Campaigns', sub: 'Run outbound campaigns', action: '/campaigns' },
+      { label: 'Calls', sub: 'Call history', action: '/calls' },
+      { label: 'Phone Numbers', sub: 'Manage your numbers', action: '/numbers' },
+      { label: 'Integrations', sub: 'Connected services', action: '/integrations' },
+      { label: 'Billing', sub: 'Usage & credits', action: '/billing' },
+      { label: 'Settings', sub: 'Account & preferences', action: '/settings' },
+    ];
+    const results: SearchResult[] = [...pages, ...searchIndex].filter(result => `${result.label} ${result.sub}`.toLowerCase().includes(q));
 
     if (q.includes('ava') || q.includes('lead')) results.push({ label: 'Ava — Lead Qualifier', sub: 'AI Employee', action: '/employees' });
     if (q.includes('marcus') || q.includes('outreach')) results.push({ label: 'Marcus — Outreach Rep', sub: 'AI Employee', action: '/employees' });
@@ -28,6 +76,22 @@ export default function TopBar() {
     });
   })();
 
+  const toggleNotifications = async () => {
+    const next = !notificationsOpen;
+    setNotificationsOpen(next);
+    if (next) {
+      setNotificationsLoading(true);
+      try {
+        const summary = await backendJson<{ alerts: Array<{ title: string; message: string }> }>('/dashboard/summary');
+        setNotifications(summary.alerts || []);
+      } catch {
+        setNotifications([]);
+      } finally {
+        setNotificationsLoading(false);
+      }
+    }
+  };
+
   return (
     <header className="h-16 bg-white border-b border-gray-200 flex items-center px-4 lg:px-6 gap-4 sticky top-0 z-30">
       <button className="lg:hidden p-2 -ml-2 rounded-md hover:bg-gray-100 text-gray-500">
@@ -37,7 +101,7 @@ export default function TopBar() {
       </button>
 
       <div className="flex-1 max-w-xl relative">
-        <div className="relative">
+        <div ref={notificationsRef} className="relative">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
@@ -80,19 +144,21 @@ export default function TopBar() {
       </div>
 
       <div className="flex items-center gap-3">
-        <button className="relative p-2 rounded-md hover:bg-gray-100 text-gray-500 transition-colors">
+        <div className="relative">
+        <button onClick={() => void toggleNotifications()} aria-label="Notifications" aria-expanded={notificationsOpen} className="relative p-2 rounded-md hover:bg-gray-100 text-gray-500 transition-colors">
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
           </svg>
-          <span className="absolute top-1 right-1 w-2 h-2 bg-rose-500 rounded-full" />
         </button>
+        {notificationsOpen && <div onMouseDown={event => event.stopPropagation()} className="absolute right-0 top-full mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden"><div className="px-4 py-3 border-b border-gray-200 flex justify-between"><span className="font-semibold text-sm">Notifications</span><button onClick={() => setNotificationsOpen(false)} className="text-xs text-gray-500">Close</button></div>{notificationsLoading ? <div className="p-6 text-center text-sm text-gray-500">Loading...</div> : notifications.length === 0 ? <div className="p-6 text-center text-sm text-gray-500">You’re all caught up.</div> : <div className="divide-y divide-gray-100">{notifications.map((notification, index) => <div key={`${notification.title}-${index}`} className="p-4"><div className="text-sm font-medium text-gray-900">{notification.title}</div><div className="text-xs text-gray-500 mt-1">{notification.message}</div></div>)}</div>}</div>}
+        </div>
 
         <div className="flex items-center gap-2 pl-2 border-l border-gray-200">
           <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 text-xs font-semibold">
-            JD
+            {(user?.full_name || user?.email || 'U').slice(0, 2).toUpperCase()}
           </div>
           <div className="hidden sm:block text-sm leading-tight">
-            <div className="font-medium text-gray-900">Jacob Dale</div>
+            <div className="font-medium text-gray-900">{user?.full_name || user?.email}</div>
           </div>
           <button
             onClick={signOut}

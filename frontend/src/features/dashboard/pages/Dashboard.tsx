@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { backendJson } from '../../../services/backend/api';
+import { useAuth } from '../../auth/hooks/useAuth';
 import {
   PhoneCall,
   Users,
@@ -79,28 +80,31 @@ interface Notification {
 }
 
 export default function Dashboard() {
+  const { user } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [numbers, setNumbers] = useState<PhoneNumber[]>([]);
   const [recentCalls, setRecentCalls] = useState<Call[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [credits, setCredits] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [empData, numData, callsData, billingData] = await Promise.all([
+        const [empData, numData, callsData, billingData, walletData] = await Promise.all([
           backendJson<Employee[]>('/employees'),
           backendJson<PhoneNumber[]>('/phone-numbers'),
           backendJson<Call[]>('/calls'),
           backendJson<Array<{ id: string; transaction_type: string; amount: number; description: string; created_at: string }>>('/billing/transactions'),
+          backendJson<{ balance: number }>('/billing/wallet'),
         ]);
 
         setEmployees(empData || []);
         setNumbers(numData || []);
         setRecentCalls((callsData || []).slice(0, 8));
-        // Campaign endpoints are not available from the backend yet.
+        setCredits(Number(walletData?.balance || 0));
         setCampaigns([]);
 
         // Build notifications from billing data
@@ -127,23 +131,6 @@ export default function Dashboard() {
             });
           }
         });
-        // Add system notifications
-        notifs.push({
-          id: 'sys1',
-          type: 'attention',
-          title: 'Campaign in progress',
-          message: 'Webinar Attendee Outreach — Sep is currently running (28/42 contacts completed)',
-          time: new Date().toISOString(),
-          read: false,
-        });
-        notifs.push({
-          id: 'sys2',
-          type: 'attention',
-          title: 'Credits running low',
-          message: 'You have 436 minutes remaining. Consider topping up to avoid interruptions.',
-          time: new Date(Date.now() - 3600000).toISOString(),
-          read: false,
-        });
         setNotifications(notifs);
       } catch (err) {
         console.error('Dashboard fetch error:', err);
@@ -162,8 +149,8 @@ export default function Dashboard() {
   const outboundCalls = recentCalls.filter(c => !c.is_inbound).length;
   const connectedCalls = recentCalls.filter(c => c.is_answered).length;
   const totalMinutes = recentCalls.reduce((sum, c) => sum + (c.duration || 0), 0);
-  const totalCredits = 436; // from seed data
-  const leadsConversions = 22; // from seed data
+  const totalCredits = credits;
+  const leadsConversions = recentCalls.filter(c => c.lead_status === 'converted').length;
 
   const formatDuration = (seconds: number) => {
     if (!seconds) return '—';
@@ -224,7 +211,7 @@ export default function Dashboard() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">Dashboard</h1>
           <p className="text-sm text-gray-500">
-            Good morning, Jacob. Here's what's happening today.
+            Welcome, {user?.full_name || user?.email || 'there'}. Here's what's happening today.
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm text-gray-500">

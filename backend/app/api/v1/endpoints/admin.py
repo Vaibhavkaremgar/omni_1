@@ -1,11 +1,12 @@
 from secrets import token_urlsafe
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, get_db
 from app.models.tenant import Tenant
 from app.models.user import User
-from app.schemas.admin import ClientCreate, ClientRead, ClientCreated
+from app.schemas.admin import ClientCreate, ClientRead, ClientCreated, ClientStatusUpdate
 from app.services.auth import AuthenticatedUser, hash_password, require_admin
 
 router = APIRouter(prefix="/admin/clients", tags=["admin"])
@@ -32,8 +33,12 @@ def create_client(payload: ClientCreate, _: AuthenticatedUser = Depends(_admin),
     return ClientCreated(**_read(user).model_dump(), temporary_password=temporary_password)
 
 @router.patch("/{client_id}", response_model=ClientRead)
-def deactivate_client(client_id: str, _: AuthenticatedUser = Depends(_admin), db: Session = Depends(get_db)):
+def deactivate_client(client_id: UUID, payload: ClientStatusUpdate, _: AuthenticatedUser = Depends(_admin), db: Session = Depends(get_db)):
     user = db.get(User, client_id)
     if not user or user.role == "admin": raise HTTPException(status_code=404, detail="Client not found")
-    user.status = "disabled"; user.tenant.status = "archived"; db.commit(); db.refresh(user)
+    if payload.status not in {"active", "suspended"}:
+        raise HTTPException(status_code=400, detail="Unsupported client status")
+    user.status = "active" if payload.status == "active" else "disabled"
+    user.tenant.status = payload.status
+    db.commit(); db.refresh(user)
     return _read(user)
