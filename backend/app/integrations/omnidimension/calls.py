@@ -45,3 +45,21 @@ class OmniDimensionCallProvider:
             status=status,
             metadata={"status": status},
         )
+
+    def get_call_log(self, call_log_id: str | int) -> dict[str, Any]:
+        """Read the provider's post-call record; this never mutates provider state."""
+        response = self.client.get(f"/calls/logs/{call_log_id}")
+        if not isinstance(response, dict):
+            raise OmniDimensionResponseError("OmniDimension returned an invalid call log response.")
+        return response
+
+    def list_call_logs(self, *, page: int = 1, page_size: int = 100, agent_id: int | None = None, call_status: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"pageno": page, "pagesize": page_size}
+        if agent_id is not None:
+            params["agentid"] = agent_id
+        if call_status:
+            params["call_status"] = call_status
+        response = self.client.get("/calls/logs", params=params)
+        if not isinstance(response, dict):
+            raise OmniDimensionResponseError("OmniDimension returned an invalid call log list response.")
+        return response

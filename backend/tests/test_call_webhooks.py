@@ -59,7 +59,7 @@ def test_post_call_webhook_updates_existing_call_and_is_idempotent(call_database
     assert call.summary is None
     assert call.transcript == "user: Hello\nLLM: Hi"
     assert call.extracted_attributes == {"interest": "enterprise"}
-    assert call.raw_payload is None
+    assert call.raw_payload["call_status"] == "completed"
 
 
 def test_post_call_webhook_provider_id_fallback_and_tenant_mismatch_are_safe(call_database):

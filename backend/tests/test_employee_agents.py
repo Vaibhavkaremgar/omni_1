@@ -122,7 +122,7 @@ def test_publish_creates_agent_and_persists_provider_state(agent_database, monke
             assert "test-agent-key" not in published.text
             version = db.scalar(select(AIEmployeeVersion).where(AIEmployeeVersion.employee_id == UUID(employee_id)))
             assert version.provider_agent_id == "9001"
-            assert len(seen) == 1
+            assert [request.method for request in seen] == ["POST", "GET"]
     finally:
         client.close()
         app.dependency_overrides.clear()
@@ -148,7 +148,7 @@ def test_publish_request_contract_is_bodyless_and_invalid_path_is_rejected(agent
             # No body and no Content-Type are required by the publish route.
             published = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert published.status_code == 200
-            assert len(seen) == 1
+            assert [request.method for request in seen] == ["POST", "GET"]
 
             invalid_path = api.post("/api/v1/employees/not-a-uuid/publish", headers=headers)
             assert invalid_path.status_code == 422
@@ -209,8 +209,8 @@ def test_same_employee_updates_existing_agent_after_a_draft_edit(agent_database,
             api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             repeated = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert repeated.status_code == 200
-            assert calls[1].method == "PUT"
-            assert calls[1].url.path == "/api/v1/agents/9003"
+            assert calls[2].method == "PUT"
+            assert calls[2].url.path == "/api/v1/agents/9003"
             api.patch(f"/api/v1/employees/{employee_id}", json={"purpose": "New support flow"}, headers=headers)
             new_publish = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert new_publish.status_code == 200

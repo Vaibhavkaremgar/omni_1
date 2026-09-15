@@ -5,7 +5,7 @@ from sqlalchemy import ForeignKey, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.models.enums import NumberStatus
+from app.models.enums import NumberStatus, PhoneOwnership
 
 
 class PhoneNumber(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -21,6 +21,7 @@ class PhoneNumber(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     e164_number: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     provider_phone_number_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ownership: Mapped[str] = mapped_column(String(32), nullable=False, default=PhoneOwnership.tenant.value)
     status: Mapped[NumberStatus] = mapped_column(
         String(32), nullable=False, default=NumberStatus.provisioning.value
     )
@@ -34,3 +35,4 @@ class PhoneNumber(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     tenant = relationship("Tenant", back_populates="phone_numbers")
     employee = relationship("AIEmployee")
     campaign = relationship("Campaign", back_populates="phone_numbers", foreign_keys=[campaign_id])
+    demo_access = relationship("PlatformDemoPhoneAccess", back_populates="phone", cascade="all, delete-orphan")

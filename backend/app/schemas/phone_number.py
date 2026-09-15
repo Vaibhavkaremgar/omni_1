@@ -11,10 +11,18 @@ class PhoneNumberRead(IDSchema, TimestampSchema):
     e164_number: str
     provider_name: str | None = None
     provider_phone_number_id: str | None = None
+    ownership: str = "tenant"
     status: str
     employee_id: str | None = None
     campaign_id: str | None = None
     capabilities: dict | None = None
+
+
+class PlatformDemoPhoneCreate(ORMBaseModel):
+    phone_number: str = Field(min_length=7, max_length=32, pattern=r"^\+[1-9][0-9]{6,30}$")
+    provider_phone_number_id: str = Field(min_length=1, max_length=255)
+    provider: str = Field(default="omnidimension", pattern=r"^omnidimension$")
+    authorized_tenant_id: str | None = None
 
 
 class MarketplaceNumberRead(ORMBaseModel):

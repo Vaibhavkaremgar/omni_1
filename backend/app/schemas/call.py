@@ -60,3 +60,13 @@ class CallRead(IDSchema, TimestampSchema):
     outcome: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
+    employee_version_id: UUID | None = None
+    transcript_data: list | None = None
+    analysis_status: str | None = None
+    analysis_json: dict | None = None
+    customer_intent: str | None = None
+    key_points: list | None = None
+    action_items: list | None = None
+    follow_up_required: bool | None = None
+    follow_up_notes: str | None = None
+    completed_at: datetime | None = None

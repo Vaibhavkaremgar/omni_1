@@ -19,6 +19,12 @@ interface CallRecord {
   outcome: string | null;
   started_at: string | null;
   ended_at: string | null;
+  analysis_status: string | null;
+  customer_intent: string | null;
+  key_points: string[] | null;
+  action_items: string[] | null;
+  follow_up_required: boolean | null;
+  follow_up_notes: string | null;
   created_at: string;
 }
 
@@ -127,6 +133,16 @@ function CallDetailDrawer({ call, onClose }: { call: CallRecord; onClose: () => 
             <section>
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Summary</h3>
               <p className="text-sm text-gray-700 leading-relaxed">{call.summary}</p>
+            </section>
+          )}
+
+          {(call.customer_intent || call.key_points?.length || call.action_items?.length || call.follow_up_required) && (
+            <section>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">AI analysis</h3>
+              {call.customer_intent && <p className="text-sm text-gray-700"><span className="font-medium">Intent:</span> {call.customer_intent}</p>}
+              {!!call.key_points?.length && <p className="mt-2 text-sm text-gray-700"><span className="font-medium">Key points:</span> {call.key_points.join(' • ')}</p>}
+              {!!call.action_items?.length && <p className="mt-2 text-sm text-gray-700"><span className="font-medium">Actions:</span> {call.action_items.join(' • ')}</p>}
+              {call.follow_up_required && <p className="mt-2 text-sm text-amber-700">Follow-up required{call.follow_up_notes ? `: ${call.follow_up_notes}` : ''}</p>}
             </section>
           )}
 

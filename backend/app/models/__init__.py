@@ -12,6 +12,7 @@ from app.models.lead import Lead
 from app.models.instant_lead_source import InstantLeadSource, InstantLeadRow
 from app.models.oauth_state import OAuthState
 from app.models.phone_number import PhoneNumber
+from app.models.platform_demo_phone_access import PlatformDemoPhoneAccess
 from app.models.phone_purchase import PhonePurchase
 from app.models.tenant import Tenant
 from app.models.usage_record import UsageRecord

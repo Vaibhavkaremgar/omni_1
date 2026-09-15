@@ -16,6 +16,7 @@ from app.db.base import utc_now
 from app.schemas.call import InstantCallRequest
 from app.core.config import get_settings
 from app.services.wallets import InsufficientBalanceError, require_minimum_balance
+from app.services.phone_numbers import PhoneNumberService
 
 
 class InstantCallError(Exception):
@@ -66,10 +67,9 @@ class InstantCallService:
         phone_number = db.scalar(
             select(PhoneNumber).where(
                 PhoneNumber.id == request.phone_number_id,
-                PhoneNumber.tenant_id == tenant_id,
             )
         )
-        if phone_number is None:
+        if phone_number is None or not PhoneNumberService.can_use(db, phone_number, tenant_id):
             raise InstantCallNotFoundError("Phone number not found.")
         if phone_number.status != NumberStatus.active.value or not phone_number.provider_phone_number_id:
             raise InstantCallValidationError("The selected phone number is not available for calling.")

@@ -21,7 +21,7 @@ class PhoneLifecycleService:
         for item in remote:
             local = existing.get(item.e164_number)
             if local is None:
-                db.add(PhoneNumber(tenant_id=tenant.id, e164_number=item.e164_number, provider_name="omnidimension", provider_phone_number_id=item.provider_id, status=item.status, label=item.label, capabilities=item.metadata))
+                db.add(PhoneNumber(tenant_id=tenant.id, e164_number=item.e164_number, provider_name="omnidimension", provider_phone_number_id=item.provider_id, status=item.status, ownership="tenant", label=item.label, capabilities=item.metadata))
             elif local.status != "released":
                 local.provider_phone_number_id, local.status, local.label, local.capabilities = item.provider_id, item.status, item.label, item.metadata
         db.commit()

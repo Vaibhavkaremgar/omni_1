@@ -32,8 +32,11 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=45.0, validation_alias="LLM_TIMEOUT_SECONDS")
     # Groq-specific aliases — mapped to the generic LLM fields when present
     groq_api_key: str | None = Field(default=None, validation_alias="GROQ_API_KEY")
+    groq_api_key_2: str | None = Field(default=None, validation_alias="GROQ_API_KEY_2")
     groq_model: str | None = Field(default=None, validation_alias="GROQ_MODEL")
     groq_base_url: str | None = Field(default=None, validation_alias="GROQ_BASE_URL")
+    groq_base_url_2: str | None = Field(default=None, validation_alias="GROQ_BASE_URL_2")
+    groq_model_2: str | None = Field(default=None, validation_alias="GROQ_MODEL_2")
 
     @property
     def effective_llm_provider(self) -> str | None:
@@ -63,6 +66,7 @@ class Settings(BaseSettings):
         default=15.0,
         validation_alias="OMNIDIMENSION_TIMEOUT_SECONDS",
     )
+    omnidimension_voice_catalog_json: str = Field(default="", validation_alias="OMNIDIMENSION_VOICE_CATALOG_JSON")
     phone_number_monthly_price_inr: Decimal = Field(
         default=Decimal("650.00"), validation_alias="PHONE_NUMBER_MONTHLY_PRICE_INR", ge=0
     )

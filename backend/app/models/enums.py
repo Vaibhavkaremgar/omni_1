@@ -52,6 +52,11 @@ class NumberStatus(str, Enum):
     released = "released"
 
 
+class PhoneOwnership(str, Enum):
+    tenant = "tenant"
+    platform_demo = "platform_demo"
+
+
 class CampaignStatus(str, Enum):
     draft = "draft"
     scheduled = "scheduled"

@@ -24,6 +24,7 @@ from app.services.employee_configuration import (
     public_employee_configuration,
     strip_customer_internal_configuration,
 )
+from app.services.voice_catalog import public_voice_catalog
 
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -109,8 +110,10 @@ def _ensure_draft(employee: AIEmployee, current_user: AuthenticatedUser) -> AIEm
 def _validate_publish(employee: AIEmployee, draft: AIEmployeeVersion | None) -> None:
     if draft is None or not isinstance(draft.configuration, dict):
         raise HTTPException(status_code=422, detail="A draft configuration is required before publishing")
-    required = ("name", "purpose", "llm_provider", "llm_model", "language")
+    required = ("name", "llm_provider", "llm_model", "language")
     missing = [field for field in required if not str(draft.configuration.get(field, "")).strip()]
+    if not str(draft.configuration.get("purpose", "")).strip() and not str(draft.configuration.get("direct_prompt", "")).strip():
+        missing.append("purpose or direct_prompt")
     if missing:
         raise HTTPException(status_code=422, detail=f"Missing required configuration: {', '.join(missing)}")
 
@@ -120,6 +123,11 @@ def get_employee_options(
     _: AuthenticatedUser = Depends(get_current_user),
 ) -> EmployeeOptionsRead:
     return llm_registry.options()
+
+
+@router.get("/voice-catalog")
+def get_voice_catalog(_: AuthenticatedUser = Depends(get_current_user)) -> list[dict]:
+    return public_voice_catalog()
 
 
 @router.get("", response_model=list[AIEmployeeRead])
@@ -176,6 +184,7 @@ def create_employee(
                 "llm_model": employee.llm_model,
                 "language": employee.language,
                 "creation_mode": employee.creation_mode,
+                **({"direct_prompt": payload.direct_prompt, "system_prompt": payload.direct_prompt} if payload.direct_prompt else {}),
             },
             change_summary="Initial employee draft",
             created_by_user_id=current_user.user.id,

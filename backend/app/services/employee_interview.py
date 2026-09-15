@@ -5,8 +5,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import re
+import logging
+import time
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import HTTPException, status
@@ -18,6 +20,23 @@ from app.core.config import get_settings
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.models.employee_interview_session import EmployeeInterviewSession
+
+logger = logging.getLogger(__name__)
+
+
+def _failure_category(error: HTTPException) -> str:
+    detail = str(error.detail).lower()
+    if "rate limit" in detail:
+        return "groq_rate_limit"
+    if "timed out" in detail:
+        return "groq_timeout"
+    if "api key" in detail:
+        return "groq_authentication"
+    if "unavailable" in detail:
+        return "groq_network_error"
+    if "json" in detail or "completion" in detail or "response" in detail:
+        return "llm_response_error"
+    return "llm_error"
 
 
 def now() -> datetime:
@@ -273,9 +292,51 @@ class RealLLMService(LLMService):
 
         system_prompt = self._build_system_prompt(employee)
         user_prompt = self._build_user_prompt(employee, questions, answers, configuration, initial_turn)
+        request_id = uuid4()
+        started = time.perf_counter()
         payload = self._build_request(provider, model, system_prompt, user_prompt)
-        raw_response = self._perform_request(provider, payload)
-        return self._parse_response(raw_response)
+        try:
+            raw_response = self._perform_request(provider, payload)
+        except HTTPException as first_error:
+            fallback_key = getattr(self.settings, "groq_api_key_2", None)
+            if not fallback_key or provider.casefold() not in {"openai", "open-ai", "groq"}:
+                logger.warning(
+                    "[INTERVIEW_ANSWER_ERROR] request_id=%s provider=%s model=%s stage=llm_generation "
+                    "failure_category=%s exception_class=%s elapsed_ms=%d retry_attempted=false",
+                    request_id, provider, model, _failure_category(first_error), type(first_error).__name__,
+                    (time.perf_counter() - started) * 1000,
+                )
+                raise
+            fallback_model = getattr(self.settings, "groq_model_2", None) or model
+            fallback_base_url = getattr(self.settings, "groq_base_url_2", None) or self.settings.effective_llm_base_url
+            logger.info(
+                "[INTERVIEW_ANSWER_RETRY] request_id=%s provider=%s model=%s failure_category=%s",
+                request_id, provider, model, _failure_category(first_error),
+            )
+            fallback_payload = self._build_request(
+                provider, fallback_model, system_prompt, user_prompt,
+                api_key=fallback_key, base_url=fallback_base_url,
+            )
+            try:
+                raw_response = self._perform_request(provider, fallback_payload)
+            except HTTPException as second_error:
+                logger.warning(
+                    "[INTERVIEW_ANSWER_ERROR] request_id=%s provider=%s model=%s stage=llm_generation "
+                    "failure_category=%s exception_class=%s elapsed_ms=%d retry_attempted=true",
+                    request_id, provider, fallback_model, _failure_category(second_error), type(second_error).__name__,
+                    (time.perf_counter() - started) * 1000,
+                )
+                raise
+        try:
+            return self._parse_response(raw_response)
+        except HTTPException as error:
+            logger.warning(
+                "[INTERVIEW_ANSWER_ERROR] request_id=%s provider=%s model=%s stage=llm_json_parse "
+                "failure_category=%s exception_class=%s elapsed_ms=%d retry_attempted=%s",
+                request_id, provider, model, _failure_category(error), type(error).__name__,
+                (time.perf_counter() - started) * 1000, bool(getattr(self.settings, "groq_api_key_2", None)),
+            )
+            raise
 
     def _build_system_prompt(self, employee: AIEmployee) -> str:
         return (
@@ -347,11 +408,14 @@ class RealLLMService(LLMService):
         }
         return json.dumps(prompt_payload, ensure_ascii=False, indent=2)
 
-    def _build_request(self, provider: str, model: str, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    def _build_request(
+        self, provider: str, model: str, system_prompt: str, user_prompt: str,
+        *, api_key: str | None = None, base_url: str | None = None,
+    ) -> dict[str, Any]:
         normalized = provider.casefold()
         if normalized in {"openai", "open-ai", "groq"}:
-            schema = InterviewLLMResponse.model_json_schema()
-            base_url = (self.settings.effective_llm_base_url or "https://api.openai.com/v1").rstrip("/")
+            api_key = api_key or self.settings.effective_llm_api_key
+            base_url = (base_url or self.settings.effective_llm_base_url or "https://api.openai.com/v1").rstrip("/")
             return {
                 "method": "POST",
                 "url": f"{base_url}/chat/completions",
@@ -651,6 +715,7 @@ class EmployeeInterviewService:
         db.commit()
         db.refresh(session)
         return session
+
 
     def submit_answer(
         self,

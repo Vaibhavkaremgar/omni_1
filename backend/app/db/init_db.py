@@ -18,9 +18,11 @@ def init_db() -> None:
     _ensure_auth_columns()
     _ensure_employee_provider_columns()
     _ensure_call_dispatch_columns()
+    _ensure_call_post_call_columns()
     _ensure_billing_columns()
     _ensure_tenant_reseller_columns()
     _ensure_phone_number_lifecycle_columns()
+    _ensure_phone_number_demo_columns()
     _ensure_employee_builder_columns()
     _ensure_tenant_feature_columns()
     _ensure_integration_tables()
@@ -145,6 +147,22 @@ def _ensure_call_dispatch_columns() -> None:
             if column not in existing:
                 connection.execute(text(f"ALTER TABLE calls ADD COLUMN {column} {column_type}"))
 
+def _ensure_call_post_call_columns() -> None:
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    existing = {column["name"] for column in inspect(engine).get_columns("calls")}
+    additions = {
+        "transcript_data": "JSON", "analysis_status": "VARCHAR(32)",
+        "analysis_json": "JSON", "customer_intent": "VARCHAR(255)",
+        "key_points": "JSON", "action_items": "JSON",
+        "follow_up_required": "BOOLEAN", "follow_up_notes": "TEXT",
+        "completed_at": "DATETIME",
+    }
+    with engine.begin() as connection:
+        for column, kind in additions.items():
+            if column not in existing:
+                connection.execute(text(f"ALTER TABLE calls ADD COLUMN {column} {_column_type(kind)}"))
+
 
 def _ensure_billing_columns() -> None:
     if engine.dialect.name not in {"sqlite", "postgresql"}:
@@ -219,6 +237,66 @@ def _ensure_phone_number_lifecycle_columns() -> None:
             if column not in existing:
                 connection.execute(text(f"ALTER TABLE phone_numbers ADD COLUMN {column} {_column_type(kind)}"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_phone_numbers_release_key ON phone_numbers(release_idempotency_key) WHERE release_idempotency_key IS NOT NULL"))
+
+
+def _ensure_phone_number_demo_columns() -> None:
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    phone_inspector = inspect(engine)
+    phone_columns = phone_inspector.get_columns("phone_numbers")
+    existing = {c["name"] for c in phone_columns}
+    with engine.begin() as connection:
+        # Older local SQLite databases were created with tenant_id NOT NULL.
+        # Platform/demo phones intentionally have no tenant owner, so rebuild
+        # this one table additively while preserving every existing row.
+        tenant_column = next((c for c in phone_columns if c["name"] == "tenant_id"), None)
+        if engine.dialect.name == "sqlite" and tenant_column and not tenant_column.get("nullable", True):
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.exec_driver_sql("""
+                CREATE TABLE phone_numbers_demo_migration (
+                    tenant_id CHAR(32), label VARCHAR(255), e164_number VARCHAR(32) NOT NULL,
+                    provider_name VARCHAR(100), provider_phone_number_id VARCHAR(255),
+                    ownership VARCHAR(32) NOT NULL DEFAULT 'tenant', status VARCHAR(32) NOT NULL,
+                    employee_id CHAR(32), campaign_id CHAR(32), capabilities JSON,
+                    release_idempotency_key VARCHAR(64), release_failure_reason VARCHAR(64),
+                    released_at DATETIME, id CHAR(32) NOT NULL PRIMARY KEY,
+                    created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+                    CONSTRAINT uq_phone_numbers_tenant_e164_demo UNIQUE (tenant_id, e164_number),
+                    FOREIGN KEY(tenant_id) REFERENCES tenants(id),
+                    FOREIGN KEY(employee_id) REFERENCES ai_employees(id),
+                    FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
+                )
+            """)
+            connection.exec_driver_sql("""
+                INSERT INTO phone_numbers_demo_migration
+                (tenant_id,label,e164_number,provider_name,provider_phone_number_id,ownership,status,
+                 employee_id,campaign_id,capabilities,release_idempotency_key,release_failure_reason,
+                 released_at,id,created_at,updated_at)
+                SELECT tenant_id,label,e164_number,provider_name,provider_phone_number_id,
+                       COALESCE(ownership,'tenant'),status,employee_id,campaign_id,capabilities,
+                       release_idempotency_key,release_failure_reason,released_at,id,created_at,updated_at
+                FROM phone_numbers
+            """)
+            connection.exec_driver_sql("DROP TABLE phone_numbers")
+            connection.exec_driver_sql("ALTER TABLE phone_numbers_demo_migration RENAME TO phone_numbers")
+            connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_phone_numbers_provider_id ON phone_numbers(provider_name, provider_phone_number_id) WHERE provider_phone_number_id IS NOT NULL")
+            connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_phone_numbers_release_key ON phone_numbers(release_idempotency_key) WHERE release_idempotency_key IS NOT NULL")
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            existing = {c["name"] for c in inspect(engine).get_columns("phone_numbers")}
+        if "ownership" not in existing:
+            connection.execute(text("ALTER TABLE phone_numbers ADD COLUMN ownership VARCHAR(32) NOT NULL DEFAULT 'tenant'"))
+        tables = set(inspect(engine).get_table_names())
+        if "platform_demo_phone_access" not in tables:
+            connection.execute(text(_column_type("""
+                CREATE TABLE platform_demo_phone_access (
+                    id CHAR(32) NOT NULL PRIMARY KEY,
+                    phone_number_id CHAR(32) NOT NULL REFERENCES phone_numbers(id),
+                    tenant_id CHAR(32) NOT NULL REFERENCES tenants(id),
+                    CONSTRAINT uq_demo_phone_tenant UNIQUE (phone_number_id, tenant_id)
+                )
+            """)))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_demo_phone_access_phone ON platform_demo_phone_access(phone_number_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_demo_phone_access_tenant ON platform_demo_phone_access(tenant_id)"))
 
 
 def _ensure_employee_builder_columns() -> None:

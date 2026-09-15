@@ -14,6 +14,7 @@ from app.models.instant_lead_source import InstantLeadSource
 from app.models.phone_number import PhoneNumber
 from app.services.auth import AuthenticatedUser
 from app.services.instant_leads import InstantLeadService, _parse_csv, _parse_xlsx, _parse_source
+from app.services.phone_numbers import PhoneNumberService
 
 router = APIRouter(prefix="/instant-leads", tags=["instant-leads"])
 
@@ -29,8 +30,8 @@ def _validate_setup(employee_id, phone_number_id, tenant_id, db):
     employee = db.scalar(select(AIEmployee).where(AIEmployee.id == employee_id, AIEmployee.tenant_id == tenant_id))
     if employee is None or employee.status != EmployeeStatus.published.value or employee.published_version is None or not employee.published_version.provider_agent_id:
         raise HTTPException(status_code=422, detail="Select a published employee connected to the provider.")
-    phone = db.scalar(select(PhoneNumber).where(PhoneNumber.id == phone_number_id, PhoneNumber.tenant_id == tenant_id))
-    if phone is None or phone.status != NumberStatus.active.value or not phone.provider_phone_number_id:
+    phone = db.scalar(select(PhoneNumber).where(PhoneNumber.id == phone_number_id))
+    if phone is None or not PhoneNumberService.can_use(db, phone, tenant_id) or phone.status != NumberStatus.active.value or not phone.provider_phone_number_id:
         raise HTTPException(status_code=422, detail="Select an active assigned phone number.")
 
 

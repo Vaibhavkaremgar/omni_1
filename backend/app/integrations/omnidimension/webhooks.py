@@ -90,20 +90,39 @@ def normalize_status(value: Any) -> str | None:
 
 def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
     metadata = _metadata(payload)
-    provider_call_id = _first_value(payload, {"provider_call_id", "requestId", "request_id", "call_log_id", "id"})
-    provider_status = _first_value(payload, {"call_status"}) or _first_value(payload, {"status"})
-    recording_url = _first_value(payload, {"recording_url"})
+    report = payload.get("call_report") if isinstance(payload.get("call_report"), dict) else {}
+    provider_call_id = (payload.get("call_log_id") or payload.get("call_id") or
+                        payload.get("requestId") or payload.get("request_id") or
+                        payload.get("id") or _first_value(payload, {"provider_call_id"}))
+    provider_status = payload.get("call_status") or payload.get("status") or report.get("status")
+    recording_url = payload.get("recording_url") or report.get("recording_url")
+    transcript = (payload.get("call_conversation") or payload.get("full_conversation") or
+                  payload.get("transcript") or report.get("full_conversation"))
+    extracted = payload.get("extracted_variables") or payload.get("extracted_attributes") or report.get("extracted_variables")
+    sentiment = payload.get("sentiment_score") or payload.get("sentiment") or report.get("sentiment")
+    structured = payload.get("interactions") or payload.get("call_log_data")
+    if isinstance(structured, list):
+        transcript_data = [
+            {"speaker": "customer", "text": item.get("user_query", "")}
+            for item in structured if isinstance(item, dict) and item.get("user_query")
+        ] + [
+            {"speaker": "assistant", "text": item.get("bot_response", "")}
+            for item in structured if isinstance(item, dict) and item.get("bot_response")
+        ]
+    else:
+        transcript_data = None
     return {
         "local_call_id": metadata.get("local_call_id"),
         "metadata_tenant_id": metadata.get("tenant_id"),
         "provider_call_id": str(provider_call_id) if provider_call_id is not None else None,
         "provider_status": provider_status,
         "status": normalize_status(provider_status),
-        "duration_seconds": _parse_duration(_first_value(payload, {"call_duration", "duration_seconds"})),
-        "transcript": _first_value(payload, {"call_conversation", "full_conversation", "transcript"}),
-        "summary": _first_value(payload, {"summary", "call_summary"}),
+        "duration_seconds": _parse_duration(payload.get("call_duration") or payload.get("duration_seconds") or report.get("duration")),
+        "transcript": transcript,
+        "transcript_data": transcript_data,
+        "summary": payload.get("summary") or payload.get("call_summary") or report.get("summary"),
         "recording_url": recording_url if isinstance(recording_url, str) else None,
-        "sentiment": _first_value(payload, {"sentiment_score", "sentiment"}),
-        "extracted_attributes": _first_value(payload, {"extracted_variables", "extracted_attributes"}),
+        "sentiment": sentiment,
+        "extracted_attributes": extracted,
         "ended_at": _parse_datetime(_first_value(payload, {"ended_at", "time_of_call", "create_date"})),
     }

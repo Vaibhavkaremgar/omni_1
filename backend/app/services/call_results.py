@@ -11,6 +11,7 @@ from app.models.call import Call
 from app.models.campaign_contact import CampaignContact
 from app.models.enums import CallStatus, ContactStatus
 from app.services.integration_dispatcher import IntegrationDispatcher
+from app.services.call_analysis import CallAnalysisService
 from app.services.usage_billing import charge_completed_call
 from app.services.wallets import WalletError
 
@@ -34,12 +35,17 @@ class CallResultService:
         for field in ("duration_seconds", "transcript", "summary", "recording_url", "sentiment"):
             if event[field] is not None:
                 setattr(call, field, event[field])
+        if event.get("transcript_data") is not None:
+            call.transcript_data = event["transcript_data"]
         if isinstance(event["extracted_attributes"], dict):
             call.extracted_attributes = event["extracted_attributes"]
         if event["ended_at"] is not None:
             call.ended_at = event["ended_at"]
         elif event["status"] in TERMINAL_STATUSES:
             call.ended_at = call.ended_at or utc_now()
+        if event["status"] in TERMINAL_STATUSES:
+            call.completed_at = call.completed_at or call.ended_at or utc_now()
+        call.raw_payload = payload
         call.dispatch_metadata = {
             **(call.dispatch_metadata or {}),
             "provider_status": event["provider_status"],
@@ -82,6 +88,10 @@ class CallResultService:
                         _update_campaign_progress(db, campaign)
         db.commit()
         db.refresh(call)
+        if call.transcript and call.analysis_status not in {"pending", "running", "completed"}:
+            call.analysis_status = "pending"
+            db.commit()
+            CallAnalysisService.schedule(call.id)
         # Dispatch to connected integrations after commit — never blocks webhook response.
         try:
             self._dispatcher.dispatch(db, call)

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from app.integrations.omnidimension import OmniDimensionAgentProvider, ProviderAgent
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
+from app.services.employee_prompt import build_employee_prompt
+from app.services.voice_catalog import voice_catalog
+from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -21,11 +27,33 @@ class OmniDimensionAgentService:
 
     def synchronize(self, employee: AIEmployee, version: AIEmployeeVersion) -> AgentSyncResult:
         payload = map_employee_configuration(employee, version.configuration or {})
+        logger.info(
+            "Omni agent payload employee_id=%s employee_name=%s language=%s sections=%d prompt_chars=%d "
+            "welcome_chars=%d languages=%s dynamic_welcome=%s voice_configured=%s",
+            employee.id, employee.name, (version.configuration or {}).get("language", employee.language),
+            len(payload.get("context_breakdown", [])),
+            sum(len(str(section.get("body", ""))) for section in payload.get("context_breakdown", [])),
+            len(payload.get("welcome_message", "")), payload.get("languages"),
+            payload.get("is_welcome_message_dynamic", False), "voice" in payload,
+        )
         provider_agent = (
             self.provider.update_agent(version.provider_agent_id, payload)
             if version.provider_agent_id
             else self.provider.create_agent(payload)
         )
+        try:
+            readback = self.provider.get_agent(provider_agent.provider_id)
+            sections = readback.get("context_breakdown") if isinstance(readback, dict) else None
+            logger.info(
+                "Omni agent readback agent_id=%s sections=%d prompt_chars=%d languages=%s welcome_chars=%d",
+                provider_agent.provider_id,
+                len(sections) if isinstance(sections, list) else 0,
+                sum(len(str(item.get("body", ""))) for item in sections if isinstance(item, dict)) if isinstance(sections, list) else 0,
+                readback.get("languages") if isinstance(readback, dict) else None,
+                len(str(readback.get("welcome_message", ""))) if isinstance(readback, dict) else 0,
+            )
+        except Exception as exc:
+            logger.warning("Omni agent readback unavailable agent_id=%s exception_class=%s", provider_agent.provider_id, type(exc).__name__)
         return _result(provider_agent)
 
 
@@ -87,6 +115,16 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             flow_parts.append(_text(val))
     if flow_parts:
         context.append({"title": "Conversation Flow", "body": "\n".join(flow_parts), "is_enabled": True})
+
+    context.append({
+        "title": "Multi-Turn Conversation Behavior",
+        "body": (
+            "Continue listening and responding after every caller turn. Ask the next relevant question when information is incomplete. "
+            "Do not treat the first answer as task completion and do not end the call after one response. "
+            "Only close when the objective is complete, the caller explicitly wants to end, or an explicit configured termination condition is satisfied."
+        ),
+        "is_enabled": True,
+    })
 
     system_prompt = configuration.get("system_prompt")
     if system_prompt:
@@ -150,16 +188,49 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             context.append({"title": title, "body": _text(val), "is_enabled": True})
 
     # ── Build the final payload ───────────────────────────────────────────────
+    canonical_prompt = build_employee_prompt(configuration)
+    if canonical_prompt:
+        context.append({
+            "title": "Complete Employee Instructions",
+            "body": canonical_prompt,
+            "is_enabled": True,
+        })
+    if _text(configuration.get("direct_prompt")):
+        context = [
+            {"title": "Complete Employee Instructions", "body": canonical_prompt, "is_enabled": True},
+            {"title": "Language & Communication Rules", "body": f"Speak in {lang}. Continue the conversation until the caller's objective is complete.", "is_enabled": True},
+        ]
+
+    settings = get_settings()
+    webhook_url = f"{settings.backend_public_url.rstrip('/')}/api/v1/webhooks/omnidimension/post-call"
+    post_call_actions: dict[str, Any] = {
+        "webhook": {
+            "url": webhook_url,
+            "trigger_call_statuses": ["completed", "failed", "no_answer", "busy", "voicemail_detected"],
+        }
+    }
+    extraction = configuration.get("post_call_extraction") or configuration.get("information_to_extract")
+    if isinstance(extraction, list):
+        variables = [{"key": f"field_{index + 1}", "prompt": str(item)} for index, item in enumerate(extraction) if item]
+        if variables:
+            post_call_actions["webhook"]["extracted_variables"] = variables
     payload: dict[str, Any] = {
         "name": _text(configuration.get("name"), employee.name),
-        "welcome_message": _text(
-            configuration.get("greeting"),
-            f"Hello! I'm {employee.name}. How can I help you today?",
-        ),
+        "welcome_message": _welcome_message(employee, configuration, lang),
         "context_breakdown": context,
         "model": {"model": _text(configuration.get("llm_model"), employee.llm_model)},
         "languages": [lang],
+        "post_call_actions": post_call_actions,
+        "is_welcome_message_dynamic": False,
+        "is_welcome_message_interruption": True,
+        "is_interruption_allowed": True,
     }
+
+    voice = configuration.get("voice")
+    if isinstance(voice, dict):
+        selected = next((item for item in voice_catalog() if item["id"] == str(voice.get("id", ""))), None)
+        if selected:
+            payload["voice"] = {"provider": selected["provider"], "voice_id": selected["provider_voice_id"]}
 
     call_type = configuration.get("call_type", employee.call_type)
     if call_type in {"inbound", "outbound"}:
@@ -180,6 +251,33 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         }]}
 
     return payload
+
+
+def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
+    configured = _text(configuration.get("greeting"))
+    if configured and (language in {"English", "English (India)", "English (UK)"} or _contains_language_script(configured, language)):
+        return configured
+    purpose = _text(configuration.get("purpose"), employee.purpose).rstrip(".")
+    name = employee.name
+    if language == "Hindi":
+        return f"नमस्ते, मैं {name} हूँ। मैं {purpose} में आपकी मदद करने के लिए यहाँ हूँ। आप किस बारे में जानकारी चाहते हैं?"
+    if language == "Telugu":
+        return f"నమస్కారం, నేను {name}. {purpose} విషయంలో మీకు సహాయం చేయడానికి ఇక్కడ ఉన్నాను. మీకు ఏ సమాచారం కావాలి?"
+    if language == "Tamil":
+        return f"வணக்கம், நான் {name}. {purpose} தொடர்பாக உங்களுக்கு உதவ இங்கே இருக்கிறேன். உங்களுக்கு என்ன தகவல் தேவை?"
+    return f"Hello, I'm {name}. I'm here to help you with {purpose}. What would you like to know?"
+
+
+def _contains_language_script(value: str, language: str) -> bool:
+    ranges = {
+        "Telugu": (0x0C00, 0x0C7F), "Hindi": (0x0900, 0x097F),
+        "Tamil": (0x0B80, 0x0BFF), "Kannada": (0x0C80, 0x0CFF),
+        "Malayalam": (0x0D00, 0x0D7F), "Bengali": (0x0980, 0x09FF),
+        "Gujarati": (0x0A80, 0x0AFF), "Punjabi": (0x0A00, 0x0A7F),
+        "Odia": (0x0B00, 0x0B7F), "Assamese": (0x0980, 0x09FF),
+    }
+    bounds = ranges.get(language)
+    return bool(bounds and any(bounds[0] <= ord(char) <= bounds[1] for char in value))
 
 
 def _result(agent: ProviderAgent) -> AgentSyncResult:
@@ -211,4 +309,6 @@ def _language_name(value: str) -> str:
         "bn-IN": "Bengali",
         "gu-IN": "Gujarati",
         "pa-IN": "Punjabi",
+        "or-IN": "Odia",
+        "as-IN": "Assamese",
     }.get(value, value)

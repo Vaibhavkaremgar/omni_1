@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from app.api.deps import get_current_user, get_db
 from app.models.phone_number import PhoneNumber
-from app.schemas.phone_number import (KycInitializeRequest, KycStepRequest, MarketplaceSearchRead, PhoneNumberRead,
+from app.schemas.phone_number import (KycInitializeRequest, KycStepRequest, MarketplaceSearchRead, PhoneNumberRead, PlatformDemoPhoneCreate,
     PhonePurchaseOrderRead, PhonePurchaseOrderRequest, PhonePurchaseStatusRead, PhonePurchaseVerify)
 from app.services.auth import AuthenticatedUser
 from app.services.phone_numbers import (PhoneNumberMarketplaceService, PhoneNumberService, get_phone_number_marketplace_service,
@@ -19,10 +19,32 @@ from app.services.phone_purchases import PhonePurchaseService, message_for
 from app.services.phone_lifecycle import PhoneLifecycleService
 from app.services.top_ups import paise
 from app.core.config import get_settings
+from app.services.auth import require_admin
+from app.models.platform_demo_phone_access import PlatformDemoPhoneAccess
+from app.models.tenant import Tenant
 
 
 router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])
 razorpay_client = RazorpayClient()
+
+
+@router.post("/platform-demo", response_model=PhoneNumberRead, status_code=201)
+def register_platform_demo_phone(payload: PlatformDemoPhoneCreate, current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)) -> PhoneNumber:
+    require_admin(current_user)
+    try:
+        target_tenant = current_user.tenant.id if payload.authorized_tenant_id is None else UUID(payload.authorized_tenant_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="authorized_tenant_id must be a valid UUID.") from None
+    if db.get(Tenant, target_tenant) is None:
+        raise HTTPException(status_code=404, detail="Authorized tenant not found.")
+    existing = db.scalar(select(PhoneNumber).where(PhoneNumber.provider_name == payload.provider, PhoneNumber.provider_phone_number_id == payload.provider_phone_number_id))
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="That provider phone ID is already registered.")
+    number = PhoneNumber(e164_number=payload.phone_number, provider_name=payload.provider, provider_phone_number_id=payload.provider_phone_number_id, ownership="platform_demo", status="active", label="Platform demo phone")
+    db.add(number); db.flush()
+    db.add(PlatformDemoPhoneAccess(phone_number_id=number.id, tenant_id=target_tenant))
+    db.commit(); db.refresh(number)
+    return number
 
 
 @router.get("", response_model=list[PhoneNumberRead])

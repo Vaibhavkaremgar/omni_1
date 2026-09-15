@@ -11,6 +11,8 @@ from app.integrations.omnidimension import OmniDimensionClient, OmniDimensionPho
 from app.core.config import get_settings
 from app.schemas.phone_number import MarketplaceNumberRead, MarketplaceSearchRead
 from app.models.phone_number import PhoneNumber
+from app.models.platform_demo_phone_access import PlatformDemoPhoneAccess
+from app.models.enums import PhoneOwnership
 from app.services.reseller_kyc import ResellerKycService
 from app.services.phone_lifecycle import PhoneLifecycleService
 
@@ -56,7 +58,7 @@ class PhoneNumberService:
                     e164_number=item.e164_number,
                     provider_name="omnidimension",
                     provider_phone_number_id=item.provider_id,
-                    status=item.status,
+                    status=item.status, ownership=PhoneOwnership.platform_demo.value,
                     label=item.label,
                     capabilities=item.metadata,
                 )
@@ -92,10 +94,20 @@ class PhoneNumberService:
         return list(
             db.scalars(
                 select(PhoneNumber)
-                .where(PhoneNumber.tenant_id == tenant_id)
+                .outerjoin(PlatformDemoPhoneAccess, PlatformDemoPhoneAccess.phone_number_id == PhoneNumber.id)
+                .where((PhoneNumber.tenant_id == tenant_id) | (PlatformDemoPhoneAccess.tenant_id == tenant_id))
                 .order_by(PhoneNumber.created_at.desc())
             ).all()
         )
+
+    @staticmethod
+    def can_use(db: Session, phone: PhoneNumber, tenant_id: UUID) -> bool:
+        if phone.ownership == PhoneOwnership.tenant.value:
+            return phone.tenant_id == tenant_id
+        return db.scalar(select(PlatformDemoPhoneAccess.id).where(
+            PlatformDemoPhoneAccess.phone_number_id == phone.id,
+            PlatformDemoPhoneAccess.tenant_id == tenant_id,
+        )) is not None
 
 
 class PhoneNumberMarketplaceService:

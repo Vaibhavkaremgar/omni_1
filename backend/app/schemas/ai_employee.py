@@ -11,7 +11,7 @@ from app.schemas.ai_employee_version import AIEmployeeVersionRead
 # customer-facing default. Outbound requires a manual enablement step.
 CallType = Literal["inbound", "outbound", "both"]
 SELF_SERVICE_CALL_TYPES = {"inbound", "both"}
-CreationMode = Literal["chat"]
+CreationMode = Literal["chat", "prompt"]
 
 
 class AIEmployeeCreate(BaseModel):
@@ -20,6 +20,7 @@ class AIEmployeeCreate(BaseModel):
     call_type: CallType = "inbound"
     language: str = Field(default="English", min_length=1, max_length=100)
     creation_mode: CreationMode = "chat"
+    direct_prompt: str | None = Field(default=None, max_length=30000)
 
     @field_validator("call_type")
     @classmethod

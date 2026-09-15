@@ -26,6 +26,12 @@ class OmniDimensionAgentProvider:
     def update_agent(self, provider_id: str, payload: dict[str, Any]) -> ProviderAgent:
         return self._map_response(self.client.put(f"/agents/{provider_id}", json=payload))
 
+    def get_agent(self, provider_id: str) -> dict[str, Any]:
+        response = self.client.get(f"/agents/{provider_id}")
+        if not isinstance(response, dict):
+            raise OmniDimensionResponseError("OmniDimension returned an invalid agent response.")
+        return response
+
     @staticmethod
     def _map_response(payload: Any) -> ProviderAgent:
         if not isinstance(payload, dict) or payload.get("id") is None:
