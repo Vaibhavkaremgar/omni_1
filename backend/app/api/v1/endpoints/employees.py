@@ -26,6 +26,7 @@ from app.services.employee_configuration import (
     strip_customer_internal_configuration,
 )
 from app.services.voice_catalog import public_voice_catalog
+from app.services.employee_templates import template_library, render_template
 
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -132,6 +133,31 @@ def get_voice_catalog(current_user: AuthenticatedUser = Depends(get_current_user
     catalog = public_voice_catalog()
     logger.info("Voice catalog requested tenant_id=%s count=%d", current_user.tenant.id, len(catalog))
     return catalog
+
+
+@router.get("/templates")
+def get_employee_templates(
+    _: AuthenticatedUser = Depends(get_current_user),
+) -> list[dict]:
+    """Return platform-owned template definitions; no tenant data is included."""
+    return template_library()
+
+
+@router.post("/templates/render")
+def render_employee_template(
+    payload: dict,
+    _: AuthenticatedUser = Depends(get_current_user),
+) -> dict:
+    """Render a tenant's draft locally. Publishing remains the only provider mutation."""
+    try:
+        return render_template(
+            str(payload.get("template_id", "")),
+            payload.get("values") or {},
+            str(payload.get("language") or "Telugu"),
+            str(payload.get("custom_instructions") or ""),
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("", response_model=list[AIEmployeeRead])

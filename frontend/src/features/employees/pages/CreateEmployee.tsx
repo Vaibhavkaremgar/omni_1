@@ -21,6 +21,7 @@ type Session = {
 };
 type Employee = { id: string; name: string; language: string; creation_mode?: 'chat' | 'prompt'; configuration?: Record<string, unknown> | null };
 type Voice = { id: string; name: string; tier: string; gender: string; supports_cloning: boolean };
+type Template = { id: string; name: string; category: string; short_description: string; purpose: string; default_language: string; placeholders: Array<{ key: string; label: string; description: string; type: string; required: boolean; validation?: Record<string, unknown> }> };
 
 export default function CreateEmployee() {
   const navigate = useNavigate();
@@ -40,7 +41,10 @@ export default function CreateEmployee() {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voiceError, setVoiceError] = useState('');
   const [voiceId, setVoiceId] = useState('');
-  const [builderMode, setBuilderMode] = useState<'chat' | 'prompt'>('chat');
+  const [builderMode, setBuilderMode] = useState<'template' | 'chat' | 'prompt'>('chat');
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
+  const [templateValues, setTemplateValues] = useState<Record<string, string>>({});
   const [directPrompt, setDirectPrompt] = useState('');
 
   const back = () => navigate('/employees');
@@ -84,6 +88,7 @@ export default function CreateEmployee() {
   };
 
   useEffect(() => {
+    void backendJson<Template[]>('/employees/templates').then(setTemplates).catch(() => undefined);
     void backendJson<Voice[]>('/employees/voice-catalog').then(items => {
       setVoices(items);
       console.info('[voice-catalog]', { endpoint: '/employees/voice-catalog', status: 200, count: items.length, language });
@@ -174,7 +179,7 @@ export default function CreateEmployee() {
     try {
       const selectedVoice = voices.find(voice => voice.id === voiceId);
       const promptForPublish = String(session.extracted_configuration?.direct_prompt || directPrompt).trim();
-      const configuration = { ...(session.extracted_configuration ?? {}), name: name.trim(), language, creation_mode: builderMode, ...(builderMode === 'prompt' ? { direct_prompt: promptForPublish, system_prompt: promptForPublish } : {}), ...(selectedVoice ? { voice: { id: selectedVoice.id, name: selectedVoice.name, tier: selectedVoice.tier, gender: selectedVoice.gender } } : {}) };
+      const configuration = { ...(session.extracted_configuration ?? {}), name: name.trim(), language, creation_mode: builderMode === 'template' ? 'chat' : builderMode, ...(selectedTemplate ? { selected_template_id: selectedTemplate.id, selected_template_version: 1, template_values: templateValues } : {}), ...(builderMode === 'prompt' ? { direct_prompt: promptForPublish, system_prompt: promptForPublish } : {}), ...(selectedVoice ? { voice: { id: selectedVoice.id, name: selectedVoice.name, tier: selectedVoice.tier, gender: selectedVoice.gender } } : {}) };
       await backendJson(`/employees/${employeeId}`, {
         method: 'PATCH',
         body: JSON.stringify({ configuration }),
@@ -187,6 +192,18 @@ export default function CreateEmployee() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const startTemplate = async () => {
+    if (!selectedTemplate || !name.trim() || selectedTemplate.placeholders.some(p => p.required && !templateValues[p.key]?.trim())) return;
+    setBusy(true); setError('');
+    try {
+      const employee = await backendJson<Employee>('/employees', { method: 'POST', body: JSON.stringify({ name: name.trim(), language: language || 'Telugu', creation_mode: 'chat' }) });
+      setEmployeeId(employee.id); window.history.replaceState(null, '', `/employees/${employee.id}`);
+      const rendered = await backendJson<Record<string, unknown>>('/employees/templates/render', { method: 'POST', body: JSON.stringify({ template_id: selectedTemplate.id, values: templateValues, language: language || 'Telugu' }) });
+      setSession({ employee_id: employee.id, current_question: null, suggested_questions: [], consumed_questions: [], extracted_configuration: rendered, is_complete: true, llm_used: false });
+      setReview(true);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to render template.'); } finally { setBusy(false); }
   };
 
   const canBuild = builderMode === 'prompt' ? directPrompt.trim().length >= 20 : answeredQuestions >= 3;
@@ -218,6 +235,17 @@ export default function CreateEmployee() {
                 </li>
               </ol>
             </aside>
+            <section className="bg-white border border-gray-200 rounded-2xl shadow-sm p-8">
+              <h1 className="text-2xl font-bold text-gray-900">Create your AI employee</h1>
+              <p className="mt-2 text-sm text-gray-500">How would you like to create the employee?</p>
+              <div className="grid sm:grid-cols-3 gap-3 mt-5">
+                {[['template', 'Use a Template', 'Start from a professionally designed workflow'], ['chat', 'Chat with Shabdha', 'Build it conversationally'], ['prompt', 'Paste complete prompt', 'Use your own instructions']].map(([mode, title, help]) => <button key={mode} type="button" onClick={() => { setBuilderMode(mode as 'template' | 'chat' | 'prompt'); if (mode === 'template') setLanguage('Telugu'); }} className={`rounded-xl border p-4 text-left ${builderMode === mode ? 'border-blue-600 bg-blue-50' : 'border-gray-200'}`}><span className="font-semibold text-gray-900">{title}</span><span className="block mt-1 text-xs text-gray-500">{help}</span></button>)}
+              </div>
+              {builderMode === 'template' ? <>
+                <label className="block mt-7 text-sm font-semibold text-gray-700">Employee name<input value={name} onChange={e => setName(e.target.value)} className="mt-2 w-full border border-gray-200 rounded-xl px-3 py-3" placeholder="e.g. Life Hospitals Receptionist" /></label>
+                <div className="grid md:grid-cols-2 gap-3 mt-5">{templates.map(t => <button key={t.id} type="button" onClick={() => setSelectedTemplate(t)} className={`rounded-xl border p-4 text-left ${selectedTemplate?.id === t.id ? 'border-blue-600 bg-blue-50' : 'border-gray-200 hover:border-blue-300'}`}><span className="text-xs text-blue-600 font-semibold">{t.category}</span><h2 className="mt-1 font-semibold text-gray-900">{t.name}</h2><p className="mt-1 text-xs text-gray-500">{t.short_description}</p><p className="mt-2 text-xs text-gray-600">Default language: {t.default_language}</p></button>)}</div>
+                {selectedTemplate && <div className="mt-6 border-t pt-5"><h2 className="font-semibold text-gray-900">Customize your employee</h2><div className="grid md:grid-cols-2 gap-4 mt-4">{selectedTemplate.placeholders.map(p => <label key={p.key} className="text-sm font-semibold text-gray-700">{p.label}{p.required && <span className="text-rose-500"> *</span>}<span className="block text-xs font-normal text-gray-500 mt-1">{p.description}</span><textarea required={p.required} value={templateValues[p.key] ?? ''} onChange={e => setTemplateValues(v => ({ ...v, [p.key]: e.target.value }))} className="mt-2 w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" rows={2} /></label>)}</div><button onClick={() => void startTemplate()} disabled={busy || !name.trim() || selectedTemplate.placeholders.some(p => p.required && !templateValues[p.key]?.trim())} className="mt-6 bg-blue-600 text-white rounded-xl px-5 py-3 text-sm font-semibold disabled:opacity-50">Preview employee</button></div>}
+              </> : <>
             <section className="bg-white border border-gray-200 rounded-2xl shadow-sm p-8">
               <p className="text-xs font-semibold text-blue-600 uppercase tracking-widest">Step 1 of 3</p>
               <h1 className="mt-2 text-2xl font-bold text-gray-900">What language should they speak?</h1>
@@ -264,6 +292,8 @@ export default function CreateEmployee() {
                 {busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Starting Shabdha…</> : 'Continue to Shabdha →'}
               </button>
               {error && <p className="mt-4 text-sm text-rose-600">{error}</p>}
+            </section>
+              </>}
             </section>
           </div>
         </div>

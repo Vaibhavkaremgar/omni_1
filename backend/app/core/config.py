@@ -1,6 +1,7 @@
 from functools import lru_cache
 from decimal import Decimal
 from secrets import token_urlsafe
+from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -98,7 +99,14 @@ class Settings(BaseSettings):
     ghl_oauth_client_secret: str | None = Field(default=None, validation_alias="GHL_OAUTH_CLIENT_SECRET")
     ghl_oauth_redirect_uri: str | None = Field(default=None, validation_alias="GHL_OAUTH_REDIRECT_URI")
 
-    model_config = SettingsConfigDict(env_file=".env", enable_decoding=False, extra="ignore")
+    # Resolve the backend env file from this module, not the process cwd. The
+    # API is commonly launched from the repository root, while `.env` lives in
+    # backend/.env. Explicit process environment variables still take priority.
+    model_config = SettingsConfigDict(
+        env_file=str(Path(__file__).resolve().parents[2] / ".env"),
+        enable_decoding=False,
+        extra="ignore",
+    )
 
     @field_validator("debug", mode="before")
     @classmethod

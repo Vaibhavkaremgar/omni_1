@@ -17,6 +17,7 @@ def init_db() -> None:
     _migrate_users_for_local_auth()
     _ensure_auth_columns()
     _ensure_employee_provider_columns()
+    _ensure_employee_core_columns()
     _ensure_call_dispatch_columns()
     _ensure_call_post_call_columns()
     _ensure_billing_columns()
@@ -62,10 +63,10 @@ def _migrate_users_for_local_auth() -> None:
     if engine.dialect.name not in {"sqlite", "postgresql"}:
         return
     columns = {column["name"] for column in inspect(engine).get_columns("users")}
-    if "auth_user_id" not in columns or "password_hash" in columns:
+    if "password_hash" in columns:
         return
     with engine.begin() as connection:
-                connection.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
+        connection.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
 
 def _ensure_auth_columns() -> None:
     if engine.dialect.name not in {"sqlite", "postgresql"}:
@@ -130,8 +131,29 @@ def _ensure_employee_provider_columns() -> None:
         connection.execute(text(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_employee_versions_provider_agent "
             "ON ai_employee_versions(provider_name, provider_agent_id) "
-            "WHERE provider_agent_id IS NOT NULL"
+                "WHERE provider_agent_id IS NOT NULL"
         ))
+
+
+def _ensure_employee_core_columns() -> None:
+    """Upgrade pre-builder employee tables without replacing existing data."""
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    existing = {column["name"] for column in inspect(engine).get_columns("ai_employees")}
+    # These defaults mirror the current create schema and make historical rows
+    # queryable without fabricating customer-specific business information.
+    additions = {
+        "purpose": "TEXT NOT NULL DEFAULT 'To be defined through the builder'",
+        "call_type": "VARCHAR(32) NOT NULL DEFAULT 'inbound'",
+        "llm_provider": "VARCHAR(100) NOT NULL DEFAULT 'legacy'",
+        "llm_model": "VARCHAR(150) NOT NULL DEFAULT 'legacy'",
+        "language": "VARCHAR(100) NOT NULL DEFAULT 'English'",
+        "creation_mode": "VARCHAR(32) NOT NULL DEFAULT 'chat'",
+    }
+    with engine.begin() as connection:
+        for column, column_type in additions.items():
+            if column not in existing:
+                connection.execute(text(f"ALTER TABLE ai_employees ADD COLUMN {column} {_column_type(column_type)}"))
 
 
 def _ensure_call_dispatch_columns() -> None:
@@ -316,6 +338,9 @@ def _ensure_tenant_feature_columns() -> None:
     with engine.begin() as connection:
         if "instant_leads_enabled" not in existing:
             connection.execute(text("ALTER TABLE tenants ADD COLUMN instant_leads_enabled BOOLEAN NOT NULL DEFAULT 1"))
+        for column in ("notify_campaign_completed", "notify_low_balance"):
+            if column not in existing:
+                connection.execute(text(f"ALTER TABLE tenants ADD COLUMN {column} BOOLEAN NOT NULL DEFAULT 1"))
 
 
 def _ensure_campaign_execution_columns() -> None:
