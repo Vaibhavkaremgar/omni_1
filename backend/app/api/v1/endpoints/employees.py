@@ -116,8 +116,8 @@ def _validate_publish(employee: AIEmployee, draft: AIEmployeeVersion | None) -> 
         raise HTTPException(status_code=422, detail="A draft configuration is required before publishing")
     required = ("name", "llm_provider", "llm_model", "language")
     missing = [field for field in required if not str(draft.configuration.get(field, "")).strip()]
-    if not str(draft.configuration.get("purpose", "")).strip() and not str(draft.configuration.get("direct_prompt", "")).strip():
-        missing.append("purpose or direct_prompt")
+    if not str(draft.configuration.get("purpose", "")).strip() and not str(draft.configuration.get("direct_prompt", "")).strip() and not str(draft.configuration.get("final_prompt", "")).strip():
+        missing.append("purpose, direct_prompt, or final_prompt")
     if missing:
         raise HTTPException(status_code=422, detail=f"Missing required configuration: {', '.join(missing)}")
 
