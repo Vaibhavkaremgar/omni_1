@@ -497,3 +497,25 @@ def test_map_welcome_message_uses_employee_name():
     config = {"name": "Ava", "purpose": "P", "llm_model": "m", "language": "en-US"}
     payload = map_employee_configuration(employee, config)
     assert "Ava" in payload["welcome_message"]
+
+
+def test_complete_shabdha_brief_and_unknown_configuration_reach_canonical_context():
+    employee = SimpleNamespace(name="Telugu Hospital Assistant", purpose="Book appointments", call_type="inbound", llm_model="gpt-4o", language="te-IN")
+    config = {
+        "name": employee.name,
+        "purpose": employee.purpose,
+        "language": "te-IN",
+        "direct_prompt": "Original Shabdha brief: help patients choose a department and schedule a visit.",
+        "responsibilities": ["Collect patient details", "Confirm appointment details"],
+        "appointment_rules": ["Never invent availability", "Escalate emergencies"],
+        "additional_information": "Do not diagnose or prescribe.",
+        "future_supported_rule": {"value": "Use multiple turns"},
+    }
+    payload = map_employee_configuration(employee, config)
+    bodies = "\n".join(section["body"] for section in payload["context_breakdown"])
+    assert "Original Shabdha brief" in bodies
+    assert "Do not diagnose or prescribe." in bodies
+    assert "future_supported_rule" in bodies or "Use multiple turns" in bodies
+    assert "Continue listening and responding after every caller turn." in bodies
+    assert payload["languages"] == ["Telugu"]
+    assert len(bodies) > 300

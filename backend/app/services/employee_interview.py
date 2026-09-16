@@ -776,7 +776,6 @@ class EmployeeInterviewService:
                     "name": session.extracted_configuration.get("name", employee.name),
                     "purpose": session.extracted_configuration.get("goals", [employee.purpose])[0] if isinstance(session.extracted_configuration.get("goals"), list) else employee.purpose,
                     "tasks": [value.get("answer") for value in session.answers if value.get("answer") and not value.get("skipped")],
-                    "system_prompt": "Follow the reviewed role, responsibilities, customer handling rules, tone, and escalation guidance synthesized from this builder session.",
                 }
         session.messages = [
             *session.messages,

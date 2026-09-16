@@ -1,4 +1,5 @@
 from uuid import UUID
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ from app.services.voice_catalog import public_voice_catalog
 
 
 router = APIRouter(prefix="/employees", tags=["employees"])
+logger = logging.getLogger(__name__)
 agent_service: OmniDimensionAgentService | None = None
 
 
@@ -126,8 +128,10 @@ def get_employee_options(
 
 
 @router.get("/voice-catalog")
-def get_voice_catalog(_: AuthenticatedUser = Depends(get_current_user)) -> list[dict]:
-    return public_voice_catalog()
+def get_voice_catalog(current_user: AuthenticatedUser = Depends(get_current_user)) -> list[dict]:
+    catalog = public_voice_catalog()
+    logger.info("Voice catalog requested tenant_id=%s count=%d", current_user.tenant.id, len(catalog))
+    return catalog
 
 
 @router.get("", response_model=list[AIEmployeeRead])

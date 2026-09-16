@@ -38,6 +38,7 @@ export default function CreateEmployee() {
   const [review, setReview] = useState(false);
   const [addingQuestion, setAddingQuestion] = useState<string | null>(null);
   const [voices, setVoices] = useState<Voice[]>([]);
+  const [voiceError, setVoiceError] = useState('');
   const [voiceId, setVoiceId] = useState('');
   const [builderMode, setBuilderMode] = useState<'chat' | 'prompt'>('chat');
   const [directPrompt, setDirectPrompt] = useState('');
@@ -83,8 +84,14 @@ export default function CreateEmployee() {
   };
 
   useEffect(() => {
-    void backendJson<Voice[]>('/employees/voice-catalog').then(setVoices).catch(() => undefined);
-  }, []);
+    void backendJson<Voice[]>('/employees/voice-catalog').then(items => {
+      setVoices(items);
+      console.info('[voice-catalog]', { endpoint: '/employees/voice-catalog', status: 200, count: items.length, language });
+    }).catch(error => {
+      setVoiceError(error instanceof Error ? error.message : 'Voice catalog could not be loaded.');
+      console.warn('[voice-catalog]', { endpoint: '/employees/voice-catalog', status: (error as { status?: number }).status ?? 'network-error', language });
+    });
+  }, [language]);
 
   useEffect(() => {
     if (!id) return;
@@ -322,7 +329,7 @@ export default function CreateEmployee() {
                     </button>
                   ))}
                 </div>
-              ) : <p className="mt-2 text-sm text-gray-500">No verified OmniDimension voices are configured yet.</p>}
+              ) : <p className="mt-2 text-sm text-gray-500">{voiceError || 'No verified OmniDimension voices are configured yet.'}</p>}
             </article>
           </div>
           <button

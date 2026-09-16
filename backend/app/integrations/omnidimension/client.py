@@ -85,6 +85,7 @@ class OmniDimensionClient:
         headers.update(kwargs.pop("extra_headers", None) or {})
         if "json" in kwargs and kwargs["json"] is not None:
             headers["Content-Type"] = "application/json"
+            _log_agent_payload_diagnostic(method, path, kwargs["json"])
         try:
             response = self.client.request(
                 method,
@@ -147,6 +148,26 @@ def _safe_params(params: Any) -> dict[str, str]:
     if not isinstance(params, Mapping):
         return {}
     return {key: str(params[key])[:80] for key in ("region", "carrier") if key in params}
+
+
+def _log_agent_payload_diagnostic(method: str, path: str, payload: Any) -> None:
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("context_breakdown"), list):
+        return
+    sections = payload["context_breakdown"]
+    details = [
+        {"title": str(item.get("title", "")), "chars": len(str(item.get("body", "")))}
+        for item in sections if isinstance(item, Mapping)
+    ]
+    context_text = " ".join(str(item.get("body", "")) for item in sections if isinstance(item, Mapping))
+    logger.info(
+        "Omni serialized agent payload method=%s path=%s name=%s language=%s model=%s voice=%s "
+        "sections=%d section_details=%s context_chars=%d context_words=%d welcome_chars=%d "
+        "post_call_webhook=%s context_breakdown_present=%s",
+        method, "/" + path.lstrip("/"), str(payload.get("name", "")), payload.get("languages"),
+        payload.get("model"), bool(payload.get("voice")), len(details), details, len(context_text),
+        len(context_text.split()), len(str(payload.get("welcome_message", ""))),
+        bool((payload.get("post_call_actions") or {}).get("webhook")), True,
+    )
 
 
 def _safe_response_body(response: httpx.Response) -> str:

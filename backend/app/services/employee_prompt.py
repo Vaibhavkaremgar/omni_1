@@ -7,13 +7,13 @@ def _text(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 def build_employee_prompt(configuration: dict[str, Any]) -> str:
-    direct_prompt = _text(configuration.get("direct_prompt"))
-    if direct_prompt:
-        return direct_prompt
     sections: list[tuple[str, str]] = []
     name = _text(configuration.get("name")) or "AI employee"
     purpose = _text(configuration.get("purpose"))
     if purpose: sections.append(("IDENTITY AND ROLE", f"You are {name}. {purpose}"))
+    direct_prompt = _text(configuration.get("direct_prompt"))
+    if direct_prompt:
+        sections.append(("ORIGINAL SHABDHA BRIEF", direct_prompt))
     for title, keys in ((
         ("OBJECTIVE", ("objective", "conversation_objective", "desired_outcomes")),
         ("ROLE", ("role", "job_role")),

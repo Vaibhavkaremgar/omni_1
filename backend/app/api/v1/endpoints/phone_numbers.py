@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
@@ -29,7 +29,7 @@ razorpay_client = RazorpayClient()
 
 
 @router.post("/platform-demo", response_model=PhoneNumberRead, status_code=201)
-def register_platform_demo_phone(payload: PlatformDemoPhoneCreate, current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)) -> PhoneNumber:
+def register_platform_demo_phone(payload: PlatformDemoPhoneCreate, response: Response, current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)) -> PhoneNumber:
     require_admin(current_user)
     try:
         target_tenant = current_user.tenant.id if payload.authorized_tenant_id is None else UUID(payload.authorized_tenant_id)
@@ -41,6 +41,8 @@ def register_platform_demo_phone(payload: PlatformDemoPhoneCreate, current_user:
     if existing is None:
         existing = db.scalar(select(PhoneNumber).where(PhoneNumber.e164_number == payload.phone_number))
     number = existing or PhoneNumber()
+    if existing is not None:
+        response.status_code = 200
     number.e164_number = payload.phone_number
     number.provider_name = payload.provider
     number.provider_phone_number_id = payload.provider_phone_number_id

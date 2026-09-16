@@ -126,6 +126,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "is_enabled": True,
     })
 
+    additional = configuration.get("additional_information") or configuration.get("other_information")
+    if additional:
+        context.append({"title": "Additional Context", "body": _text(additional), "is_enabled": True})
+
     system_prompt = configuration.get("system_prompt")
     if system_prompt:
         context.append({"title": "Additional Behavioral Instructions", "body": _text(system_prompt), "is_enabled": True})
@@ -195,12 +199,6 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             "body": canonical_prompt,
             "is_enabled": True,
         })
-    if _text(configuration.get("direct_prompt")):
-        context = [
-            {"title": "Complete Employee Instructions", "body": canonical_prompt, "is_enabled": True},
-            {"title": "Language & Communication Rules", "body": f"Speak in {lang}. Continue the conversation until the caller's objective is complete.", "is_enabled": True},
-        ]
-
     settings = get_settings()
     webhook_url = f"{settings.backend_public_url.rstrip('/')}/api/v1/webhooks/omnidimension/post-call"
     post_call_actions: dict[str, Any] = {
