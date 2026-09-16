@@ -679,6 +679,8 @@ class EmployeeInterviewService:
                 pass
 
         generation = self._initial_generation(employee)
+        latest_version = max(employee.versions, key=lambda version: version.version_number, default=None)
+        starting_configuration = dict(latest_version.configuration or {}) if isinstance(latest_version, AIEmployeeVersion) else {}
         timestamp = now().isoformat()
         session = EmployeeInterviewSession(
             tenant_id=tenant_id,
@@ -692,7 +694,7 @@ class EmployeeInterviewService:
             suggested_questions=self._suggestions(employee, generation, [], []),
             consumed_questions=[],
             progress=generation.progress,
-            extracted_configuration={},
+            extracted_configuration=starting_configuration,
             is_complete=False,
         )
         db.add(session)

@@ -195,7 +195,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             context.append({"title": title, "body": _text(val), "is_enabled": True})
 
     # ── Build the final payload ───────────────────────────────────────────────
-    canonical_prompt = build_employee_prompt(configuration)
+    canonical_prompt = _text(configuration.get("final_prompt")) or build_employee_prompt(configuration)
     if canonical_prompt:
         context.append({
             "title": "Complete Employee Instructions",

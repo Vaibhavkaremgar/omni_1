@@ -27,6 +27,7 @@ from app.services.employee_configuration import (
 )
 from app.services.voice_catalog import public_voice_catalog
 from app.services.employee_templates import template_library, render_template, get_template
+from app.services.employee_prompt import compose_employee_configuration
 
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -214,7 +215,7 @@ def create_employee(
             employee_id=employee.id,
             version_number=1,
             status=VersionStatus.draft.value,
-            configuration={
+            configuration=compose_employee_configuration({
                 "name": employee.name,
                 "purpose": employee.purpose,
                 "call_type": employee.call_type,
@@ -223,8 +224,8 @@ def create_employee(
                 "language": employee.language,
                 "creation_mode": employee.creation_mode,
                 **({"selected_template_id": template["id"], "selected_template_version": template["template_version"], "template_values": payload.template_values or {}} if template else {}),
-                **({"direct_prompt": payload.direct_prompt, "system_prompt": payload.direct_prompt} if payload.direct_prompt else {}),
-            },
+                **({"direct_prompt": payload.direct_prompt} if payload.direct_prompt else {}),
+            }),
             change_summary="Initial employee draft",
             created_by_user_id=current_user.user.id,
         )
@@ -295,6 +296,7 @@ def update_employee(
         if configuration.get("call_type") not in (None, "inbound", "both"):
             raise HTTPException(status_code=422, detail="Outbound calling is available by request. Contact us to enable it.")
         draft.configuration = strip_customer_internal_configuration(configuration)
+    draft.configuration = compose_employee_configuration(draft.configuration)
     normalize_employee_llm_configuration(employee, draft)
     for field in ("name", "purpose", "call_type", "language", "creation_mode"):
         if field in draft.configuration:
@@ -350,6 +352,7 @@ def publish_employee(
     draft = _draft_for(employee)
     version = draft or (employee.published_version if employee.status == EmployeeStatus.published.value else None)
     if version is not None:
+        version.configuration = compose_employee_configuration(version.configuration or {})
         normalize_employee_llm_configuration(employee, version)
     _validate_publish(employee, version)
     assert version is not None
