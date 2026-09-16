@@ -25,7 +25,7 @@ function NewEmployeeChat() {
   const [error, setError] = useState('');
   const suggestions = ['Build a sales employee', 'Create a customer support agent', 'Create an appointment assistant', 'Help me describe my employee'];
   useEffect(() => { void backendJson<Voice[]>('/employees/voice-catalog').then(items => { setVoices(items); if (items[0]) setVoiceId(items[0].id); }).catch(() => undefined); }, []);
-  useEffect(() => { const params = new URLSearchParams({ language, requirement }); void backendJson<{ recommended_voices: Array<{ id: string }> }>(`/employees/voice-recommendations?${params}`).then(result => setRecommendedVoiceIds(result.recommended_voices.map(item => item.id))).catch(() => setRecommendedVoiceIds([])); }, [language, requirement]);
+  useEffect(() => { if (requirement.trim().length < 2) return; const timer = window.setTimeout(() => { const params = new URLSearchParams({ language, requirement: requirement.trim() }); void backendJson<{ recommended_voices: Array<{ id: string }> }>(`/employees/voice-recommendations?${params}`).then(result => setRecommendedVoiceIds(result.recommended_voices.map(item => item.id))).catch(() => undefined); }, 500); return () => window.clearTimeout(timer); }, [language, requirement]);
   const compatibleVoices = useMemo(() => { const eligible = voices.filter(v => !v.languages?.length || v.languages.includes(language)); const recommended = recommendedVoiceIds.map(id => eligible.find(v => v.id === id)).filter((voice): voice is Voice => Boolean(voice)); return [...new Map([...recommended, ...eligible].map(voice => [voice.id, voice])).values()]; }, [voices, language, recommendedVoiceIds]);
   const build = async () => {
     if (!companyName.trim() || !requirement.trim()) return;

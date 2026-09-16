@@ -670,3 +670,44 @@ def test_call_script_generation_failure_is_surfaced():
     with pytest.raises(HTTPException) as excinfo:
         service.generate_call_script(employee, {})
     assert excinfo.value.status_code == 502
+
+
+def test_groq_schema_failure_retries_once_and_accepts_valid_script():
+    settings = SimpleNamespace(
+        effective_llm_provider="groq", effective_llm_api_key="test-key",
+        effective_llm_model="openai/gpt-oss-20b", effective_llm_base_url="https://api.groq.com/openai/v1",
+        llm_timeout_seconds=5.0,
+    )
+    titles = ["Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing"]
+    calls = []
+
+    def handler(request: httpx.Request):
+        calls.append(json.loads(request.content))
+        if len(calls) == 1:
+            return httpx.Response(400, json={"error": {"message": "Generated JSON does not match the expected schema", "jsonschema": "/sections/minItems"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": f"Specific guidance for {title}."} for title in titles]})}}]})
+
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
+    result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "original_requirement": "Renew policies"})
+    assert tuple(result) == tuple(titles)
+    assert len(calls) == 2
+    assert "CORRECTION" in calls[1]["messages"][0]["content"]
+
+
+def test_groq_schema_failure_retry_is_bounded():
+    settings = SimpleNamespace(
+        effective_llm_provider="groq", effective_llm_api_key="test-key",
+        effective_llm_model="openai/gpt-oss-20b", effective_llm_base_url="https://api.groq.com/openai/v1",
+        llm_timeout_seconds=5.0,
+    )
+    calls = []
+    def handler(_: httpx.Request):
+        calls.append(True)
+        return httpx.Response(400, json={"error": {"message": "Generated JSON does not match the expected schema"}})
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="inbound", language="English")
+    with pytest.raises(HTTPException) as excinfo:
+        service.generate_call_script(employee, {})
+    assert excinfo.value.status_code == 502
+    assert len(calls) == 2

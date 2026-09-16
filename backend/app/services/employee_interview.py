@@ -304,7 +304,11 @@ class RealLLMService(LLMService):
             "greeting_intro / Greeting & Intro, qualification / Qualification, "
             "handling_objections / Handling Objections, call_to_action / Call to Action, "
             "closing / Closing. Each content value is a concise, complete set of operational "
-            "instructions, not an essay. Do not return markdown or additional top-level fields.\n\n"
+            "instructions, not an essay. The sections property is required and must contain exactly "
+            "6 populated items: never return an empty array, omit a section, add a section, invent "
+            "a section name, or leave required content blank. Return only this JSON object; never "
+            "return markdown, code fences, commentary, explanations, or prose outside JSON. Do not "
+            "substitute generic boilerplate for use-case-specific content.\n\n"
             "LANGUAGE CONTRACT: Write internal agent instructions primarily in clear English. "
             "Write only customer-facing spoken examples, opening phrases, questions, objection "
             "responses, CTA phrases, and closing phrases in the selected language. Do not translate "
@@ -342,11 +346,30 @@ class RealLLMService(LLMService):
         )
         user = json.dumps(context, ensure_ascii=False, indent=2)
         payload = self._build_request(provider, model, system, user)
-        try:
-            response = self._perform_json_request(provider, payload)
-        except HTTPException as exc:
-            logger.error("LLM script generation failed request_id=%s status=%s detail=%s", request_id, exc.status_code, exc.detail, exc_info=True)
-            raise HTTPException(status_code=exc.status_code, detail=f"{exc.detail} [request_id={request_id}]") from exc
+        for attempt in range(2):
+            try:
+                response = self._perform_json_request(provider, payload)
+                break
+            except HTTPException as exc:
+                retryable_schema_error = (
+                    attempt == 0 and provider.casefold() in {"openai", "open-ai", "groq"}
+                    and "HTTP 400" in str(exc.detail)
+                )
+                if not retryable_schema_error:
+                    logger.error("LLM script generation failed request_id=%s status=%s detail=%s", request_id, exc.status_code, exc.detail, exc_info=True)
+                    raise HTTPException(status_code=exc.status_code, detail=f"{exc.detail} [request_id={request_id}]") from exc
+                logger.warning(
+                    "LLM script schema retry request_id=%s provider=%s model=%s attempt=2 correction=required_six_nonempty_sections",
+                    request_id, provider, model,
+                )
+                correction = (
+                    "\n\nCORRECTION: Your previous response was rejected because sections did not contain six items. "
+                    "Output exactly six objects now, one for each required key/title pair, with non-empty "
+                    "meaningful content in every content field. Do not reason aloud. Output JSON only."
+                )
+                payload = self._build_request(provider, model, system + correction, user)
+        else:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned no call script. [request_id={request_id}]")
         expected = ("Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
         expected_keys = ("identity_purpose", "greeting_intro", "qualification", "handling_objections", "call_to_action", "closing")
         sections = response.get("sections") if isinstance(response, dict) else None
@@ -417,7 +440,12 @@ class RealLLMService(LLMService):
             # the full provider response (which can contain sensitive prompts).
             provider_status = exc.response.status_code
             provider_body = re.sub(r"\s+", " ", exc.response.text or "")[:240]
-            logger.error("LLM script request failed provider=%s status=%s body=%s", provider, provider_status, provider_body)
+            schema_path_match = re.search(r"(?:jsonschema|schema)[^\"']{0,80}[\"']([^\"']+)[\"']", exc.response.text or "", re.IGNORECASE)
+            logger.error(
+                "LLM script request failed provider=%s model=%s status=%s schema_failure_path=%s body=%s",
+                provider, payload.get("json", {}).get("model"), provider_status,
+                schema_path_match.group(1)[:160] if schema_path_match else None, provider_body,
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"The LLM provider rejected the script request (HTTP {provider_status}).",
