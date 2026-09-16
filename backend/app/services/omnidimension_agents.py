@@ -8,6 +8,7 @@ from app.integrations.omnidimension import OmniDimensionAgentProvider, ProviderA
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.services.employee_prompt import build_employee_prompt
+from app.services.employee_templates import get_template
 from app.services.voice_catalog import voice_catalog
 from app.core.config import get_settings
 
@@ -265,6 +266,14 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     if configured and (language in {"English", "English (India)", "English (UK)"} or _contains_language_script(configured, language)):
         return configured
     purpose = _safe_purpose(configuration.get("purpose"), employee.purpose)
+    try:
+        template = get_template(_text(configuration.get("selected_template_id")))
+    except KeyError:
+        template = None
+    values = configuration.get("template_values") if isinstance(configuration.get("template_values"), dict) else {}
+    business_name = next((_text(values.get(key)) for key in ("business_name", "company_name", "hospital_name", "institution_name", "project_name") if _text(values.get(key))), "")
+    if template:
+        purpose = f"{business_name} {template['name']}" if business_name else template["name"]
     name = employee.name
     if language == "Hindi":
         return f"नमस्ते, मैं {name} हूँ। मैं {purpose} में आपकी मदद करने के लिए यहाँ हूँ। आप किस बारे में जानकारी चाहते हैं?"
@@ -282,7 +291,7 @@ def _safe_purpose(configured: Any, employee_purpose: Any) -> str:
         text = _text(value).rstrip(".")
         if text and text.casefold() != placeholder:
             return text
-    return "your questions about our configured services"
+    return "the selected employee service"
 
 
 def _contains_language_script(value: str, language: str) -> bool:

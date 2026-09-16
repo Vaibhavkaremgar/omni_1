@@ -755,7 +755,9 @@ class EmployeeInterviewService:
             **session.extracted_configuration,
             **generation.configuration_updates,
         }
-        ready_to_build = generation.ready_to_build or generation.is_complete
+        answered_count = sum(1 for item in session.answers if item.get("answer") and not item.get("skipped"))
+        template_flow = bool(session.extracted_configuration.get("selected_template_id"))
+        ready_to_build = (template_flow and answered_count >= 3) or generation.ready_to_build or generation.is_complete
         assistant_message = (
             "Do you have anything more you'd like me to know?"
             if ready_to_build
