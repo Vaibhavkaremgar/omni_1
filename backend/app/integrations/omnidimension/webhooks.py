@@ -95,6 +95,8 @@ def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
                         payload.get("requestId") or payload.get("request_id") or
                         payload.get("id") or _first_value(payload, {"provider_call_id"}))
     provider_status = payload.get("call_status") or payload.get("status") or report.get("status")
+    termination_reason = _first_value(payload, {"end_reason", "termination_reason", "hangup_reason", "disconnect_reason", "call_end_reason", "reason"})
+    termination_source = _first_value(payload, {"termination_source", "end_source", "hangup_source", "disconnected_by"})
     recording_url = payload.get("recording_url") or report.get("recording_url")
     transcript = (payload.get("call_conversation") or payload.get("full_conversation") or
                   payload.get("transcript") or report.get("full_conversation"))
@@ -109,6 +111,8 @@ def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
         "metadata_tenant_id": metadata.get("tenant_id"),
         "provider_call_id": str(provider_call_id) if provider_call_id is not None else None,
         "provider_status": provider_status,
+        "termination_reason": str(termination_reason) if termination_reason is not None else None,
+        "termination_source": str(termination_source) if termination_source is not None else None,
         "status": normalize_status(provider_status),
         "duration_seconds": _parse_duration(payload.get("call_duration") or payload.get("call_duration_in_seconds") or payload.get("duration_seconds") or report.get("duration")),
         "transcript": transcript,

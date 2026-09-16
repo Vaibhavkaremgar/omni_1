@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
+import logging
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ from app.services.call_results import CallResultService
 
 
 router = APIRouter(prefix="/calls", tags=["calls"])
+logger = logging.getLogger(__name__)
 instant_call_service: InstantCallService | None = None
 
 
@@ -103,6 +105,14 @@ def refresh_call(
     try:
         provider = get_instant_call_service().provider
         payload = provider.get_call_log(call.provider_call_id)
+        logger.info(
+            "Provider call-log refresh local_call_id=%s provider_call_id=%s top_level_keys=%s "
+            "status=%s end_reason=%s termination_source=%s",
+            call.id, call.provider_call_id, list(payload) if isinstance(payload, dict) else type(payload).__name__,
+            payload.get("call_status") or payload.get("status") if isinstance(payload, dict) else None,
+            payload.get("end_reason") or payload.get("termination_reason") or payload.get("hangup_reason") if isinstance(payload, dict) else None,
+            payload.get("termination_source") or payload.get("end_source") if isinstance(payload, dict) else None,
+        )
         rows = payload.get("call_log_data") if isinstance(payload, dict) else None
         event = rows[0] if isinstance(rows, list) and rows else payload
         if isinstance(event, dict):
@@ -110,7 +120,8 @@ def refresh_call(
             refreshed = CallResultService().process_post_call(db, event)
             if refreshed is not None:
                 return refreshed
-    except Exception:
+    except Exception as exc:
         # A transient provider read failure must not break the Calls page.
+        logger.exception("Provider call-log refresh failed local_call_id=%s provider_call_id=%s error=%s", call.id, call.provider_call_id, exc)
         db.refresh(call)
     return call

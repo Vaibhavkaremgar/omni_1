@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from sqlalchemy import select
@@ -15,6 +16,8 @@ from app.services.call_analysis import CallAnalysisService
 from app.services.usage_billing import charge_completed_call
 from app.services.wallets import WalletError
 
+logger = logging.getLogger(__name__)
+
 
 class CallResultService:
     def __init__(self) -> None:
@@ -24,9 +27,20 @@ class CallResultService:
         event = parse_post_call(payload)
         call = self._find_call(db, event)
         if call is None:
+            logger.warning("Call termination event did not match a local call provider_call_id=%s status=%s", event.get("provider_call_id"), event.get("provider_status"))
             return None
         if event["metadata_tenant_id"] and str(call.tenant_id) != str(event["metadata_tenant_id"]):
+            logger.warning("Ignored cross-tenant call event local_call_id=%s provider_call_id=%s", call.id, event.get("provider_call_id"))
             return None
+
+        if event.get("status") in TERMINAL_STATUSES:
+            logger.info(
+                "Call terminated local_call_id=%s provider_call_id=%s termination_source=%s "
+                "provider_end_reason=%s final_status=%s",
+                call.id, event.get("provider_call_id") or call.provider_call_id,
+                event.get("termination_source") or "provider_webhook",
+                event.get("termination_reason") or "<not_provided>", event.get("provider_status"),
+            )
 
         if event["provider_call_id"]:
             call.provider_call_id = call.provider_call_id or event["provider_call_id"]

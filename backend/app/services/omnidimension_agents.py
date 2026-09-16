@@ -53,6 +53,25 @@ class OmniDimensionAgentService:
                 readback.get("languages") if isinstance(readback, dict) else None,
                 len(str(readback.get("welcome_message", ""))) if isinstance(readback, dict) else 0,
             )
+            if isinstance(readback, dict):
+                model_value = readback.get("model")
+                if isinstance(model_value, dict):
+                    model_value = model_value.get("model")
+                logger.info(
+                    "Omni live-call settings agent_id=%s call_type=%s model=%s dynamic_welcome=%s "
+                    "welcome_interrupt=%s interruption_allowed=%s interruption_min_words=%s "
+                    "end_call_enabled=%s end_condition=%s end_message_type=%s idle_threshold=%s "
+                    "first_ideal=%s second_ideal=%s last_ideal=%s speech_start_timeout=%s "
+                    "max_call_duration=%s transfer_configured=%s",
+                    provider_agent.provider_id, readback.get("call_type"), model_value,
+                    readback.get("is_welcome_message_dynamic"), readback.get("is_welcome_message_interruption"),
+                    readback.get("is_interruption_allowed"), readback.get("interruption_min_words"),
+                    readback.get("is_end_call_enabled"), str(readback.get("end_call_condition") or "")[:500],
+                    readback.get("end_call_message_type"), readback.get("user_idle_threshold_sec"),
+                    str(readback.get("first_ideal_message") or "")[:180], str(readback.get("second_ideal_message") or "")[:180],
+                    str(readback.get("last_ideal_message") or "")[:180], readback.get("speech_start_timeout"),
+                    readback.get("max_call_duration_in_sec"), bool(readback.get("transfer")),
+                )
         except Exception as exc:
             logger.warning("Omni agent readback unavailable agent_id=%s exception_class=%s", provider_agent.provider_id, type(exc).__name__)
         return _result(provider_agent)
