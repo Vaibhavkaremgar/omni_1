@@ -105,3 +105,35 @@ def test_calls_read_endpoints_are_tenant_scoped(call_database, monkeypatch):
             assert api.get(f"/api/v1/calls/{call_b.id}", headers={"Authorization": "Bearer a"}).status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+def test_post_call_preserves_turn_order_and_accepts_late_analysis(call_database):
+    db, tenant_a, _ = call_database
+    employee = create_employee(db, tenant_a)
+    phone = create_number(db, tenant_a)
+    call = create_local_call(db, tenant_a, employee, phone, provider_id="late-analysis-call")
+    payload = {
+        "call_id": "late-analysis-call",
+        "call_status": "completed",
+        "interactions": [
+            {"speaker": "assistant", "text": "Hello"},
+            {"speaker": "customer", "text": "I need help"},
+        ],
+        "analysis": {
+            "summary": "Customer requested help.",
+            "customer_intent": "Support",
+            "key_points": ["Needs assistance"],
+            "outcome": "Follow up",
+        },
+    }
+    from app.services.call_results import CallResultService
+    CallResultService().process_post_call(db, payload)
+    db.refresh(call)
+    assert call.transcript_data == [
+        {"speaker": "assistant", "text": "Hello"},
+        {"speaker": "customer", "text": "I need help"},
+    ]
+    assert call.summary == "Customer requested help."
+    assert call.customer_intent == "Support"
+    assert call.key_points == ["Needs assistance"]
+    assert call.outcome == "Follow up"

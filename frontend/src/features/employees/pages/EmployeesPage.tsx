@@ -8,6 +8,7 @@ type Employee = {
   name: string;
   purpose: string;
   language: string;
+  call_type: string;
   status: string;
   configuration?: Record<string, unknown>;
 };
@@ -171,6 +172,14 @@ export default function EmployeesPage() {
                       <span className="inline-flex items-center gap-1 text-xs text-gray-500 bg-gray-100 rounded-full px-2.5 py-1">
                         <Globe className="w-3 h-3" />
                         {employee.language}
+                      </span>
+                      <span className="text-xs text-gray-500 bg-gray-100 rounded-full px-2.5 py-1">
+                        {employee.call_type === 'both' ? 'Inbound + outbound' : employee.call_type}
+                      </span>
+                      <span className="text-xs text-gray-500 bg-gray-100 rounded-full px-2.5 py-1">
+                        {typeof employee.configuration?.voice === 'object' && employee.configuration.voice
+                          ? String((employee.configuration.voice as Record<string, unknown>).name ?? 'Voice selected')
+                          : 'Voice not selected'}
                       </span>
                       {tasks > 0 && (
                         <span className="inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 rounded-full px-2.5 py-1">

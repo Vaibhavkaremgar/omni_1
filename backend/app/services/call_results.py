@@ -32,7 +32,7 @@ class CallResultService:
             call.provider_call_id = call.provider_call_id or event["provider_call_id"]
         if event["status"]:
             call.status = event["status"]
-        for field in ("duration_seconds", "transcript", "summary", "recording_url", "sentiment"):
+        for field in ("duration_seconds", "transcript", "summary", "recording_url", "sentiment", "outcome", "customer_intent", "key_points", "action_items", "follow_up_required", "follow_up_notes", "started_at"):
             if event[field] is not None:
                 setattr(call, field, event[field])
         if event.get("transcript_data") is not None:

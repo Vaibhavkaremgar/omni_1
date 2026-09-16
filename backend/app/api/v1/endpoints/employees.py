@@ -1,7 +1,8 @@
 from uuid import UUID
 import logging
+import base64
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -11,6 +12,7 @@ from app.api.deps import get_current_user, get_db
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.models.enums import EmployeeStatus, VersionStatus
+from app.models.employee_knowledge_file import EmployeeKnowledgeFile
 from app.schemas.ai_employee import AIEmployeeCreate, AIEmployeeRead, AIEmployeeUpdate
 from app.schemas.ai_employee_version import AIEmployeeVersionRead
 from app.schemas.employee_options import EmployeeOptionsRead
@@ -28,6 +30,7 @@ from app.services.employee_configuration import (
 from app.services.voice_catalog import public_voice_catalog
 from app.services.employee_templates import template_library, render_template, get_template
 from app.services.employee_prompt import compose_employee_configuration
+from app.services.employee_interview import RealLLMService
 
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -134,6 +137,65 @@ def get_voice_catalog(current_user: AuthenticatedUser = Depends(get_current_user
     catalog = public_voice_catalog()
     logger.info("Voice catalog requested tenant_id=%s count=%d", current_user.tenant.id, len(catalog))
     return catalog
+
+
+def _public_knowledge_file(row: EmployeeKnowledgeFile) -> dict:
+    return {"id": row.id, "filename": row.filename, "content_type": row.content_type,
+            "file_size": row.file_size, "status": row.status, "error_message": row.error_message,
+            "created_at": row.created_at, "updated_at": row.updated_at}
+
+
+@router.get("/{employee_id}/knowledge-files")
+def list_knowledge_files(employee_id: UUID, current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict]:
+    get_employee_or_404(employee_id, current_user.tenant.id, db)
+    return [_public_knowledge_file(row) for row in db.scalars(select(EmployeeKnowledgeFile).where(EmployeeKnowledgeFile.employee_id == employee_id, EmployeeKnowledgeFile.tenant_id == current_user.tenant.id).order_by(EmployeeKnowledgeFile.created_at)).all()]
+
+
+@router.post("/{employee_id}/knowledge-files", status_code=status.HTTP_201_CREATED)
+async def upload_knowledge_file(employee_id: UUID, file: UploadFile = File(...), current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    employee = get_employee_or_404(employee_id, current_user.tenant.id, db)
+    filename = (file.filename or "").strip()
+    content = await file.read()
+    if not filename.lower().endswith(".pdf") or file.content_type not in (None, "application/pdf") or not content or not content.startswith(b"%PDF"):
+        raise HTTPException(status_code=422, detail="Only non-empty PDF files are supported.")
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Knowledge files must be 10 MB or smaller.")
+    version = employee.published_version
+    agent_id = version.provider_agent_id if version else None
+    if not agent_id:
+        raise HTTPException(status_code=422, detail="Publish the employee before uploading knowledge files.")
+    row = EmployeeKnowledgeFile(tenant_id=current_user.tenant.id, employee_id=employee_id, filename=filename[:255], content_type="application/pdf", file_size=len(content), status="uploading")
+    db.add(row); db.commit(); db.refresh(row)
+    provider = get_agent_service().provider
+    try:
+        row.provider_file_id = provider.upload_knowledge_file(base64.b64encode(content).decode("ascii"), row.filename)
+        row.status = "attaching"; db.commit()
+        provider.attach_knowledge_file(row.provider_file_id, agent_id)
+        row.status = "ready"; row.error_message = None; db.commit(); db.refresh(row)
+        return _public_knowledge_file(row)
+    except Exception as exc:
+        row.status = "failed"; row.error_message = "Knowledge file processing failed. Please retry."; db.commit()
+        logger.warning("Knowledge file processing failed employee_id=%s file_id=%s exception_class=%s", employee_id, row.id, type(exc).__name__)
+        raise HTTPException(status_code=502, detail=row.error_message) from exc
+
+
+@router.delete("/{employee_id}/knowledge-files/{file_id}")
+def delete_knowledge_file(employee_id: UUID, file_id: UUID, current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    employee = get_employee_or_404(employee_id, current_user.tenant.id, db)
+    row = db.scalar(select(EmployeeKnowledgeFile).where(EmployeeKnowledgeFile.id == file_id, EmployeeKnowledgeFile.employee_id == employee_id, EmployeeKnowledgeFile.tenant_id == current_user.tenant.id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Knowledge file not found.")
+    if row.provider_file_id and employee.published_version and employee.published_version.provider_agent_id:
+        provider = get_agent_service().provider
+        try:
+            provider.detach_knowledge_file(row.provider_file_id, employee.published_version.provider_agent_id)
+            provider.delete_knowledge_file(row.provider_file_id)
+        except Exception as exc:
+            row.status = "failed"; row.error_message = "The provider could not remove this file. Please retry."; db.commit()
+            logger.warning("Knowledge file removal failed file_id=%s exception_class=%s", row.id, type(exc).__name__)
+            raise HTTPException(status_code=502, detail=row.error_message) from exc
+    db.delete(row); db.commit()
+    return {"status": "removed"}
 
 
 @router.get("/templates")
@@ -327,6 +389,27 @@ def get_employee_draft(
     draft = _draft_for(employee)
     if draft is None:
         raise HTTPException(status_code=404, detail="Employee draft not found")
+    return draft
+
+
+@router.post("/{employee_id}/generate-script", response_model=AIEmployeeVersionRead)
+def generate_employee_script(
+    employee_id: UUID,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AIEmployeeVersionRead:
+    """Generate the editable six-section script from the canonical employee context."""
+    employee = get_employee_or_404(employee_id, current_user.tenant.id, db)
+    draft = _draft_for(employee)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Employee draft not found")
+    knowledge = db.scalars(select(EmployeeKnowledgeFile).where(EmployeeKnowledgeFile.employee_id == employee_id, EmployeeKnowledgeFile.tenant_id == current_user.tenant.id)).all()
+    configuration = {**(draft.configuration or {}), "knowledge_files": [{"filename": item.filename, "status": item.status} for item in knowledge]}
+    script = RealLLMService().generate_call_script(employee, configuration)
+    draft.configuration = compose_employee_configuration({**configuration, "call_script": script})
+    draft.reviewed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(draft)
     return draft
 
 

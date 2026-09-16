@@ -7,8 +7,8 @@ from typing import Any
 from app.integrations.omnidimension import OmniDimensionAgentProvider, ProviderAgent
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
-from app.services.employee_prompt import build_employee_prompt
-from app.services.employee_templates import get_template
+from app.services.employee_prompt import build_employee_prompt, normalize_business_identity
+from app.services.employee_templates import get_template, UNIVERSAL_TELUGU_VOICE_GUIDANCE
 from app.services.voice_catalog import voice_catalog
 from app.core.config import get_settings
 
@@ -64,11 +64,17 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     Each section maps to a distinct behavioral area so the Omni agent follows the
     employee's exact rules rather than behaving as a generic assistant.
     """
+    configuration = normalize_business_identity(configuration)
     context: list[dict[str, Any]] = []
 
     # ── Agent Identity & Purpose ──────────────────────────────────────────────
     purpose = _text(configuration.get("purpose"), employee.purpose)
-    context.append({"title": "Agent Identity & Purpose", "body": purpose, "is_enabled": True})
+    business_name = _text(configuration.get("business_name"))
+    business_description = _text(configuration.get("business_description"))
+    identity = f"Business: {business_name}\n" if business_name else ""
+    identity += f"Business description: {business_description}\n" if business_description else ""
+    identity += f"Employee role and purpose: {purpose}"
+    context.append({"title": "Agent Identity & Purpose", "body": identity, "is_enabled": True})
 
     # ── Responsibilities / Goals ──────────────────────────────────────────────
     goals = configuration.get("goals")
@@ -122,7 +128,15 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "body": (
             "Continue listening and responding after every caller turn. Ask the next relevant question when information is incomplete. "
             "Do not treat the first answer as task completion and do not end the call after one response. "
-            "Only close when the objective is complete, the caller explicitly wants to end, or an explicit configured termination condition is satisfied."
+            "Completing the business objective is not permission to end the call. After the required task is complete, ask whether the caller needs anything else and wait. If they ask another question, continue helping. Treat a short answer such as 'yes' as an answer to the immediately preceding business question, not as permission to end. Only enter the end-call path after a clear caller statement that they are finished or a clear affirmative answer to an explicit end-of-call confirmation. Do not use silence or objective completion as confirmation."
+        ),
+        "is_enabled": True,
+    })
+
+    context.append({
+        "title": "Live Voice Turn-Taking and Call Completion",
+        "body": (
+            "When the caller starts speaking while you are speaking, stop yielding audio immediately, do not finish or queue the interrupted sentence, and respond only to the caller's new utterance. An interruption is a normal barge-in, not a request to hang up. Keep the call active after an interruption. Use short spoken responses, one question at a time, and natural pauses. After completing the requested task, say a natural equivalent of 'ఇంకా ఏమైనా help కావాలా?' and wait. If the caller says they are done, acknowledge politely and end; otherwise continue the conversation."
         ),
         "is_enabled": True,
     })
@@ -179,10 +193,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     lang = _language_name(_text(configuration.get("language"), employee.language))
     language_rules = f"Speak in {lang}. Be clear, professional, and concise."
     if lang == "Telugu":
-        language_rules += " Converse naturally in Telugu throughout the call. English business terms are allowed, but do not switch languages because of occasional English words; switch only when the caller explicitly asks for another language."
+        language_rules += " Converse naturally in Telugu throughout the call. Follow the universal Telugu speaking style below."
     context.append({
         "title": "Language & Communication Rules",
-        "body": language_rules,
+        "body": language_rules + ("\n\n" + UNIVERSAL_TELUGU_VOICE_GUIDANCE if lang == "Telugu" else ""),
         "is_enabled": True,
     })
 
@@ -210,9 +224,16 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         len(_welcome_message(employee, configuration, lang)),
     )
     post_call_actions = _automatic_post_call_actions()
-    extraction = configuration.get("post_call_extraction") or configuration.get("information_to_extract")
+    extraction = configuration.get("conversation_variables")
+    if not isinstance(extraction, list):
+        extraction = configuration.get("post_call_extraction") or configuration.get("information_to_extract")
     if isinstance(extraction, list):
-        variables = [{"key": f"field_{index + 1}", "prompt": str(item)} for index, item in enumerate(extraction) if item]
+        variables = []
+        for index, item in enumerate(extraction):
+            if isinstance(item, dict) and _text(item.get("key")):
+                variables.append({"key": _text(item["key"]), "description": _text(item.get("description")) or _text(item.get("label"))})
+            elif item:
+                variables.append({"key": f"field_{index + 1}", "prompt": str(item)})
         if variables:
             post_call_actions["webhook"]["extracted_variables"] = variables
     payload: dict[str, Any] = {
@@ -225,6 +246,18 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "is_welcome_message_dynamic": False,
         "is_welcome_message_interruption": True,
         "is_interruption_allowed": True,
+        # Product/category answers can be a single word. Requiring three words
+        # makes a valid barge-in such as "printers" disappear at the provider.
+        "interruption_min_words": 1,
+        "is_end_call_enabled": True,
+        "end_call_condition": (
+            "End only when the caller clearly says they are finished or explicitly confirms they want to end "
+            "after the agent asks whether anything else is needed. Never end because of a short answer, a normal "
+            "yes, a product/category, a name, a budget, incomplete information, silence, or objective completion."
+        ),
+        "end_call_message": "Thank you for your time. Is there anything else you need before we finish?",
+        "end_call_message_type": "prompt",
+        "end_call_message_prompt": "Use a warm, brief goodbye only after clear caller end intent; otherwise keep listening and continue the conversation.",
     }
 
     voice = configuration.get("voice")
@@ -236,12 +269,6 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     call_type = configuration.get("call_type", employee.call_type)
     if call_type in {"inbound", "outbound"}:
         payload["call_type"] = "Incoming" if call_type == "inbound" else "Outgoing"
-
-    if closing:
-        payload["end_call"] = {
-            "condition": _text(closing),
-            "message": "Thank you for your time. Have a great day!",
-        }
 
     transfer = configuration.get("transfer")
     if isinstance(transfer, dict) and transfer.get("number") and transfer.get("condition"):
@@ -276,14 +303,18 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     except KeyError:
         template = None
     values = configuration.get("template_values") if isinstance(configuration.get("template_values"), dict) else {}
-    business_name = next((_text(values.get(key)) for key in ("business_name", "company_name", "hospital_name", "institution_name", "project_name") if _text(values.get(key))), "")
+    business_name = next((_text(configuration.get(key)) for key in ("business_name", "company_name", "hospital_name", "institution_name", "project_name") if _text(configuration.get(key))), "")
+    if not business_name:
+        business_name = next((_text(values.get(key)) for key in ("business_name", "company_name", "hospital_name", "institution_name", "project_name") if _text(values.get(key))), "")
     if template:
         purpose = f"{business_name} {template['name']}" if business_name else template["name"]
     name = employee.name
     if language == "Telugu":
         # Teluglish: conversational Telugu with the English words customers
         # naturally use for business details.
-        return f"\u0c39\u0c32\u0c4b, \u0c28\u0c47\u0c28\u0c41 {name}. {purpose} \u0c15\u0c4b\u0c38\u0c02 \u0c2e\u0c40\u0c15\u0c41 help \u0c1a\u0c47\u0c2f\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f \u0c07\u0c15\u0c4d\u0c15\u0c21 \u0c09\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. \u0c2e\u0c40\u0c15\u0c41 \u0c0f details \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f?"
+        if business_name:
+            return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {business_name} \u0c24\u0c30\u0c2b\u0c41\u0c28 \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. \u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f."
+        return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {purpose} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f \u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f."
     if language == "Hindi":
         return f"नमस्ते, मैं {name} हूँ। मैं {purpose} में आपकी मदद करने के लिए यहाँ हूँ। आप किस बारे में जानकारी चाहते हैं?"
     if language == "Telugu":

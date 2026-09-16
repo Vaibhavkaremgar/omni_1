@@ -29,6 +29,7 @@ def init_db() -> None:
     _ensure_integration_tables()
     _ensure_instant_lead_columns()
     _ensure_campaign_execution_columns()
+    _ensure_employee_knowledge_file_columns()
     _bootstrap_admin()
 
 
@@ -37,6 +38,13 @@ def _column_type(type_name: str) -> str:
     if engine.dialect.name == "postgresql":
         return type_name.replace("DATETIME", "TIMESTAMP")
     return type_name
+
+
+def _ensure_employee_knowledge_file_columns() -> None:
+    """Create the additive KB table for databases initialized before this feature."""
+    if "employee_knowledge_files" not in inspect(engine).get_table_names():
+        from app.models.employee_knowledge_file import EmployeeKnowledgeFile
+        EmployeeKnowledgeFile.__table__.create(bind=engine, checkfirst=True)
 
 def _bootstrap_admin() -> None:
     settings = get_settings()

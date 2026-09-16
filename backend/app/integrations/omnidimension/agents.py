@@ -32,6 +32,23 @@ class OmniDimensionAgentProvider:
             raise OmniDimensionResponseError("OmniDimension returned an invalid agent response.")
         return response
 
+    def upload_knowledge_file(self, content_base64: str, filename: str) -> str:
+        response = self.client.post("/knowledge-base/files", json={"file_data": content_base64, "filename": filename})
+        file = response.get("file") if isinstance(response, dict) else None
+        file_id = file.get("id") if isinstance(file, dict) else response.get("id") if isinstance(response, dict) else None
+        if file_id is None:
+            raise OmniDimensionResponseError("OmniDimension returned an invalid knowledge file response.")
+        return str(file_id)
+
+    def attach_knowledge_file(self, file_id: str, agent_id: str) -> None:
+        self.client.post("/knowledge-base/attach", json={"file_ids": [int(file_id)], "agent_id": int(agent_id)})
+
+    def detach_knowledge_file(self, file_id: str, agent_id: str) -> None:
+        self.client.post("/knowledge-base/detach", json={"file_ids": [int(file_id)], "agent_id": int(agent_id)})
+
+    def delete_knowledge_file(self, file_id: str) -> None:
+        self.client.delete(f"/knowledge-base/files/{file_id}")
+
     @staticmethod
     def _map_response(payload: Any) -> ProviderAgent:
         if not isinstance(payload, dict) or payload.get("id") is None:

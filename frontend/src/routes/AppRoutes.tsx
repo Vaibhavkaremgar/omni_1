@@ -5,6 +5,7 @@ import Login from '../features/auth/pages/Login';
 import Dashboard from '../features/dashboard/pages/Dashboard';
 import EmployeesPage from '../features/employees/pages/EmployeesPage';
 import CreateEmployee from '../features/employees/pages/CreateEmployee';
+import EmployeeWorkspace from '../features/employees/pages/EmployeeWorkspace';
 import InstantLeads from '../features/instant-leads/pages/InstantLeads';
 import CampaignsPage from '../features/campaigns/pages/CampaignsPage';
 import CampaignDetailPage from '../features/campaigns/pages/CampaignDetailPage';
@@ -41,7 +42,7 @@ export default function AppRoutes() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/employees" element={<EmployeesPage />} />
         <Route path="/employees/new" element={<CreateEmployee />} />
-        <Route path="/employees/:id" element={<CreateEmployee />} />
+        <Route path="/employees/:id" element={<EmployeeWorkspace />} />
         <Route path="/instant" element={<InstantLeads />} />
         <Route path="/campaigns" element={<CampaignsPage />} />
         <Route path="/campaigns/new" element={<CreateCampaignPage />} />

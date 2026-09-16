@@ -20,6 +20,7 @@ from app.core.config import get_settings
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.models.employee_interview_session import EmployeeInterviewSession
+from app.services.employee_prompt import compose_employee_configuration
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +259,173 @@ class RealLLMService(LLMService):
         response = self._generate_turn(employee, questions, answers, configuration, initial_turn=False)
         return self._to_generation(response)
 
+    def generate_call_script(self, employee: AIEmployee, configuration: dict[str, Any]) -> dict[str, str]:
+        """Generate a business-specific, executable six-section voice script.
+
+        The model is asked to design the conversation from the complete employee
+        context first.  Keeping this contract here (rather than in the UI) means
+        every generation entry point gets the same quality and safety rules.
+        """
+        provider = (self.settings.effective_llm_provider or "").strip()
+        model = (self.settings.effective_llm_model or "").strip()
+        request_id = uuid4()
+        logger.info("LLM script generation started request_id=%s provider=%s model=%s base_url=%s employee_id=%s", request_id, provider or "<unset>", model or "<unset>", self.settings.effective_llm_base_url or "<default>", getattr(employee, "id", "<unknown>"))
+        if not provider or not model or not self.settings.effective_llm_api_key:
+            logger.error("LLM script generation configuration failure request_id=%s provider_configured=%s model_configured=%s api_key_configured=%s", request_id, bool(provider), bool(model), bool(self.settings.effective_llm_api_key))
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM script generation is not configured.")
+        context = {
+            "employee_name": employee.name,
+            "employee_role": configuration.get("role") or configuration.get("job_role") or configuration.get("purpose"),
+            "business_name": configuration.get("business_name"),
+            "business_description": configuration.get("business_description"),
+            "purpose": configuration.get("purpose"),
+            "original_requirement": configuration.get("original_requirement"),
+            "language": configuration.get("language", employee.language),
+            "call_type": configuration.get("call_type", employee.call_type),
+            "conversation_variables": configuration.get("conversation_variables", []),
+            "knowledge_base_available": bool(configuration.get("knowledge_files") or configuration.get("knowledge_base_configured")),
+            "existing_custom_sections": configuration.get("custom_sections", []),
+            # This is configuration context, not document contents.  In
+            # particular, do not put uploaded PDF text into the generated prompt.
+            "existing_configuration": {
+                key: value for key, value in configuration.items()
+                if key not in {"final_prompt", "llm_api_key", "api_key", "knowledge_file_contents"}
+            },
+        }
+        system = (
+            "You are an expert AI voice-agent conversation designer. Design an executable call "
+            "conversation for this exact employee; do not paraphrase the requirement and do not "
+            "fill a generic call-center template. First reason about the business, the employee's "
+            "role, caller context, call purpose, success condition, information to collect, likely "
+            "caller questions and objections, supported next steps, unavailable information, "
+            "continuation conditions, and safe closing conditions. Only then write the sections.\n\n"
+            "OUTPUT CONTRACT: Return only valid JSON, with exactly six objects in this exact order "
+            "and with exactly these key/title pairs: identity_purpose / Identity & Purpose, "
+            "greeting_intro / Greeting & Intro, qualification / Qualification, "
+            "handling_objections / Handling Objections, call_to_action / Call to Action, "
+            "closing / Closing. Each content value is a concise, complete set of operational "
+            "instructions, not an essay. Do not return markdown or additional top-level fields.\n\n"
+            "LANGUAGE CONTRACT: Write internal agent instructions primarily in clear English. "
+            "Write only customer-facing spoken examples, opening phrases, questions, objection "
+            "responses, CTA phrases, and closing phrases in the selected language. Do not translate "
+            "the whole internal prompt. Spoken language must sound natural for a real phone call, "
+            "not like word-for-word translation; keep sentences short and avoid repetitive filler.\n\n"
+            "SECTION DESIGN:\n"
+            "1. Identity & Purpose: identify company, employee, role, caller, reason, exact business "
+            "objective, success, relevant information, and boundaries.\n"
+            "2. Greeting & Intro: create a context-specific inbound or outbound opening with name, "
+            "company, concise reason, permission when appropriate, and a transition to one question.\n"
+            "3. Qualification: determine the minimum useful information for this business, explain "
+            "why it matters, ask one question at a time, order the questions, and define branches, "
+            "stop conditions, and responses to short answers. Use only configured variables and "
+            "placeholders such as {{customer_name}} when useful; never force irrelevant variables.\n"
+            "4. Handling Objections: identify realistic objections for this business. For each, give "
+            "English internal guidance plus a natural selected-language spoken example. Do not pressure.\n"
+            "5. Call to Action: derive the actual next step from the objective. Follow COLLECT -> "
+            "VERIFY -> SUMMARIZE -> ASK FOR CONFIRMATION -> WAIT FOR EXPLICIT CONFIRMATION -> "
+            "EXECUTE -> VERIFY SUCCESS -> INFORM CALLER. Never claim a booking, transfer, callback, "
+            "purchase, or other action happened without a supported successful action.\n"
+            "6. Closing: check for additional questions, offer relevant help, continue for another "
+            "request, and end only after clear caller end intent. Make the spoken closing context-specific.\n\n"
+            "VOICE BEHAVIOR (must be explicit in the relevant sections): Short answers such as "
+            "'Printers.', 'Renewal.', 'Yes.', 'HP.', 'Hyderabad.', or '25 thousand.' are valid "
+            "answers, never hang-up instructions. Use the answer as context and ask the next useful "
+            "question. Do not end because one field was answered, the caller said yes, or the "
+            "objective is only partially complete. Listen without interrupting, yield on barge-in, "
+            "remember supplied information, do not repeat questions, avoid long monologues, and "
+            "respond to the caller's last statement instead of blindly following a fixed sequence.\n\n"
+            "KNOWLEDGE AND SAFETY: If a knowledge base is available, use it for relevant verified "
+            "facts such as products, prices, warranty, policy, FAQ, service, and documented "
+            "availability. Never invent facts or insert document contents. If the answer is not "
+            "available, acknowledge the limitation naturally and offer an appropriate next step. "
+            "Never claim capabilities or outcomes that are not configured."
+        )
+        user = json.dumps(context, ensure_ascii=False, indent=2)
+        payload = self._build_request(provider, model, system, user)
+        try:
+            response = self._perform_json_request(provider, payload)
+        except HTTPException as exc:
+            logger.error("LLM script generation failed request_id=%s status=%s detail=%s", request_id, exc.status_code, exc.detail, exc_info=True)
+            raise HTTPException(status_code=exc.status_code, detail=f"{exc.detail} [request_id={request_id}]") from exc
+        expected = ("Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
+        expected_keys = ("identity_purpose", "greeting_intro", "qualification", "handling_objections", "call_to_action", "closing")
+        sections = response.get("sections") if isinstance(response, dict) else None
+        # Some JSON-mode providers follow the field contract but omit the
+        # wrapper and return {identity_purpose: "...", ...}. Normalize that
+        # equivalent representation before validating the six sections.
+        if not isinstance(sections, list) and isinstance(response, dict):
+            direct_sections = []
+            for key, title in zip(expected_keys, expected):
+                content = response.get(key)
+                if isinstance(content, str):
+                    direct_sections.append({"key": key, "title": title, "content": content})
+            if len(direct_sections) == len(expected):
+                sections = direct_sections
+        if not isinstance(sections, list):
+            logger.error("LLM script invalid response request_id=%s response_type=%s response_keys=%s", request_id, type(response).__name__, list(response.keys()) if isinstance(response, dict) else None)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned an invalid call script. [request_id={request_id}]")
+
+        def normalized(value: Any) -> str:
+            return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+        # Providers occasionally reorder JSON array items or add punctuation to
+        # keys (for example ``identity_&_purpose``). Re-key those harmless
+        # variations, but still require all six unique sections and non-empty
+        # content before accepting the response.
+        by_key: dict[str, str] = {}
+        aliases = {normalized(key): title for key, title in zip(expected_keys, expected)}
+        aliases.update({normalized(title): title for title in expected})
+        for item in sections:
+            if not isinstance(item, dict) or not isinstance(item.get("content"), str):
+                continue
+            title = aliases.get(normalized(item.get("key"))) or aliases.get(normalized(item.get("title")))
+            if title and item["content"].strip():
+                if title in by_key:
+                    logger.error("LLM script duplicate section request_id=%s section=%s", request_id, title)
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned duplicate call-script sections. [request_id={request_id}]")
+                by_key[title] = item["content"].strip()
+        result = {title: by_key[title] for title in expected if title in by_key}
+        if len(sections) != len(expected) or tuple(result) != expected:
+            logger.error("LLM script incomplete response request_id=%s received_count=%s received_sections=%s", request_id, len(sections), list(by_key))
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned an incomplete call script. [request_id={request_id}]")
+        return result
+
+    def _perform_json_request(self, provider: str, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = self.client.request(payload["method"], payload["url"], headers=payload["headers"], json=payload["json"])
+            response.raise_for_status()
+            body = response.json()
+            finish_reason = None
+            if isinstance(body.get("choices"), list) and body["choices"]:
+                finish_reason = (body["choices"][0] or {}).get("finish_reason")
+            logger.info("LLM script provider response provider=%s status=%s finish_reason=%s body_keys=%s", provider, response.status_code, finish_reason, list(body) if isinstance(body, dict) else type(body).__name__)
+            try:
+                text = self._extract_anthropic_text(body) if provider.casefold() in {"anthropic", "claude"} else self._extract_openai_text(body)
+            except HTTPException as exc:
+                logger.error("LLM script completion extraction failed provider=%s detail=%s response_body=%s", provider, exc.detail, re.sub(r"\s+", " ", response.text or "")[:1200], exc_info=True)
+                raise
+            try:
+                return self._recover_json(text)
+            except HTTPException as exc:
+                logger.error("LLM script JSON parsing failed provider=%s detail=%s completion_chars=%s completion_tail=%s", provider, exc.detail, len(text), text[-1200:], exc_info=True)
+                raise
+        except httpx.TimeoutException as exc:
+            logger.error("LLM script provider timeout provider=%s url=%s error=%s", provider, payload.get("url"), exc, exc_info=True)
+            raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="The LLM provider timed out while generating the call script.") from exc
+        except httpx.HTTPStatusError as exc:
+            # Keep the access-log status useful without exposing the API key or
+            # the full provider response (which can contain sensitive prompts).
+            provider_status = exc.response.status_code
+            provider_body = re.sub(r"\s+", " ", exc.response.text or "")[:240]
+            logger.error("LLM script request failed provider=%s status=%s body=%s", provider, provider_status, provider_body)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"The LLM provider rejected the script request (HTTP {provider_status}).",
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.exception("LLM script generation failed provider=%s", provider)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The LLM provider could not generate a valid call script.") from exc
+
     def _to_generation(self, response: InterviewLLMResponse) -> InterviewGeneration:
         return InterviewGeneration(
             assistant_message=response.assistant_message.strip(),
@@ -416,6 +584,40 @@ class RealLLMService(LLMService):
         if normalized in {"openai", "open-ai", "groq"}:
             api_key = api_key or self.settings.effective_llm_api_key
             base_url = (base_url or self.settings.effective_llm_base_url or "https://api.openai.com/v1").rstrip("/")
+            is_groq = "groq.com" in base_url.casefold() or model.casefold().startswith("openai/gpt-oss")
+            generation_limits = (
+                {"max_completion_tokens": 12000, "reasoning_effort": "low"}
+                if is_groq else {"max_tokens": 5000}
+            )
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "employee_call_script",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["sections"],
+                        "properties": {
+                            "sections": {
+                                "type": "array",
+                                "minItems": 6,
+                                "maxItems": 6,
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "required": ["key", "title", "content"],
+                                    "properties": {
+                                        "key": {"type": "string"},
+                                        "title": {"type": "string"},
+                                        "content": {"type": "string"},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            } if is_groq else {"type": "json_object"}
             return {
                 "method": "POST",
                 "url": f"{base_url}/chat/completions",
@@ -426,11 +628,15 @@ class RealLLMService(LLMService):
                 "json": {
                     "model": model,
                     "temperature": 0.2,
+                    # GPT-OSS counts hidden reasoning and visible JSON in its
+                    # completion budget. Use the provider's current parameter
+                    # and a low reasoning setting so the JSON can finish.
+                    **generation_limits,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    "response_format": {"type": "json_object"},
+                    "response_format": response_format,
                 },
             }
         if normalized in {"anthropic", "claude"}:
@@ -751,10 +957,17 @@ class EmployeeInterviewService:
             {"role": "user", "content": recorded_answer, "created_at": timestamp},
         ]
         generation = self._next_generation(employee, session.questions, session.answers, session.extracted_configuration)
-        session.extracted_configuration = {
-            **session.extracted_configuration,
+        existing_configuration = session.extracted_configuration
+        merged_configuration = {
+            **existing_configuration,
             **generation.configuration_updates,
         }
+        # Company identity is an explicit owner-provided field. Refinement may
+        # change behavior and purpose details, but never replace the company
+        # unless a separate supported company-name edit is made.
+        if existing_configuration.get("business_name"):
+            merged_configuration["business_name"] = existing_configuration["business_name"]
+        session.extracted_configuration = compose_employee_configuration(merged_configuration)
         answered_count = sum(1 for item in session.answers if item.get("answer") and not item.get("skipped"))
         template_flow = bool(session.extracted_configuration.get("selected_template_id"))
         ready_to_build = (template_flow and answered_count >= 3) or generation.ready_to_build or generation.is_complete

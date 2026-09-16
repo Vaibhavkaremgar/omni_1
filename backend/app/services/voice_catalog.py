@@ -11,6 +11,8 @@ BUILTIN_VOICES = [{
     "provider": "cartesia",
     "provider_voice_id": "82c2afc8-ebbc-4802-8ccf-036dc0fa1e3b",
     "supports_cloning": False,
+    "languages": ["English", "English (India)"],
+    "is_cloned": False,
 }]
 
 def voice_catalog() -> list[dict[str, Any]]:
@@ -19,7 +21,7 @@ def voice_catalog() -> list[dict[str, Any]]:
     try: values = json.loads(raw)
     except json.JSONDecodeError: return []
     if not isinstance(values, list): return []
-    configured = [{"id": str(x["id"]), "name": str(x.get("name", x["id"])), "tier": str(x.get("tier", "basic")), "gender": str(x.get("gender", "unspecified")), "provider": str(x.get("provider", "google")), "provider_voice_id": str(x["provider_voice_id"]), "supports_cloning": bool(x.get("supports_cloning", False))} for x in values if isinstance(x, dict) and x.get("id") and x.get("provider_voice_id")]
+    configured = [{"id": str(x["id"]), "name": str(x.get("name", x["id"])), "tier": str(x.get("tier", "basic")), "gender": str(x.get("gender", "unspecified")), "provider": str(x.get("provider", "google")), "provider_voice_id": str(x["provider_voice_id"]), "supports_cloning": bool(x.get("supports_cloning", False)), "languages": list(x.get("languages") or x.get("supported_languages") or []), "is_cloned": bool(x.get("is_cloned", False) or str(x.get("tier", "")).casefold() in {"cloned", "custom"})} for x in values if isinstance(x, dict) and x.get("id") and x.get("provider_voice_id")]
     known = {item["id"] for item in configured}
     return configured + [item for item in BUILTIN_VOICES if item["id"] not in known]
 

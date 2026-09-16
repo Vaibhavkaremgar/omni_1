@@ -639,3 +639,34 @@ def test_provider_api_failure_is_handled():
     with pytest.raises(HTTPException) as excinfo:
         service.initial_question(employee)
     assert excinfo.value.status_code == 503
+
+
+def test_call_script_generation_uses_structured_context_and_returns_six_sections():
+    settings = SimpleNamespace(
+        effective_llm_provider="openai", effective_llm_api_key="test-key",
+        effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1",
+        llm_timeout_seconds=5.0,
+    )
+    titles = ["Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing"]
+    seen = {}
+
+    def handler(request: httpx.Request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": f"Insurance renewal guidance for {title}."} for title in titles]})}}]})
+
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
+    result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "business_description": "Renew policies within 7 days", "original_requirement": "Call customers whose renewal date is within 7 days", "language": "Telugu", "conversation_variables": [{"key": "renewal_status"}], "custom_sections": [{"key": "x", "title": "Escalation", "content": "Ask for a human follow-up"}]})
+    assert tuple(result) == tuple(titles)
+    prompt = seen["body"]["messages"][1]["content"]
+    assert "KMG Insurance" in prompt and "Telugu" in prompt and "renewal_status" in prompt
+    assert "Escalation" in prompt
+
+
+def test_call_script_generation_failure_is_surfaced():
+    settings = SimpleNamespace(effective_llm_provider="openai", effective_llm_api_key="test-key", effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1", llm_timeout_seconds=5.0)
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"choices": [{"message": {"content": "not json"}}]}))))
+    employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="inbound", language="English")
+    with pytest.raises(HTTPException) as excinfo:
+        service.generate_call_script(employee, {})
+    assert excinfo.value.status_code == 502

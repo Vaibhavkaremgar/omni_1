@@ -499,6 +499,57 @@ def test_map_welcome_message_uses_employee_name():
     assert "Ava" in payload["welcome_message"]
 
 
+def test_voice_payload_keeps_objective_completion_active_and_requires_explicit_end():
+    employee = SimpleNamespace(name="Telugu Assistant", purpose="Book appointments", call_type="inbound", llm_model="gpt-4o", language="Telugu")
+    payload = map_employee_configuration(employee, {
+        "name": employee.name,
+        "purpose": employee.purpose,
+        "language": "Telugu",
+        "closing_behavior": "End after the appointment is booked.",
+    })
+    bodies = "\n".join(section["body"] for section in payload["context_breakdown"])
+    assert "Completing the business objective is not permission to end the call" in bodies
+    assert "explicit end-of-call confirmation" in bodies
+    assert "An interruption is a normal barge-in, not a request to hang up" in bodies
+    assert "ఇంకా ఏమైనా help కావాలా?" in bodies
+    assert payload["is_end_call_enabled"] is True
+    assert payload["interruption_min_words"] == 1
+    assert "short answer" in payload["end_call_condition"]
+
+
+def test_business_identity_uses_explicit_company_name_and_keeps_requirement_as_description():
+    employee = SimpleNamespace(name="Mani", purpose="Call customers whose insurance renewal date is within 7 days and remind them about renewal.", call_type="outbound", llm_model="gpt-4o", language="Telugu")
+    payload = map_employee_configuration(employee, {
+        "name": "Mani", "business_name": "KMG Insurance", "business_description": employee.purpose,
+        "purpose": employee.purpose, "original_requirement": employee.purpose,
+        "language": "Telugu", "llm_model": "gpt-4o",
+    })
+    assert payload["welcome_message"].startswith("నమస్కారం, నేను Mani. KMG Insurance")
+    assert employee.purpose not in payload["welcome_message"]
+    identity = next(item["body"] for item in payload["context_breakdown"] if item["title"] == "Agent Identity & Purpose")
+    assert "Business: KMG Insurance" in identity
+    assert f"Business description: {employee.purpose}" in identity
+
+
+def test_missing_business_name_never_uses_requirement_as_identity():
+    employee = SimpleNamespace(name="Mani", purpose="Call customers whose renewal date is within 7 days.", call_type="inbound", llm_model="gpt-4o", language="English")
+    payload = map_employee_configuration(employee, {"name": employee.name, "purpose": employee.purpose, "original_requirement": employee.purpose, "language": "English"})
+    assert "Business:" not in next(item["body"] for item in payload["context_breakdown"] if item["title"] == "Agent Identity & Purpose")
+
+
+def test_telugu_welcome_uses_configured_business_context_without_generic_filler():
+    employee = SimpleNamespace(name="Chaitanya", purpose="Book appointments", call_type="inbound", llm_model="gpt-4o", language="Telugu")
+    payload = map_employee_configuration(employee, {
+        "name": employee.name,
+        "purpose": employee.purpose,
+        "language": "Telugu",
+        "selected_template_id": "pontis_hospital_v1",
+        "template_values": {"business_name": "Charan Care Hospital"},
+    })
+    assert "Charan Care Hospital" in payload["welcome_message"]
+    assert "your questions about our configured services" not in payload["welcome_message"].lower()
+
+
 def test_complete_shabdha_brief_and_unknown_configuration_reach_canonical_context():
     employee = SimpleNamespace(name="Telugu Hospital Assistant", purpose="Book appointments", call_type="inbound", llm_model="gpt-4o", language="te-IN")
     config = {
