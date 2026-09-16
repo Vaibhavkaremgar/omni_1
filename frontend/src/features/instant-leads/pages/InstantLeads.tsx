@@ -345,7 +345,7 @@ export default function InstantLeads() {
                   onChange={e => setDestination(e.target.value)}
                   disabled={calling}
                   placeholder="98765 43210"
-                  className="mt-1 w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm font-mono"
+                  className="mt-1 min-w-0 flex-1 w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm font-mono"
                 /></div>
               </label>
             </div>

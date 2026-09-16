@@ -18,7 +18,10 @@ def test_public_voice_catalog_preserves_frontend_contract(monkeypatch):
 
     response = voice_catalog_service.public_voice_catalog()
 
-    assert len(response) == 4
-    assert [item["name"] for item in response] == ["Achird", "Aoede", "Charon", "Kore"]
+    assert len(response) == 5
+    charan = next(item for item in response if item["name"] == "Charan - Clear Concierge")
+    assert charan["provider"] == "cartesia"
+    assert "provider_voice_id" not in charan
+    assert [item["name"] for item in response] == ["Achird", "Aoede", "Charon", "Kore", "Charan - Clear Concierge"]
     assert all("id" in item and "provider_voice_id" not in item for item in response)
     assert all({"name", "tier", "gender", "provider", "supports_cloning"} <= item.keys() for item in response)
