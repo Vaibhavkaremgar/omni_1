@@ -146,6 +146,25 @@ class InstantCallService:
             metadata["lead_id"] = str(lead.id)
 
         try:
+            version_config = employee.published_version.configuration or {}
+            logger.info(
+                "[CALL_RUNTIME_CONFIG] local_call_id=%s provider_agent_id=%s is_end_call_enabled=%s "
+                "end_call_condition=%s user_idle_threshold_sec=%s silence_timeout=%s "
+                "max_call_duration_in_sec=%s is_interruption_allowed=%s language=%s call_type=%s",
+                call.id, provider_agent_id, version_config.get("is_end_call_enabled", "provider_default"),
+                str(version_config.get("end_call_condition", "provider_configured"))[:500],
+                version_config.get("user_idle_threshold_sec", "provider_default"),
+                version_config.get("silence_timeout", "provider_default"),
+                version_config.get("max_call_duration_in_sec", "provider_default"),
+                version_config.get("is_interruption_allowed", "provider_configured"),
+                version_config.get("language", employee.language), version_config.get("call_type", employee.call_type),
+            )
+            logger.info(
+                "[OMNI_DISPATCH_START] local_call_id=%s employee_id=%s employee_version_id=%s "
+                "provider_agent_id=%s provider_phone_id=%s provider_request_id=%s timestamp=%s",
+                call.id, employee.id, employee.published_version.id, provider_agent_id,
+                from_number_id, metadata.get("provider_request_id"), metadata["dispatch_timestamp"],
+            )
             result = self.provider.dispatch(
                 agent_id=agent_id,
                 to_number=request.destination_phone_number,
@@ -153,7 +172,13 @@ class InstantCallService:
                 call_context=call_context,
                 metadata=metadata,
             )
-        except Exception:
+        except Exception as exc:
+            logger.exception(
+                "[CALL_RUNTIME_EXCEPTION] local_call_id=%s employee_id=%s employee_version_id=%s "
+                "provider_agent_id=%s provider_call_id=%s stage=provider_dispatch exception_type=%s exception_message=%s",
+                call.id, employee.id, employee.published_version.id, provider_agent_id,
+                None, type(exc).__name__, str(exc)[:300],
+            )
             call.status = CallStatus.failed.value
             call.dispatch_metadata = {**(call.dispatch_metadata or {}), "dispatch_failed": True}
             db.commit()
@@ -169,7 +194,7 @@ class InstantCallService:
             "provider_request_id": str(result.provider_call_id),
         }
         logger.info(
-            "Test Call dispatched local_call_id=%s employee_id=%s employee_version_id=%s "
+            "[OMNI_DISPATCH_RESULT] local_call_id=%s employee_id=%s employee_version_id=%s "
             "provider_agent_id=%s provider_call_id=%s dispatch_timestamp=%s final_local_status=%s",
             call.id, employee.id, employee.published_version.id, provider_agent_id,
             result.provider_call_id, metadata["dispatch_timestamp"], call.status,

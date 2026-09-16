@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +14,7 @@ from app.services.top_ups import confirm_provider_payment
 from app.services.wallets import credit_verified_top_up
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+logger = logging.getLogger(__name__)
 call_result_service = CallResultService()
 razorpay_client = RazorpayClient()
 
@@ -24,7 +27,28 @@ async def receive_omnidimension_post_call(request: Request, db: Session = Depend
         raise HTTPException(status_code=400, detail="Webhook payload must be valid JSON.") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Webhook payload must be a JSON object.")
-    call = call_result_service.process_post_call(db, payload)
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    report = payload.get("call_report") if isinstance(payload.get("call_report"), dict) else {}
+    logger.info(
+        "[OMNI_EVENT_RECEIVED] local_call_id=%s employee_id=%s employee_version_id=%s provider_agent_id=%s "
+        "provider_request_id=%s provider_call_id=%s event_type=%s provider_status=%s raw_reason=%s event_timestamp=%s",
+        metadata.get("local_call_id"), metadata.get("employee_id"), metadata.get("employee_version_id"),
+        metadata.get("provider_agent_id"), payload.get("requestId") or metadata.get("provider_request_id"),
+        payload.get("call_id") or payload.get("call_log_id") or payload.get("id"),
+        payload.get("event_type") or payload.get("type") or payload.get("event") or report.get("event_type"),
+        payload.get("call_status") or payload.get("status") or report.get("status"),
+        payload.get("end_reason") or payload.get("termination_reason") or payload.get("hangup_reason") or report.get("reason"),
+        payload.get("event_timestamp") or payload.get("timestamp") or payload.get("created_at"),
+    )
+    try:
+        call = call_result_service.process_post_call(db, payload)
+    except Exception as exc:
+        logger.exception(
+            "[CALL_RUNTIME_EXCEPTION] local_call_id=%s provider_call_id=%s stage=webhook_processing exception_type=%s exception_message=%s",
+            metadata.get("local_call_id"), payload.get("call_id") or payload.get("call_log_id") or payload.get("id"),
+            type(exc).__name__, str(exc)[:300],
+        )
+        raise
     if call is None:
         return {"status": "ignored"}
     return {"status": "processed", "call_id": str(call.id)}

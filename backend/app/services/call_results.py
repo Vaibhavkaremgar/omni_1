@@ -105,6 +105,27 @@ class CallResultService:
                         _update_campaign_progress(db, campaign)
         db.commit()
         db.refresh(call)
+        if event.get("status") in TERMINAL_STATUSES:
+            turns = event.get("transcript_data") if isinstance(event.get("transcript_data"), list) else []
+            user_spoke = any(isinstance(turn, dict) and turn.get("speaker") == "customer" for turn in turns)
+            agent_spoke = any(isinstance(turn, dict) and turn.get("speaker") == "assistant" for turn in turns)
+            reason_text = str(event.get("termination_reason") or "").casefold()
+            logger.info(
+                "[CALL_FINAL_DIAGNOSTIC] local_call_id=%s employee_id=%s employee_version_id=%s "
+                "provider_agent_id=%s provider_call_id=%s provider_request_id=%s started_at=%s ended_at=%s "
+                "duration_seconds=%s final_local_status=%s provider_status=%s termination_source=%s "
+                "termination_reason=%s last_event_type=%s last_event_timestamp=%s user_spoke=%s "
+                "agent_spoke=%s end_call_event_received=%s backend_termination_attempted=%s "
+                "timeout_triggered=%s exception_occurred=%s",
+                call.id, call.employee_id, call.employee_version_id,
+                (call.dispatch_metadata or {}).get("provider_agent_id"), call.provider_call_id,
+                (call.dispatch_metadata or {}).get("provider_request_id"), call.started_at, call.ended_at,
+                call.duration_seconds, call.status, event.get("provider_status"),
+                event.get("termination_source") or "unknown", event.get("termination_reason") or "unknown",
+                event.get("event_type") or "post_call", event.get("event_timestamp") or call.ended_at,
+                user_spoke, agent_spoke, str(event.get("event_type") or "").casefold() == "end_call",
+                False, "timeout" in reason_text or "idle" in reason_text, False,
+            )
         if call.transcript and call.analysis_status not in {"pending", "running", "completed"}:
             call.analysis_status = "pending"
             db.commit()

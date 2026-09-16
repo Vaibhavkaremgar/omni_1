@@ -97,6 +97,8 @@ def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
     provider_status = payload.get("call_status") or payload.get("status") or report.get("status")
     termination_reason = _first_value(payload, {"end_reason", "termination_reason", "hangup_reason", "disconnect_reason", "call_end_reason", "reason"})
     termination_source = _first_value(payload, {"termination_source", "end_source", "hangup_source", "disconnected_by"})
+    event_type = payload.get("event_type") or payload.get("type") or payload.get("event") or report.get("event_type")
+    event_timestamp = payload.get("event_timestamp") or payload.get("timestamp") or payload.get("created_at")
     recording_url = payload.get("recording_url") or report.get("recording_url")
     transcript = (payload.get("call_conversation") or payload.get("full_conversation") or
                   payload.get("transcript") or report.get("full_conversation"))
@@ -113,6 +115,8 @@ def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
         "provider_status": provider_status,
         "termination_reason": str(termination_reason) if termination_reason is not None else None,
         "termination_source": str(termination_source) if termination_source is not None else None,
+        "event_type": str(event_type) if event_type is not None else None,
+        "event_timestamp": event_timestamp,
         "status": normalize_status(provider_status),
         "duration_seconds": _parse_duration(payload.get("call_duration") or payload.get("call_duration_in_seconds") or payload.get("duration_seconds") or report.get("duration")),
         "transcript": transcript,
