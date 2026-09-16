@@ -19,12 +19,14 @@ function NewEmployeeChat() {
   const [language, setLanguage] = useState('Telugu');
   const [voiceId, setVoiceId] = useState('');
   const [voices, setVoices] = useState<Voice[]>([]);
+  const [recommendedVoiceIds, setRecommendedVoiceIds] = useState<string[]>([]);
   const [messages, setMessages] = useState<Array<{ role: 'assistant' | 'user'; content: string }>>([{ role: 'assistant', content: 'Hi! Tell me in one sentence what you want your AI employee to handle.' }]);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
   const suggestions = ['Build a sales employee', 'Create a customer support agent', 'Create an appointment assistant', 'Help me describe my employee'];
   useEffect(() => { void backendJson<Voice[]>('/employees/voice-catalog').then(items => { setVoices(items); if (items[0]) setVoiceId(items[0].id); }).catch(() => undefined); }, []);
-  const compatibleVoices = useMemo(() => voices.filter(v => !v.languages?.length || v.languages.includes(language)), [voices, language]);
+  useEffect(() => { const params = new URLSearchParams({ language, requirement }); void backendJson<{ recommended_voices: Array<{ id: string }> }>(`/employees/voice-recommendations?${params}`).then(result => setRecommendedVoiceIds(result.recommended_voices.map(item => item.id))).catch(() => setRecommendedVoiceIds([])); }, [language, requirement]);
+  const compatibleVoices = useMemo(() => { const eligible = voices.filter(v => !v.languages?.length || v.languages.includes(language)); const recommended = recommendedVoiceIds.map(id => eligible.find(v => v.id === id)).filter((voice): voice is Voice => Boolean(voice)); return [...new Map([...recommended, ...eligible].map(voice => [voice.id, voice])).values()]; }, [voices, language, recommendedVoiceIds]);
   const build = async () => {
     if (!companyName.trim() || !requirement.trim()) return;
     setGenerating(true); setError('');
@@ -50,7 +52,7 @@ function EmployeeWorkspace() {
   const [config, setConfig] = useState<Config>({}), [voices, setVoices] = useState<Voice[]>([]), [voiceId, setVoiceId] = useState(''), [phones, setPhones] = useState<Phone[]>([]);
   const [session, setSession] = useState<Session | null>(null), [answer, setAnswer] = useState(''), [destination, setDestination] = useState(''), [fromPhone, setFromPhone] = useState(''), [testOpen, setTestOpen] = useState(false);
   const [busy, setBusy] = useState(false), [calling, setCalling] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
-  useEffect(() => { void backendJson<Voice[]>('/employees/voice-catalog').then(setVoices).catch(() => setError('Voice catalog could not be loaded.')); }, []);
+  useEffect(() => { void backendJson<Voice[]>('/employees/voice-catalog').then(items => { setVoices(items); const cloned = items.filter(v => v.is_cloned || v.tier === 'cloned' || v.tier === 'custom'); if (!cloned.length) setError('My Cloned Voices: No cloned voices are available through the OmniDimension API.'); }).catch(() => setError('Voice catalog could not be loaded.')); }, []);
   useEffect(() => { if (!id) return; void Promise.all([backendJson<Employee>(`/employees/${id}`), backendJson<Phone[]>('/phone-numbers')]).then(([e, ps]) => { const c = e.configuration ?? {}; setEmployeeId(e.id); setName(e.name); setLanguage(String(c.language ?? e.language)); setRequirement(String(c.original_requirement ?? e.purpose)); setConfig(c); setVoiceId(String((c.voice as { id?: string } | undefined)?.id ?? '')); const active = ps.filter(p => p.status === 'active'); setPhones(active); if (active[0]) setFromPhone(active[0].id); }).catch(() => setError('Unable to load this employee.')); }, [id]);
   const languageVoices = useMemo(() => voices.filter(v => !v.languages?.length || v.languages.includes(language)), [voices, language]);
   const standardVoices = languageVoices.filter(v => v.tier === 'standard' && !v.is_cloned).slice(0, 2);

@@ -9,7 +9,7 @@ from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.services.employee_prompt import build_employee_prompt, normalize_business_identity
 from app.services.employee_templates import get_template, UNIVERSAL_TELUGU_VOICE_GUIDANCE
-from app.services.voice_catalog import voice_catalog
+from app.services.voice_catalog import voice_definition
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -288,7 +288,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
 
     voice = configuration.get("voice")
     if isinstance(voice, dict):
-        selected = next((item for item in voice_catalog() if item["id"] == str(voice.get("id", ""))), None)
+        selected = voice_definition(str(voice.get("id", "")))
         if selected:
             payload["voice"] = {"provider": selected["provider"], "voice_id": selected["provider_voice_id"]}
 

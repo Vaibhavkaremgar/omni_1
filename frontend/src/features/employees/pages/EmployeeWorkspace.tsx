@@ -10,6 +10,7 @@ type Step = { key: string; title: string; content: string };
 type Variable = { key: string; label: string; description: string; type: string; required: boolean };
 export type Config = { [key: string]: unknown; opening?: string; final_prompt?: string; call_script?: Record<string, string>; custom_sections?: Step[]; conversation_variables?: Variable[] };
 type Voice = { id: string; name: string; tier: string; gender: string; languages?: string[]; is_cloned?: boolean };
+type VoiceRecommendation = { id: string; reason: string };
 type Employee = { id: string; name: string; purpose: string; language: string; call_type: string; status: string; configuration?: Config | null };
 type Phone = { id: string; e164_number: string; status: string; label?: string | null };
 type Session = { messages: Array<{ role: string; content: string }>; current_question: string | null; is_complete: boolean; extracted_configuration: Config };
@@ -44,7 +45,8 @@ export default function EmployeeWorkspace() {
       const active = ps.filter(p => p.status === 'active'); setPhones(active); if (active[0]) setFromPhone(active[0].id);
     } catch { setError('Unable to load this employee.'); }
   };
-  useEffect(() => { const timer = window.setTimeout(() => { if (id) void load(); void backendJson<Voice[]>('/employees/voice-catalog').then(setVoices).catch(() => setError('Voice catalog could not be loaded.')); }, 0); return () => window.clearTimeout(timer); }, [id]);
+  useEffect(() => { const timer = window.setTimeout(() => { if (id) void load(); void backendJson<Voice[]>('/employees/voice-catalog').then(items => { setVoices(items); const cloned = items.filter(v => v.is_cloned || v.tier === 'cloned' || v.tier === 'custom'); setNotice(cloned.length ? `My Cloned Voices: ${cloned.map(v => `${v.name} · ${v.gender} · ${v.languages?.join(', ') || 'Language not specified'} · Ready`).join(' | ')}` : 'My Cloned Voices: No cloned voices are available through the OmniDimension API.'); }).catch(() => setError('Voice catalog could not be loaded.')); }, 0); return () => window.clearTimeout(timer); }, [id]);
+  useEffect(() => { const params = new URLSearchParams({ language, requirement }); void backendJson<{ recommended_voices: VoiceRecommendation[] }>(`/employees/voice-recommendations?${params}`).then(result => { const names = result.recommended_voices.map(item => voices.find(voice => voice.id === item.id)?.name).filter(Boolean); if (names.length) setNotice(`Voice Suggestions: Recommended for your employee: ${names.join(' · ')}`); }).catch(() => undefined); }, [language, requirement, voices]);
 
   const languageVoices = useMemo(() => voices.filter(v => !v.languages?.length || v.languages.includes(language)), [voices, language]);
   const selectedVoice = voices.find(v => v.id === voiceId);

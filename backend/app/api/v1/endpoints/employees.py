@@ -2,7 +2,7 @@ from uuid import UUID
 import logging
 import base64
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -29,6 +29,8 @@ from app.services.employee_configuration import (
     strip_customer_internal_configuration,
 )
 from app.services.voice_catalog import public_voice_catalog
+from app.services.voice_catalog import voice_catalog
+from app.services.voice_recommendations import recommend_voices
 from app.services.employee_templates import template_library, render_template, get_template
 from app.services.employee_prompt import compose_employee_configuration
 from app.services.employee_interview import RealLLMService
@@ -136,6 +138,23 @@ def get_voice_catalog(current_user: AuthenticatedUser = Depends(get_current_user
     catalog = public_voice_catalog()
     logger.info("Voice catalog requested tenant_id=%s count=%d", current_user.tenant.id, len(catalog))
     return catalog
+
+
+@router.get("/voice-recommendations")
+def get_voice_recommendations(
+    language: str = Query(default=""),
+    gender: str = Query(default=""),
+    requirement: str = Query(default=""),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, list[dict[str, str]]]:
+    recommendations = recommend_voices(
+        voice_catalog(), language=language, gender=gender, requirement=requirement,
+    )
+    logger.info(
+        "Voice recommendations requested tenant_id=%s language=%s gender=%s count=%d",
+        current_user.tenant.id, language, gender or None, len(recommendations),
+    )
+    return {"recommended_voices": recommendations}
 
 
 def _public_knowledge_file(row: EmployeeKnowledgeFile) -> dict:
