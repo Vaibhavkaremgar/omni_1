@@ -80,7 +80,7 @@ def _employee_payload(name="Sales Qualifier", purpose="Qualify dental leads and 
         "call_type": "inbound",
         "llm_provider": "OpenAI",
         "llm_model": "gpt-4o-mini",
-        "language": "en-US",
+        "language": "English",
         "creation_mode": "chat",
     }
 
@@ -295,7 +295,7 @@ def test_employee_rules_present_in_omni_agent_context(campaign_db, monkeypatch):
                 "constraints": ["Never promise free treatment"],
                 "llm_provider": "OpenAI",
                 "llm_model": "gpt-4o-mini",
-                "language": "en-US",
+                "language": "English",
             }}, headers=h)
             client.post(f"/api/v1/employees/{eid}/publish", headers=h)
 
@@ -452,7 +452,7 @@ def test_map_includes_all_context_sections():
         purpose="Book dental appointments",
         call_type="outbound",
         llm_model="gpt-4o-mini",
-        language="en-US",
+        language="English",
     )
     config = {
         "name": "Dental Caller",
@@ -465,7 +465,7 @@ def test_map_includes_all_context_sections():
         "conversation_flow": ["Introduce the company", "Ask budget and timeline"],
         "system_prompt": "Never offer unsupported discounts.",
         "llm_model": "gpt-4o-mini",
-        "language": "en-US",
+        "language": "English",
     }
     payload = map_employee_configuration(employee, config)
     titles = {s["title"] for s in payload["context_breakdown"]}
@@ -484,8 +484,8 @@ def test_map_includes_all_context_sections():
 
 
 def test_map_tasks_formatted_as_bullet_list():
-    employee = SimpleNamespace(name="E", purpose="P", call_type="both", llm_model="m", language="en-US")
-    config = {"name": "E", "purpose": "P", "tasks": ["Task A", "Task B"], "llm_model": "m", "language": "en-US"}
+    employee = SimpleNamespace(name="E", purpose="P", call_type="both", llm_model="m", language="English")
+    config = {"name": "E", "purpose": "P", "tasks": ["Task A", "Task B"], "llm_model": "m", "language": "English"}
     payload = map_employee_configuration(employee, config)
     tasks_section = next(s for s in payload["context_breakdown"] if s["title"] == "Tasks")
     assert "- Task A" in tasks_section["body"]
@@ -493,8 +493,8 @@ def test_map_tasks_formatted_as_bullet_list():
 
 
 def test_map_welcome_message_uses_employee_name():
-    employee = SimpleNamespace(name="Ava", purpose="P", call_type="both", llm_model="m", language="en-US")
-    config = {"name": "Ava", "purpose": "P", "llm_model": "m", "language": "en-US"}
+    employee = SimpleNamespace(name="Ava", purpose="P", call_type="both", llm_model="m", language="English")
+    config = {"name": "Ava", "purpose": "P", "llm_model": "m", "language": "English"}
     payload = map_employee_configuration(employee, config)
     assert "Ava" in payload["welcome_message"]
 
@@ -519,3 +519,34 @@ def test_complete_shabdha_brief_and_unknown_configuration_reach_canonical_contex
     assert "Continue listening and responding after every caller turn." in bodies
     assert payload["languages"] == ["Telugu"]
     assert len(bodies) > 300
+
+
+def test_payload_preserves_complete_shabdha_context_and_telugu_configuration():
+    employee = SimpleNamespace(id="test", name="Charan Care Assistant", purpose="Help patients book appointments", call_type="inbound", llm_model="gpt-4o", language="Telugu")
+    config = {
+        "name": employee.name, "purpose": employee.purpose, "language": "Telugu", "creation_mode": "chat",
+        "original_shabdha_brief": "Hospital name: Charan Care Hospital\nLocation: Hyderabad\nDepartments: Cardiology, General Medicine, Dermatology\nWorking hours: 9 AM to 8 PM\nAppointment process: collect patient name, department, preferred doctor, date and time; confirm before booking\nEmergency: direct emergencies to the hospital emergency department/contact",
+        "responsibilities": ["Collect patient details", "Confirm appointment details"],
+    }
+    payload = map_employee_configuration(employee, config)
+    titles = {section["title"] for section in payload["context_breakdown"]}
+    bodies = "\n".join(section["body"] for section in payload["context_breakdown"])
+    assert "Complete Employee Instructions" in titles
+    assert "ORIGINAL SHABDHA BRIEF" in bodies
+    for fact in ("Charan Care Hospital", "Hyderabad", "Cardiology", "9 AM to 8 PM", "preferred doctor", "emergency department"):
+        assert fact in bodies
+    assert "patient details" in bodies
+    assert "Converse naturally in Telugu" in bodies
+    assert "To be defined through the builder" not in bodies
+    assert payload["welcome_message"] not in bodies
+    assert payload["model"]["model"] == "gpt-4o"
+
+
+def test_payload_preserves_exact_paste_prompt_without_system_prompt_duplication():
+    employee = SimpleNamespace(id="test", name="Paste Assistant", purpose="Answer customer questions", call_type="inbound", llm_model="gpt-4o", language="English")
+    prompt = "Handle returns within 30 days. Ask for the order number and explain the refund timeline."
+    payload = map_employee_configuration(employee, {"name": employee.name, "purpose": employee.purpose, "language": "English", "creation_mode": "prompt", "direct_prompt": prompt, "system_prompt": prompt, "llm_model": "gpt-4o"})
+    bodies = "\n".join(section["body"] for section in payload["context_breakdown"])
+    assert "ORIGINAL CUSTOMER PROMPT" in bodies
+    assert prompt in bodies
+    assert bodies.count(prompt) == 1

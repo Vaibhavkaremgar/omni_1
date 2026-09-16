@@ -66,23 +66,23 @@ def _client(db, tenant, user, monkeypatch):
 # ===========================================================================
 
 def test_create_schema_default_is_inbound():
-    schema = AIEmployeeCreate()
+    schema = AIEmployeeCreate(language="English")
     assert schema.call_type == "inbound"
 
 
 def test_create_schema_inbound_accepted():
-    schema = AIEmployeeCreate(call_type="inbound")
+    schema = AIEmployeeCreate(call_type="inbound", language="English")
     assert schema.call_type == "inbound"
 
 
 def test_create_schema_both_accepted():
-    schema = AIEmployeeCreate(call_type="both")
+    schema = AIEmployeeCreate(call_type="both", language="English")
     assert schema.call_type == "both"
 
 
 def test_create_schema_outbound_rejected():
     with pytest.raises(Exception):
-        AIEmployeeCreate(call_type="outbound")
+        AIEmployeeCreate(call_type="outbound", language="English")
 
 
 def test_update_schema_outbound_rejected():

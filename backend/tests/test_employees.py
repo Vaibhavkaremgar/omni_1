@@ -70,21 +70,20 @@ def test_unauthenticated_employee_request_is_rejected():
     assert response.status_code == 401
 
 
-def test_employee_creation_requires_template_and_supported_language(employee_database, monkeypatch):
+def test_employee_creation_allows_optional_template_and_validates_language(employee_database, monkeypatch):
     db, _, _ = employee_database
     monkeypatch.setattr(employee_endpoint, "get_settings", lambda: SimpleNamespace(effective_llm_provider="groq", effective_llm_model="openai/gpt-oss-20b"))
     client = client_for(db, "employee-user-a", monkeypatch)
     base = payload()
     with client:
-        for field in ("selected_template_id", "language"):
-            invalid = {key: value for key, value in base.items() if key != field}
-            assert client.post("/api/v1/employees", json=invalid, headers={"Authorization": "Bearer a"}).status_code == 422
         invalid_template = {**base, "selected_template_id": "not-a-pontis-template"}
         assert client.post("/api/v1/employees", json=invalid_template, headers={"Authorization": "Bearer a"}).status_code == 422
         invalid_version = {**base, "selected_template_version": 99}
         assert client.post("/api/v1/employees", json=invalid_version, headers={"Authorization": "Bearer a"}).status_code == 422
-        invalid_language = {**base, "language": "Klingon"}
+        invalid_language = {**base, "language": "not-supported"}
         assert client.post("/api/v1/employees", json=invalid_language, headers={"Authorization": "Bearer a"}).status_code == 422
+        without_template = {key: value for key, value in base.items() if key != "selected_template_id"}
+        assert client.post("/api/v1/employees", json=without_template, headers={"Authorization": "Bearer a"}).status_code == 201
 
 
 def test_all_creation_modes_persist_template_and_customer_prompt(employee_database, monkeypatch):

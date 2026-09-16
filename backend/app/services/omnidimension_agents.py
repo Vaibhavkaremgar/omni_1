@@ -131,7 +131,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         context.append({"title": "Additional Context", "body": _text(additional), "is_enabled": True})
 
     system_prompt = configuration.get("system_prompt")
-    if system_prompt:
+    if system_prompt and _text(system_prompt) != _text(configuration.get("direct_prompt")):
         context.append({"title": "Additional Behavioral Instructions", "body": _text(system_prompt), "is_enabled": True})
 
     # ── Qualification / Workflow Rules ────────────────────────────────────────
@@ -176,9 +176,12 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
 
     # ── Language / Communication Rules ───────────────────────────────────────
     lang = _language_name(_text(configuration.get("language"), employee.language))
+    language_rules = f"Speak in {lang}. Be clear, professional, and concise."
+    if lang == "Telugu":
+        language_rules += " Converse naturally in Telugu throughout the call. English business terms are allowed, but do not switch languages because of occasional English words; switch only when the caller explicitly asks for another language."
     context.append({
         "title": "Language & Communication Rules",
-        "body": f"Speak in {lang}. Be clear, professional, and concise.",
+        "body": language_rules,
         "is_enabled": True,
     })
 
@@ -199,6 +202,12 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             "body": canonical_prompt,
             "is_enabled": True,
         })
+    logger.info(
+        "Canonical employee context employee_id=%s context_chars=%d context_words=%d language=%s model=%s welcome_chars=%d",
+        getattr(employee, "id", "unknown"), len(canonical_prompt), len(canonical_prompt.split()), lang,
+        _text(configuration.get("llm_model"), employee.llm_model),
+        len(_welcome_message(employee, configuration, lang)),
+    )
     settings = get_settings()
     webhook_url = f"{settings.backend_public_url.rstrip('/')}/api/v1/webhooks/omnidimension/post-call"
     post_call_actions: dict[str, Any] = {

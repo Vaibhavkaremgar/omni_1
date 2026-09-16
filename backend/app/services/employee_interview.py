@@ -776,6 +776,11 @@ class EmployeeInterviewService:
                     "name": session.extracted_configuration.get("name", employee.name),
                     "purpose": session.extracted_configuration.get("goals", [employee.purpose])[0] if isinstance(session.extracted_configuration.get("goals"), list) else employee.purpose,
                     "tasks": [value.get("answer") for value in session.answers if value.get("answer") and not value.get("skipped")],
+                    "original_shabdha_brief": "\n".join(
+                        f"Q: {item['question']}\nA: {item['answer']}"
+                        for item in session.answers
+                        if item.get("answer") and not item.get("skipped")
+                    ),
                 }
         session.messages = [
             *session.messages,

@@ -22,7 +22,7 @@ class AIEmployeeCreate(BaseModel):
     language: str = Field(..., min_length=1, max_length=100)
     creation_mode: CreationMode = "chat"
     direct_prompt: str | None = Field(default=None, max_length=30000)
-    selected_template_id: str = Field(..., min_length=1, max_length=120)
+    selected_template_id: str | None = Field(default=None, min_length=1, max_length=120)
     selected_template_version: int = Field(default=1, ge=1)
     template_values: dict | None = None
 

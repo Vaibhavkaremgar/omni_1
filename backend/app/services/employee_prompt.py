@@ -13,9 +13,14 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
     if purpose.casefold() == "to be defined through the builder":
         purpose = ""
     if purpose: sections.append(("IDENTITY AND ROLE", f"You are {name}. {purpose}"))
+    shabdha_brief = _text(configuration.get("original_shabdha_brief"))
     direct_prompt = _text(configuration.get("direct_prompt"))
-    if direct_prompt:
-        sections.append(("ORIGINAL SHABDHA BRIEF", direct_prompt))
+    creation_mode = _text(configuration.get("creation_mode")).casefold()
+    if shabdha_brief:
+        sections.append(("ORIGINAL SHABDHA BRIEF", shabdha_brief))
+    elif direct_prompt:
+        title = "ORIGINAL CUSTOMER PROMPT" if creation_mode == "prompt" else "ORIGINAL SHABDHA BRIEF"
+        sections.append((title, direct_prompt))
     for title, keys in ((
         ("OBJECTIVE", ("objective", "conversation_objective", "desired_outcomes")),
         ("ROLE", ("role", "job_role")),
@@ -36,12 +41,14 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         ("ADDITIONAL INSTRUCTIONS", ("system_prompt", "additional_information", "other_information")),
     )):
         value = next((_text(configuration.get(key)) for key in keys if _text(configuration.get(key))), "")
+        if title == "ADDITIONAL INSTRUCTIONS" and value and direct_prompt and value == direct_prompt:
+            value = ""
         if value: sections.append((title, value))
     language = _text(configuration.get("language"))
     if language: sections.append(("LANGUAGE", f"Speak in {language}. Follow the caller's language preference when appropriate."))
     # Preserve later-added business fields instead of silently dropping them.
     consumed = {
-        "name", "purpose", "language", "llm_provider", "llm_model", "voice", "call_type", "greeting", "transfer", "end_call",
+        "name", "purpose", "language", "creation_mode", "original_shabdha_brief", "direct_prompt", "llm_provider", "llm_model", "voice", "call_type", "greeting", "transfer", "end_call",
         "objective", "conversation_objective", "desired_outcomes", "role", "job_role", "responsibilities", "goals", "tasks",
         "products", "products_services", "target_customers", "target_callers", "audience", "tone", "personality",
         "communication_style", "conversation_behavior", "conversation_flow", "workflow", "call_flow", "discovery_questions",
