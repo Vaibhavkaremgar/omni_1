@@ -50,8 +50,11 @@ def payload():
         "call_type": "inbound",
         "llm_provider": "OpenAI",
         "llm_model": "gpt-4o-mini",
-        "language": "en-US",
+        "language": "English",
         "creation_mode": "chat",
+        "selected_template_id": "pontis_sales_v1",
+        "selected_template_version": 1,
+        "template_values": {"business_name": "Test Business", "product_or_service": "Test service", "target_customer": "Test customers", "service_area": "Hyderabad", "lead_qualification_questions": "Need", "sales_team_contact": "100", "working_hours": "9-5"},
     }
 
 
@@ -65,6 +68,42 @@ def test_unauthenticated_employee_request_is_rejected():
     with TestClient(app) as client:
         response = client.get("/api/v1/employees")
     assert response.status_code == 401
+
+
+def test_employee_creation_requires_template_and_supported_language(employee_database, monkeypatch):
+    db, _, _ = employee_database
+    monkeypatch.setattr(employee_endpoint, "get_settings", lambda: SimpleNamespace(effective_llm_provider="groq", effective_llm_model="openai/gpt-oss-20b"))
+    client = client_for(db, "employee-user-a", monkeypatch)
+    base = payload()
+    with client:
+        for field in ("selected_template_id", "language"):
+            invalid = {key: value for key, value in base.items() if key != field}
+            assert client.post("/api/v1/employees", json=invalid, headers={"Authorization": "Bearer a"}).status_code == 422
+        invalid_template = {**base, "selected_template_id": "not-a-pontis-template"}
+        assert client.post("/api/v1/employees", json=invalid_template, headers={"Authorization": "Bearer a"}).status_code == 422
+        invalid_version = {**base, "selected_template_version": 99}
+        assert client.post("/api/v1/employees", json=invalid_version, headers={"Authorization": "Bearer a"}).status_code == 422
+        invalid_language = {**base, "language": "Klingon"}
+        assert client.post("/api/v1/employees", json=invalid_language, headers={"Authorization": "Bearer a"}).status_code == 422
+
+
+def test_all_creation_modes_persist_template_and_customer_prompt(employee_database, monkeypatch):
+    db, _, _ = employee_database
+    monkeypatch.setattr(employee_endpoint, "get_settings", lambda: SimpleNamespace(effective_llm_provider="groq", effective_llm_model="openai/gpt-oss-20b"))
+    client = client_for(db, "employee-user-a", monkeypatch)
+    with client:
+        for mode in ("chat", "prompt"):
+            request = {**payload(), "name": f"{mode} employee", "creation_mode": mode, "language": "Telugu"}
+            if mode == "prompt":
+                request["direct_prompt"] = "Help callers understand our configured service and ask one question at a time."
+            response = client.post("/api/v1/employees", json=request, headers={"Authorization": "Bearer a"})
+            assert response.status_code == 201
+            configuration = response.json()["configuration"]
+            assert configuration["selected_template_id"] == "pontis_sales_v1"
+            assert configuration["selected_template_version"] == 1
+            assert configuration["language"] == "Telugu"
+            if mode == "prompt":
+                assert request["direct_prompt"] in configuration["direct_prompt"]
 
 
 def test_tenant_can_create_and_read_own_draft(employee_database, monkeypatch):
@@ -83,7 +122,7 @@ def test_tenant_can_create_and_read_own_draft(employee_database, monkeypatch):
             assert body["status"] == "draft"
             assert "llm_provider" not in body
             assert "llm_model" not in body
-            assert body["language"] == "en-US"
+            assert body["language"] == "English"
             assert body["creation_mode"] == "chat"
             employee_id = body["id"]
 

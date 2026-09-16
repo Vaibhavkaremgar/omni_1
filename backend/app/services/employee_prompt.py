@@ -10,6 +10,8 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
     sections: list[tuple[str, str]] = []
     name = _text(configuration.get("name")) or "AI employee"
     purpose = _text(configuration.get("purpose"))
+    if purpose.casefold() == "to be defined through the builder":
+        purpose = ""
     if purpose: sections.append(("IDENTITY AND ROLE", f"You are {name}. {purpose}"))
     direct_prompt = _text(configuration.get("direct_prompt"))
     if direct_prompt:

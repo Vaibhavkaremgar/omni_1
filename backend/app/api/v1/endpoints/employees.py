@@ -26,7 +26,7 @@ from app.services.employee_configuration import (
     strip_customer_internal_configuration,
 )
 from app.services.voice_catalog import public_voice_catalog
-from app.services.employee_templates import template_library, render_template
+from app.services.employee_templates import template_library, render_template, get_template
 
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -179,6 +179,12 @@ def create_employee(
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AIEmployeeRead:
+    try:
+        template = get_template(payload.selected_template_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail="A valid Pontis employee template is required") from exc
+    if payload.selected_template_version != template["template_version"]:
+        raise HTTPException(status_code=422, detail="The selected template version is not available")
     settings = get_settings()
     provider = settings.effective_llm_provider
     model = settings.effective_llm_model
@@ -214,6 +220,9 @@ def create_employee(
                 "llm_model": employee.llm_model,
                 "language": employee.language,
                 "creation_mode": employee.creation_mode,
+                "selected_template_id": template["id"],
+                "selected_template_version": template["template_version"],
+                "template_values": payload.template_values or {},
                 **({"direct_prompt": payload.direct_prompt, "system_prompt": payload.direct_prompt} if payload.direct_prompt else {}),
             },
             change_summary="Initial employee draft",

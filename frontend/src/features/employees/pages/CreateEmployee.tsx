@@ -62,13 +62,14 @@ export default function CreateEmployee() {
   };
 
   const start = async () => {
-    if (!name.trim() || !language || (builderMode === 'prompt' && !directPrompt.trim())) return;
+    if (!name.trim() || !language || !selectedTemplate || (builderMode === 'prompt' && !directPrompt.trim())) return;
     setBusy(true);
     try {
       const employee = await backendJson<Employee>('/employees', {
         method: 'POST',
         body: JSON.stringify({
           name: name.trim(), language, creation_mode: builderMode,
+          selected_template_id: selectedTemplate.id, selected_template_version: 1,
           ...(builderMode === 'prompt' ? { direct_prompt: directPrompt.trim() } : {}),
         }),
       });
@@ -286,7 +287,7 @@ export default function CreateEmployee() {
               </div>
               <button
                 onClick={() => void start()}
-                disabled={!name.trim() || !language || busy || (builderMode === 'prompt' && directPrompt.trim().length < 20)}
+                disabled={!name.trim() || !language || !selectedTemplate || busy || (builderMode === 'prompt' && directPrompt.trim().length < 20)}
                 className="mt-8 bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-6 py-3 text-sm font-semibold disabled:opacity-50 transition flex items-center gap-2"
               >
                 {busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Starting Shabdha…</> : 'Continue to Shabdha →'}

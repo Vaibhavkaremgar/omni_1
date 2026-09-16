@@ -255,7 +255,7 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     configured = _text(configuration.get("greeting"))
     if configured and (language in {"English", "English (India)", "English (UK)"} or _contains_language_script(configured, language)):
         return configured
-    purpose = _text(configuration.get("purpose"), employee.purpose).rstrip(".")
+    purpose = _safe_purpose(configuration.get("purpose"), employee.purpose)
     name = employee.name
     if language == "Hindi":
         return f"नमस्ते, मैं {name} हूँ। मैं {purpose} में आपकी मदद करने के लिए यहाँ हूँ। आप किस बारे में जानकारी चाहते हैं?"
@@ -264,6 +264,16 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     if language == "Tamil":
         return f"வணக்கம், நான் {name}. {purpose} தொடர்பாக உங்களுக்கு உதவ இங்கே இருக்கிறேன். உங்களுக்கு என்ன தகவல் தேவை?"
     return f"Hello, I'm {name}. I'm here to help you with {purpose}. What would you like to know?"
+
+
+def _safe_purpose(configured: Any, employee_purpose: Any) -> str:
+    """Never expose an internal schema fallback in a caller-facing greeting."""
+    placeholder = "to be defined through the builder"
+    for value in (configured, employee_purpose):
+        text = _text(value).rstrip(".")
+        if text and text.casefold() != placeholder:
+            return text
+    return "your questions about our configured services"
 
 
 def _contains_language_script(value: str, language: str) -> bool:

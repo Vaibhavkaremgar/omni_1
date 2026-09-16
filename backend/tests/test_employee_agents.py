@@ -46,8 +46,11 @@ def employee_payload():
         "call_type": "inbound",
         "llm_provider": "OpenAI",
         "llm_model": "gpt-4o-mini",
-        "language": "en-US",
+        "language": "English",
         "creation_mode": "chat",
+        "selected_template_id": "pontis_sales_v1",
+        "selected_template_version": 1,
+        "template_values": {"business_name": "Test Business", "product_or_service": "Test service", "target_customer": "Test customers", "service_area": "Hyderabad", "lead_qualification_questions": "Need", "sales_team_contact": "100", "working_hours": "9-5"},
     }
 
 
