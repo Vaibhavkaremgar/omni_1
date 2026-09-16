@@ -137,3 +137,21 @@ def test_post_call_preserves_turn_order_and_accepts_late_analysis(call_database)
     assert call.customer_intent == "Support"
     assert call.key_points == ["Needs assistance"]
     assert call.outcome == "Follow up"
+
+
+def test_request_id_is_not_used_as_provider_call_id_when_webhook_has_real_call_id(call_database):
+    db, tenant_a, _ = call_database
+    employee = create_employee(db, tenant_a)
+    phone = create_number(db, tenant_a)
+    call = create_local_call(db, tenant_a, employee, phone, provider_id=None)
+    payload = {
+        "requestId": "request-7541877",
+        "call_id": "call-actual-991",
+        "call_status": "in_progress",
+        "metadata": {"local_call_id": str(call.id), "provider_request_id": "request-7541877"},
+    }
+    from app.services.call_results import CallResultService
+    CallResultService().process_post_call(db, payload)
+    db.refresh(call)
+    assert call.provider_call_id == "call-actual-991"
+    assert call.dispatch_metadata["provider_request_id"] == "request-7541877"

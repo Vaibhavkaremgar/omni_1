@@ -66,6 +66,7 @@ class CallResultService:
         call.dispatch_metadata = {
             **(call.dispatch_metadata or {}),
             "provider_status": event["provider_status"],
+            "provider_request_id": event.get("provider_request_id") or (call.dispatch_metadata or {}).get("provider_request_id"),
             "post_call_webhook_processed": True,
         }
         if call.status == CallStatus.completed.value and call.duration_seconds is not None:

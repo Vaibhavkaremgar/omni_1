@@ -91,8 +91,8 @@ def normalize_status(value: Any) -> str | None:
 def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
     metadata = _metadata(payload)
     report = payload.get("call_report") if isinstance(payload.get("call_report"), dict) else {}
+    provider_request_id = payload.get("requestId") or payload.get("request_id") or metadata.get("provider_request_id")
     provider_call_id = (payload.get("call_log_id") or payload.get("call_id") or
-                        payload.get("requestId") or payload.get("request_id") or
                         payload.get("id") or _first_value(payload, {"provider_call_id"}))
     provider_status = payload.get("call_status") or payload.get("status") or report.get("status")
     termination_reason = _first_value(payload, {"end_reason", "termination_reason", "hangup_reason", "disconnect_reason", "call_end_reason", "reason"})
@@ -112,6 +112,7 @@ def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
         "local_call_id": metadata.get("local_call_id"),
         "metadata_tenant_id": metadata.get("tenant_id"),
         "provider_call_id": str(provider_call_id) if provider_call_id is not None else None,
+        "provider_request_id": str(provider_request_id) if provider_request_id is not None else None,
         "provider_status": provider_status,
         "termination_reason": str(termination_reason) if termination_reason is not None else None,
         "termination_source": str(termination_source) if termination_source is not None else None,

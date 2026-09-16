@@ -184,14 +184,16 @@ class InstantCallService:
             db.commit()
             raise
 
-        call.provider_call_id = result.provider_call_id
+        if result.provider_call_id:
+            call.provider_call_id = result.provider_call_id
         call.status = CallStatus.queued.value
         call.dispatch_metadata = {
             **(call.dispatch_metadata or {}),
             "provider_status": result.status,
             "provider_agent_id": str(provider_agent_id),
             "dispatch_timestamp": metadata["dispatch_timestamp"],
-            "provider_request_id": str(result.provider_call_id),
+            "provider_request_id": str(result.provider_request_id or result.provider_call_id or ""),
+            "provider_call_id_received_at_dispatch": bool(result.provider_call_id),
         }
         logger.info(
             "[OMNI_DISPATCH_RESULT] local_call_id=%s employee_id=%s employee_version_id=%s "

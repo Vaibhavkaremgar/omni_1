@@ -9,9 +9,10 @@ from .exceptions import OmniDimensionResponseError
 
 @dataclass(frozen=True)
 class ProviderDispatchResult:
-    provider_call_id: str
+    provider_call_id: str | None
     status: str
     metadata: dict[str, Any]
+    provider_request_id: str | None = None
 
 
 class OmniDimensionCallProvider:
@@ -41,9 +42,11 @@ class OmniDimensionCallProvider:
             raise OmniDimensionResponseError("OmniDimension returned an invalid dispatch response.")
         status = str(response.get("status") or "dispatched")
         return ProviderDispatchResult(
-            provider_call_id=str(response["requestId"]),
+            provider_call_id=(str(response.get("callId") or response.get("call_id") or response.get("call_log_id"))
+                              if (response.get("callId") or response.get("call_id") or response.get("call_log_id")) else None),
             status=status,
-            metadata={"status": status},
+            metadata={"status": status, "provider_request_id": str(response["requestId"])},
+            provider_request_id=str(response["requestId"]),
         )
 
     def get_call_log(self, call_log_id: str | int) -> dict[str, Any]:

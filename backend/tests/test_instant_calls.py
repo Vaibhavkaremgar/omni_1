@@ -144,12 +144,13 @@ def test_dispatch_uses_documented_endpoint_and_persists_queued_call(call_databas
             response = api.post("/api/v1/calls/instant", json=request(employee.id, phone.id), headers={"Authorization": "Bearer a"})
             assert response.status_code == 201
             body = response.json()
-            assert body["provider_call_id"] == "3166940"
+            assert body["provider_call_id"] is None
             assert body["status"] == "queued"
             assert "test-call-key" not in response.text
             call = db.scalar(select(Call).where(Call.id == UUID(body["id"])))
             assert call.status == "queued"
-            assert call.provider_call_id == "3166940"
+            assert call.provider_call_id is None
+            assert call.dispatch_metadata["provider_request_id"] == "3166940"
             assert call.employee_version_id == employee.published_version.id
             assert len(seen) == 1
     finally:
