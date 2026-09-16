@@ -225,7 +225,12 @@ def test_same_employee_updates_existing_agent_after_a_draft_edit(agent_database,
             assert calls[2].method == "PUT"
             assert calls[2].url.path == "/api/v1/agents/9003"
             versions = db.scalars(select(AIEmployeeVersion).where(AIEmployeeVersion.employee_id == UUID(employee_id)).order_by(AIEmployeeVersion.version_number)).all()
-            assert versions[0].provider_agent_id == "9003"
+            # The provider identity is unique: only the current published
+            # version owns the provider columns; archived history keeps it in
+            # provider_metadata instead.
+            assert versions[0].provider_agent_id is None
+            assert versions[0].provider_metadata["historical_provider_agent_id"] == "9003"
+            assert versions[-1].provider_agent_id == "9003"
             assert versions[1].provider_agent_id == "9003"
     finally:
         client.close()

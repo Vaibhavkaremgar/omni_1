@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
@@ -103,12 +104,10 @@ def _ensure_draft(employee: AIEmployee, current_user: AuthenticatedUser) -> AIEm
         configuration=_copy_configuration(employee.published_version, employee),
         change_summary="Draft created for editing",
         created_by_user_id=current_user.user.id,
-        # Local edits create a version, not a new voice agent. Retaining this
-        # identity means publishing the draft updates the deployed employee.
-        provider_name=employee.published_version.provider_name if employee.published_version else None,
-        provider_agent_id=employee.published_version.provider_agent_id if employee.published_version else None,
-        provider_status=employee.published_version.provider_status if employee.published_version else None,
-        provider_metadata=employee.published_version.provider_metadata if employee.published_version else None,
+        # The provider identity is unique in the version table. A draft is a
+        # configuration revision, not a second owner of the live agent. The
+        # publisher resolves the current published agent when synchronizing;
+        # historical identity remains available on the archived version.
     )
     employee.versions.append(draft)
     return draft
@@ -457,6 +456,15 @@ def publish_employee(
         return employee_response(employee)
     for version in employee.versions:
         if version.status == VersionStatus.published.value and version.id != draft.id:
+            if version.provider_agent_id and version.provider_name:
+                version.provider_metadata = {
+                    **(version.provider_metadata or {}),
+                    "historical_provider_name": version.provider_name,
+                    "historical_provider_agent_id": version.provider_agent_id,
+                }
+                version.provider_name = None
+                version.provider_agent_id = None
+                version.provider_status = None
             version.status = VersionStatus.archived.value
     draft.status = VersionStatus.published.value
     draft.published_at = datetime.now(timezone.utc)
@@ -465,6 +473,11 @@ def publish_employee(
     for field in ("name", "purpose", "call_type", "language", "creation_mode"):
         if field in draft.configuration:
             setattr(employee, field, draft.configuration[field])
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Employee publish persistence failed employee_id=%s version_id=%s provider_agent_id=%s", employee.id, draft.id, provider_result.provider_id)
+        raise HTTPException(status_code=409, detail="This employee version could not be persisted because its provider agent is already linked to another version. Please retry.") from exc
     db.refresh(employee)
     return employee_response(employee)

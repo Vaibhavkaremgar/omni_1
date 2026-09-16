@@ -36,8 +36,11 @@ class CallResultService:
         if event.get("status") in TERMINAL_STATUSES:
             logger.info(
                 "Call terminated local_call_id=%s provider_call_id=%s termination_source=%s "
+                "employee_id=%s employee_version_id=%s provider_agent_id=%s "
                 "provider_end_reason=%s final_status=%s",
                 call.id, event.get("provider_call_id") or call.provider_call_id,
+                call.employee_id, call.employee_version_id,
+                (call.dispatch_metadata or {}).get("provider_agent_id"),
                 event.get("termination_source") or "provider_webhook",
                 event.get("termination_reason") or "<not_provided>", event.get("provider_status"),
             )

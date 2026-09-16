@@ -37,9 +37,16 @@ class OmniDimensionAgentService:
             len(payload.get("welcome_message", "")), payload.get("languages"),
             payload.get("is_welcome_message_dynamic", False), "voice" in payload,
         )
+        # Draft versions deliberately do not duplicate the unique provider
+        # identity. When publishing a draft, update the currently published
+        # Omni agent; only create an agent when the employee has never been
+        # deployed. This keeps provider and local version history aligned.
+        existing_provider_id = version.provider_agent_id
+        if not existing_provider_id and employee.published_version is not None and employee.published_version.id != version.id:
+            existing_provider_id = employee.published_version.provider_agent_id
         provider_agent = (
-            self.provider.update_agent(version.provider_agent_id, payload)
-            if version.provider_agent_id
+            self.provider.update_agent(existing_provider_id, payload)
+            if existing_provider_id
             else self.provider.create_agent(payload)
         )
         try:

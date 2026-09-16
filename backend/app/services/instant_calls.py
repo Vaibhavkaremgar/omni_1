@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from uuid import UUID
 
@@ -17,6 +18,8 @@ from app.schemas.call import InstantCallRequest
 from app.core.config import get_settings
 from app.services.wallets import InsufficientBalanceError, require_minimum_balance
 from app.services.phone_numbers import PhoneNumberService
+
+logger = logging.getLogger(__name__)
 
 
 class InstantCallError(Exception):
@@ -135,6 +138,9 @@ class InstantCallService:
             "local_call_id": str(call.id),
             "tenant_id": str(tenant_id),
             "employee_id": str(employee.id),
+            "employee_version_id": str(employee.published_version.id),
+            "provider_agent_id": str(provider_agent_id),
+            "dispatch_timestamp": utc_now().isoformat(),
         }
         if lead:
             metadata["lead_id"] = str(lead.id)
@@ -158,7 +164,16 @@ class InstantCallService:
         call.dispatch_metadata = {
             **(call.dispatch_metadata or {}),
             "provider_status": result.status,
+            "provider_agent_id": str(provider_agent_id),
+            "dispatch_timestamp": metadata["dispatch_timestamp"],
+            "provider_request_id": str(result.provider_call_id),
         }
+        logger.info(
+            "Test Call dispatched local_call_id=%s employee_id=%s employee_version_id=%s "
+            "provider_agent_id=%s provider_call_id=%s dispatch_timestamp=%s final_local_status=%s",
+            call.id, employee.id, employee.published_version.id, provider_agent_id,
+            result.provider_call_id, metadata["dispatch_timestamp"], call.status,
+        )
         db.commit()
         db.refresh(call)
         return call
