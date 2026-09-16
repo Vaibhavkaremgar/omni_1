@@ -217,6 +217,16 @@ export default function CallsPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    if (!calls.some(call => call.status === 'queued' || call.status === 'ringing' || call.status === 'in_progress')) return;
+    const timer = window.setInterval(() => {
+      void Promise.all(calls.filter(call => ['queued', 'ringing', 'in_progress'].includes(call.status)).map(call => backendJson<CallRecord>(`/calls/${call.id}/refresh`, { method: 'POST' })))
+        .then(updated => setCalls(current => current.map(call => updated.find(item => item.id === call.id) ?? call)))
+        .catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [calls]);
+
   if (loading) {
     return (
       <div className="flex-1 bg-slate-50 overflow-y-auto">

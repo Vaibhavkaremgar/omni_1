@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, ShieldCheck } from 'lucide-react';
 import { backendJson } from '../../../services/backend/api';
+import { CountryCodeSelect } from '../../../components/forms/CountryCodeSelect';
 
 export interface KycStatus {
   region?: string;
@@ -75,6 +76,7 @@ export default function KycWizard({ region, carrier, phoneNumber, onComplete, on
   const [error, setError] = useState('');
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
   const [phone, setPhone] = useState('');
+  const [phoneCode, setPhoneCode] = useState('+91');
   const [initDone, setInitDone] = useState(false);
   const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
 
@@ -113,7 +115,7 @@ export default function KycWizard({ region, carrier, phoneNumber, onComplete, on
     try {
       const s = await backendJson<KycStatus>('/phone-numbers/kyc/initialize', {
         method: 'POST',
-        body: JSON.stringify({ phone: phone.trim() }),
+        body: JSON.stringify({ phone: `${phoneCode}${phone}`.replace(/[ ()-]/g, '') }),
       });
       setStatus(s);
       setInitDone(true);
@@ -218,13 +220,13 @@ export default function KycWizard({ region, carrier, phoneNumber, onComplete, on
           India requires identity verification before purchasing a number. Enter your mobile number to begin.
         </p>
         <label className="block text-sm font-medium text-slate-700 mb-1">Mobile number</label>
-        <input
+        <div className="flex gap-2"><CountryCodeSelect value={phoneCode} onChange={setPhoneCode} disabled={busy} /><input
           type="tel"
           value={phone}
           onChange={e => setPhone(e.target.value)}
-          placeholder="+91 98765 43210"
+          placeholder="98765 43210"
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
+        /></div>
         {error && <p className="text-sm text-rose-600 mb-3">{error}</p>}
         <button
           onClick={() => void initialize()}

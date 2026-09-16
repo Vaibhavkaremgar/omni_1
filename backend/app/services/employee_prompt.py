@@ -68,6 +68,13 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
     if template:
         sections.append(("TEMPLATE GUARDRAILS", _text(template.get("safety_guardrails"))))
     language = _text(configuration.get("language"))
+    identity_language = language or "the selected language"
+    sections.append(("CALLER DETAILS AND CONFIRMATION", (
+        f"Always collect the caller's full name, mobile number, and profession. "
+        f"Repeat all three details back clearly in {identity_language} and ask whether they are correct before continuing. "
+        "If anything is missing or incorrect, ask the caller to provide or correct that detail, then repeat the complete set and confirm again. "
+        "Do not treat a detail as confirmed until the caller explicitly confirms it."
+    )))
     if language:
         language_rule = f"Speak in {language}. Follow the caller's language preference when appropriate."
         if language == "Telugu":

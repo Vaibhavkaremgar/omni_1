@@ -17,6 +17,7 @@ from app.services.instant_calls import (
     InstantCallService,
     InstantCallValidationError,
 )
+from app.services.call_results import CallResultService
 
 
 router = APIRouter(prefix="/calls", tags=["calls"])
@@ -80,4 +81,36 @@ def get_call(
     call = db.scalar(select(Call).where(Call.id == parsed_call_id, Call.tenant_id == current_user.tenant.id))
     if call is None:
         raise HTTPException(status_code=404, detail="Call not found.")
+    return call
+
+
+@router.post("/{call_id}/refresh", response_model=CallRead)
+def refresh_call(
+    call_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Call:
+    """Pull the provider call log when a post-call webhook was delayed or missed."""
+    try:
+        parsed_call_id = UUID(call_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Call not found") from exc
+    call = db.scalar(select(Call).where(Call.id == parsed_call_id, Call.tenant_id == current_user.tenant.id))
+    if call is None:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if not call.provider_call_id or call.status not in {"queued", "ringing", "in_progress"}:
+        return call
+    try:
+        provider = get_instant_call_service().provider
+        payload = provider.get_call_log(call.provider_call_id)
+        rows = payload.get("call_log_data") if isinstance(payload, dict) else None
+        event = rows[0] if isinstance(rows, list) and rows else payload
+        if isinstance(event, dict):
+            event = {**event, "metadata": {"local_call_id": str(call.id), "tenant_id": str(call.tenant_id)}}
+            refreshed = CallResultService().process_post_call(db, event)
+            if refreshed is not None:
+                return refreshed
+    except Exception:
+        # A transient provider read failure must not break the Calls page.
+        db.refresh(call)
     return call

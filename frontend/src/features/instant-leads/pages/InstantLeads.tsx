@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Loader2, PhoneCall, RefreshCw, ToggleLeft, ToggleRight } from 'lucide-react';
 import { backendFetch, backendJson } from '../../../services/backend/api';
+import { CountryCodeSelect } from '../../../components/forms/CountryCodeSelect';
 
 interface Employee { id: string; name: string; status: string; provider_agent_id?: string | null }
 interface PhoneNumber { id: string; e164_number: string; provider_name: string | null; status: string }
@@ -21,6 +22,7 @@ export default function InstantLeads() {
   const [employeeId, setEmployeeId] = useState(searchParams.get('employee') || '');
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [destination, setDestination] = useState('');
+  const [destinationCode, setDestinationCode] = useState('+91');
   const [customerName, setCustomerName] = useState('');
   const [context, setContext] = useState('');
   const [result, setResult] = useState<CallResult | null>(null);
@@ -140,7 +142,7 @@ export default function InstantLeads() {
   };
 
   const dispatch = async () => {
-    const normalizedDestination = destination.replace(/[ ()-]/g, '');
+    const normalizedDestination = `${destinationCode}${destination}`.replace(/[ ()-]/g, '');
     if (!employeeId || !phoneNumberId || !destination.trim()) {
       setError('Select a published employee and caller number, then enter a customer phone number.');
       return;
@@ -158,7 +160,7 @@ export default function InstantLeads() {
         body: JSON.stringify({
           employee_id: employeeId,
           phone_number_id: phoneNumberId,
-          destination_phone_number: destination,
+          destination_phone_number: normalizedDestination,
           customer_name: customerName || undefined,
           context: context || undefined,
         }),
@@ -337,14 +339,14 @@ export default function InstantLeads() {
                 />
               </label>
               <label className="block text-sm font-medium text-gray-700">
-                Customer phone *
-                <input
+                  Customer phone *
+                <div className="mt-1 flex gap-2"><CountryCodeSelect value={destinationCode} onChange={setDestinationCode} disabled={calling} /><input
                   value={destination}
                   onChange={e => setDestination(e.target.value)}
                   disabled={calling}
-                  placeholder="+15551234567"
+                  placeholder="98765 43210"
                   className="mt-1 w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm font-mono"
-                />
+                /></div>
               </label>
             </div>
 

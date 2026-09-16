@@ -106,7 +106,12 @@ def test_publish_creates_agent_and_persists_provider_state(agent_database, monke
     def handler(request: httpx.Request):
         seen.append(request)
         assert request.url.path == "/api/v1/agents/create"
-        payload = request.read().decode()
+        raw = request.read().decode()
+        import json
+        body = json.loads(raw)
+        assert body["post_call_actions"]["webhook"]["url"].endswith("/api/v1/webhooks/omnidimension/post-call")
+        assert "completed" in body["post_call_actions"]["webhook"]["trigger_call_statuses"]
+        payload = raw
         assert "internal_secret" not in payload
         return httpx.Response(200, json={"id": 9001, "name": "Ava Support", "status": "Completed"})
 

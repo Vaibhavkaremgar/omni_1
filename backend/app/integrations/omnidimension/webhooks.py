@@ -117,7 +117,7 @@ def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
         "provider_call_id": str(provider_call_id) if provider_call_id is not None else None,
         "provider_status": provider_status,
         "status": normalize_status(provider_status),
-        "duration_seconds": _parse_duration(payload.get("call_duration") or payload.get("duration_seconds") or report.get("duration")),
+        "duration_seconds": _parse_duration(payload.get("call_duration") or payload.get("call_duration_in_seconds") or payload.get("duration_seconds") or report.get("duration")),
         "transcript": transcript,
         "transcript_data": transcript_data,
         "summary": payload.get("summary") or payload.get("call_summary") or report.get("summary"),

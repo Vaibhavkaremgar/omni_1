@@ -209,14 +209,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         _text(configuration.get("llm_model"), employee.llm_model),
         len(_welcome_message(employee, configuration, lang)),
     )
-    settings = get_settings()
-    webhook_url = f"{settings.backend_public_url.rstrip('/')}/api/v1/webhooks/omnidimension/post-call"
-    post_call_actions: dict[str, Any] = {
-        "webhook": {
-            "url": webhook_url,
-            "trigger_call_statuses": ["completed", "failed", "no_answer", "busy", "voicemail_detected"],
-        }
-    }
+    post_call_actions = _automatic_post_call_actions()
     extraction = configuration.get("post_call_extraction") or configuration.get("information_to_extract")
     if isinstance(extraction, list):
         variables = [{"key": f"field_{index + 1}", "prompt": str(item)} for index, item in enumerate(extraction) if item]
@@ -261,6 +254,18 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     return payload
 
 
+def _automatic_post_call_actions() -> dict[str, Any]:
+    """Return the platform callback attached to every created/updated agent."""
+    settings = get_settings()
+    webhook_url = f"{settings.backend_public_url.rstrip('/')}/api/v1/webhooks/omnidimension/post-call"
+    return {
+        "webhook": {
+            "url": webhook_url,
+            "trigger_call_statuses": ["completed", "failed", "no_answer", "busy", "voicemail_detected"],
+        }
+    }
+
+
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
     configured = _text(configuration.get("greeting"))
     if configured and (language in {"English", "English (India)", "English (UK)"} or _contains_language_script(configured, language)):
@@ -275,6 +280,10 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     if template:
         purpose = f"{business_name} {template['name']}" if business_name else template["name"]
     name = employee.name
+    if language == "Telugu":
+        # Teluglish: conversational Telugu with the English words customers
+        # naturally use for business details.
+        return f"\u0c39\u0c32\u0c4b, \u0c28\u0c47\u0c28\u0c41 {name}. {purpose} \u0c15\u0c4b\u0c38\u0c02 \u0c2e\u0c40\u0c15\u0c41 help \u0c1a\u0c47\u0c2f\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f \u0c07\u0c15\u0c4d\u0c15\u0c21 \u0c09\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. \u0c2e\u0c40\u0c15\u0c41 \u0c0f details \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f?"
     if language == "Hindi":
         return f"नमस्ते, मैं {name} हूँ। मैं {purpose} में आपकी मदद करने के लिए यहाँ हूँ। आप किस बारे में जानकारी चाहते हैं?"
     if language == "Telugu":
