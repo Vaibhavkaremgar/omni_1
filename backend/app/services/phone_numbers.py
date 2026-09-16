@@ -58,7 +58,9 @@ class PhoneNumberService:
                     e164_number=item.e164_number,
                     provider_name="omnidimension",
                     provider_phone_number_id=item.provider_id,
-                    status=item.status, ownership=PhoneOwnership.platform_demo.value,
+                    # Provider inventory is not automatically platform-shared;
+                    # only explicitly registered platform-demo numbers are global.
+                    status=item.status, ownership=PhoneOwnership.tenant.value,
                     label=item.label,
                     capabilities=item.metadata,
                 )
@@ -95,13 +97,19 @@ class PhoneNumberService:
             db.scalars(
                 select(PhoneNumber)
                 .outerjoin(PlatformDemoPhoneAccess, PlatformDemoPhoneAccess.phone_number_id == PhoneNumber.id)
-                .where((PhoneNumber.tenant_id == tenant_id) | (PlatformDemoPhoneAccess.tenant_id == tenant_id))
+                .where(
+                    (PhoneNumber.tenant_id == tenant_id)
+                    | (PhoneNumber.ownership == PhoneOwnership.platform_demo.value)
+                    | (PlatformDemoPhoneAccess.tenant_id == tenant_id)
+                )
                 .order_by(PhoneNumber.created_at.desc())
             ).all()
         )
 
     @staticmethod
     def can_use(db: Session, phone: PhoneNumber, tenant_id: UUID) -> bool:
+        if phone.ownership == PhoneOwnership.platform_demo.value:
+            return phone.tenant_id is None
         if phone.ownership == PhoneOwnership.tenant.value:
             return phone.tenant_id == tenant_id
         return db.scalar(select(PlatformDemoPhoneAccess.id).where(

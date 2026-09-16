@@ -38,11 +38,23 @@ def register_platform_demo_phone(payload: PlatformDemoPhoneCreate, current_user:
     if db.get(Tenant, target_tenant) is None:
         raise HTTPException(status_code=404, detail="Authorized tenant not found.")
     existing = db.scalar(select(PhoneNumber).where(PhoneNumber.provider_name == payload.provider, PhoneNumber.provider_phone_number_id == payload.provider_phone_number_id))
-    if existing is not None:
-        raise HTTPException(status_code=409, detail="That provider phone ID is already registered.")
-    number = PhoneNumber(e164_number=payload.phone_number, provider_name=payload.provider, provider_phone_number_id=payload.provider_phone_number_id, ownership="platform_demo", status="active", label="Platform demo phone")
-    db.add(number); db.flush()
-    db.add(PlatformDemoPhoneAccess(phone_number_id=number.id, tenant_id=target_tenant))
+    if existing is None:
+        existing = db.scalar(select(PhoneNumber).where(PhoneNumber.e164_number == payload.phone_number))
+    number = existing or PhoneNumber()
+    number.e164_number = payload.phone_number
+    number.provider_name = payload.provider
+    number.provider_phone_number_id = payload.provider_phone_number_id
+    number.ownership = "platform_demo"
+    number.tenant_id = None
+    number.status = "active"
+    number.label = "Platform demo phone"
+    if existing is None:
+        db.add(number); db.flush()
+    # Retain legacy access support for the explicitly authorized tenant, but
+    # global platform ownership no longer depends on this row.
+    access = db.scalar(select(PlatformDemoPhoneAccess).where(PlatformDemoPhoneAccess.phone_number_id == number.id, PlatformDemoPhoneAccess.tenant_id == target_tenant))
+    if access is None:
+        db.add(PlatformDemoPhoneAccess(phone_number_id=number.id, tenant_id=target_tenant))
     db.commit(); db.refresh(number)
     return number
 

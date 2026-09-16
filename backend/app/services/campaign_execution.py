@@ -37,6 +37,7 @@ from app.models.enums import (
 from app.models.phone_number import PhoneNumber
 from app.core.config import get_settings
 from app.services.wallets import InsufficientBalanceError, require_minimum_balance
+from app.services.phone_numbers import PhoneNumberService
 
 
 # ── Errors ────────────────────────────────────────────────────────────────────
@@ -89,13 +90,8 @@ def _require_published_employee(db: Session, employee_id: UUID, tenant_id: UUID)
 
 
 def _require_usable_phone(db: Session, phone_number_id: UUID, tenant_id: UUID) -> PhoneNumber:
-    phone = db.scalar(
-        select(PhoneNumber).where(
-            PhoneNumber.id == phone_number_id,
-            PhoneNumber.tenant_id == tenant_id,
-        )
-    )
-    if phone is None:
+    phone = db.get(PhoneNumber, phone_number_id)
+    if phone is None or not PhoneNumberService.can_use(db, phone, tenant_id):
         raise CampaignExecutionError("Phone number not found.")
     if phone.status != NumberStatus.active.value or not phone.provider_phone_number_id:
         raise CampaignExecutionError("The selected phone number is not available for calling.")
