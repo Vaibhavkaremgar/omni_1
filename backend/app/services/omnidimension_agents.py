@@ -184,7 +184,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         context.append({
             "title": "Published Call Script Source of Truth",
             "body": (
-                "Use these exact six Call Script sections as the authoritative spoken behavior. "
+                "Use these dynamically generated Call Script sections as the authoritative spoken behavior. "
                 "Do not replace them with a regenerated script. Runtime instructions may constrain pacing, safety, and provider behavior, "
                 "but they must not modify or supersede the script below.\n\n"
                 + _format_call_script(saved_script)
@@ -532,14 +532,14 @@ def _canonical_call_script(configuration: dict[str, Any]) -> dict[str, str]:
     script = configuration.get("call_script")
     if not isinstance(script, dict):
         return {}
-    result = {title: _text(script.get(title)) for title in SCRIPT_SECTION_NAMES}
-    return result if all(result.values()) else {}
+    result = {str(title): _text(content) for title, content in script.items() if _text(content)}
+    return result if result else {}
 
 
 def _format_call_script(script: dict[str, str]) -> str:
     return "\n\n".join(
-        f"{index}. {title}\n{script[title]}"
-        for index, title in enumerate(SCRIPT_SECTION_NAMES, 1)
+        f"{index}. {title}\n{content}"
+        for index, (title, content) in enumerate(script.items(), 1)
     )
 
 

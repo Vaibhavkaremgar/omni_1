@@ -208,7 +208,7 @@ def _language_conversation_guidance(language: str) -> str:
         fillers = HINDI_ENGINE_CONTRACT + "\n\n" + fillers
         fillers += " MANDATORY SCRIPT RULE: every Hindi word spoken to callers must be written in Devanagari, mixed naturally with English words like okay, actually, requirement, details, available, budget, price, location, offer, product, service, booking, appointment, confirm, support, team, and follow-up. Never write Hindi in Roman letters."
         hello = "If the caller is silent for approximately 2-3 seconds, say '\u0915\u094d\u092f\u093e \u0906\u092a \u0935\u0939\u093e\u0902 \u0939\u0948\u0902 \u091c\u0940?' to check that they are present, then STOP speaking and WAIT for the caller's response."
-    return f"""The selected conversation language is {selected}. Generate these behaviors dynamically in that language and preserve the existing business, safety, inbound/outbound, interruption, call-lifecycle, research, Knowledge Base, variable, and six-section script rules.
+    return f"""The selected conversation language is {selected}. Generate these behaviors dynamically in that language and preserve the existing business, safety, inbound/outbound, interruption, call-lifecycle, research, Knowledge Base, variable, and dynamically generated script rules.
 
 For every regional-language conversation, code-switch naturally with commonly used English business and conversational words; do not make the speech overly formal or fully translated. Say 'thanks', 'thank you', and 'sorry' in English only. Speak every numeric string digit-by-digit in English, including product names and property terms such as 2 BHK, 3 BHK, 150 square yards, phone numbers, dates, times, prices, quantities, percentages, ages, IDs, model numbers, and codes; for example, 230 must be spoken as 'two three zero', never as 'two hundred thirty' or regional-language number words. Respond as soon as the caller finishes speaking: keep the response concise and do not add an artificial pause or wait for extra silence.
 
@@ -461,7 +461,9 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         idle_phrase = "Are you still there?"
     sections.append(("MANDATORY IDLE CONFIRMATION", f"If the caller becomes silent or idle for 2–3 seconds, ask exactly: '{idle_phrase}' Then STOP speaking and WAIT silently for the caller's response. Do not repeat the previous question, ask a new question, infer an answer, or continue the conversation while waiting. If the caller says 'hello' repeatedly instead of answering, ask the same phrase '{idle_phrase}' and WAIT for the caller's response. This is a mandatory idle-confirmation step, not an optional suggestion."))
     script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else build_call_script(configuration)
-    sections.append(("CANONICAL SIX-SECTION CALL SCRIPT", "\n\n".join(f"{index}. {title}\n{script.get(title, '')}" for index, title in enumerate(SCRIPT_SECTION_NAMES, 1))))
+    script_items = [(title, _text(content)) for title, content in script.items() if _text(content)]
+    script_title = "CANONICAL SIX-SECTION CALL SCRIPT" if tuple(title for title, _ in script_items) == SCRIPT_SECTION_NAMES else "DYNAMIC CALL SCRIPT"
+    sections.append((script_title, "\n\n".join(f"{index}. {title}\n{content}" for index, (title, content) in enumerate(script_items, 1))))
     custom_sections = configuration.get("custom_sections")
     if isinstance(custom_sections, list):
         for item in custom_sections:
@@ -524,16 +526,16 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
 def compose_employee_configuration(configuration: dict[str, Any]) -> dict[str, Any]:
     """Build the one deployable prompt while retaining all original customer input.
 
-    The script is canonical: edits to its six sections must be reflected in the
+    The script is canonical: edits to its configured sections must be reflected in the
     prompt shown in the UI and sent to OmniDimension on the next publish.
     """
     result = normalize_business_identity(configuration)
     result.setdefault("original_requirement", _text(result.get("direct_prompt")) or _text(result.get("purpose")))
     existing_script = result.get("call_script")
-    if not isinstance(existing_script, dict) or any(not _text(existing_script.get(title)) for title in SCRIPT_SECTION_NAMES):
+    if not isinstance(existing_script, dict) or not any(_text(value) for value in existing_script.values()):
         result["call_script"] = build_call_script(result)
     result["conversation_variables"] = _conversation_variables(result)
-    result["opening"] = result["call_script"]["Greeting & Intro"]
+    result["opening"] = result["call_script"].get("Greeting & Intro") or next(iter(result["call_script"].values()), "")
     generated = build_employee_prompt(result)
     result["final_prompt"] = generated
     return result
