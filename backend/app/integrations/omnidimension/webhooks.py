@@ -94,18 +94,23 @@ def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
     provider_request_id = payload.get("requestId") or payload.get("request_id") or metadata.get("provider_request_id")
     provider_call_id = (payload.get("call_log_id") or payload.get("call_id") or
                         payload.get("id") or _first_value(payload, {"provider_call_id"}))
-    provider_status = payload.get("call_status") or payload.get("status") or report.get("status")
-    termination_reason = _first_value(payload, {"end_reason", "termination_reason", "hangup_reason", "disconnect_reason", "call_end_reason", "reason"})
-    termination_source = _first_value(payload, {"termination_source", "end_source", "hangup_source", "disconnected_by"})
+    provider_status = payload.get("call_status") or payload.get("status") or report.get("call_status") or report.get("status")
+    termination_reason = _first_value(payload, {"end_reason", "termination_reason", "hangup_reason", "disconnect_reason", "call_end_reason", "reason"}) or _first_value(report, {"end_reason", "termination_reason", "hangup_reason", "disconnect_reason", "call_end_reason", "reason"})
+    termination_source = _first_value(payload, {"termination_source", "end_source", "hangup_source", "disconnected_by"}) or _first_value(report, {"termination_source", "end_source", "hangup_source", "disconnected_by"})
     event_type = payload.get("event_type") or payload.get("type") or payload.get("event") or report.get("event_type")
     event_timestamp = payload.get("event_timestamp") or payload.get("timestamp") or payload.get("created_at")
-    recording_url = payload.get("recording_url") or report.get("recording_url")
+    recording_url = payload.get("recording_url") or report.get("recording_url") or report.get("recording")
+    if isinstance(recording_url, dict):
+        recording_url = recording_url.get("url") or recording_url.get("uri")
     transcript = (payload.get("call_conversation") or payload.get("full_conversation") or
-                  payload.get("transcript") or report.get("full_conversation"))
+                  payload.get("transcript") or report.get("call_conversation") or
+                  report.get("full_conversation") or report.get("transcript") or report.get("conversation"))
     extracted = payload.get("extracted_variables") or payload.get("extracted_attributes") or report.get("extracted_variables")
     analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else report.get("analysis") if isinstance(report.get("analysis"), dict) else {}
     sentiment = payload.get("sentiment_score") or payload.get("sentiment") or report.get("sentiment") or analysis.get("sentiment")
     structured = payload.get("interactions") or payload.get("call_log_data") or report.get("interactions")
+    if structured is None and isinstance(transcript, list):
+        structured = transcript
     transcript_data = _parse_turns(structured)
     extracted = extracted or analysis.get("extracted_variables") or analysis.get("extracted_attributes")
     return {
@@ -119,8 +124,8 @@ def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
         "event_type": str(event_type) if event_type is not None else None,
         "event_timestamp": event_timestamp,
         "status": normalize_status(provider_status),
-        "duration_seconds": _parse_duration(payload.get("call_duration") or payload.get("call_duration_in_seconds") or payload.get("duration_seconds") or report.get("duration")),
-        "transcript": transcript,
+        "duration_seconds": _parse_duration(payload.get("call_duration") or payload.get("call_duration_in_seconds") or payload.get("duration_seconds") or report.get("call_duration") or report.get("duration")),
+        "transcript": _transcript_text(transcript),
         "transcript_data": transcript_data,
         "summary": payload.get("summary") or payload.get("call_summary") or report.get("summary") or analysis.get("summary"),
         "recording_url": recording_url if isinstance(recording_url, str) else None,
@@ -157,3 +162,20 @@ def _parse_turns(value: Any) -> list[dict[str, str]] | None:
             if text not in (None, ""):
                 turns.append({"speaker": normalized_speaker, "text": str(text)})
     return turns or None
+
+
+def _transcript_text(value: Any) -> str | None:
+    """Keep the SQL text field valid while preserving structured turns separately."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        lines = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            speaker = item.get("speaker") or item.get("role") or ""
+            text = item.get("text") or item.get("content") or item.get("user_query") or item.get("bot_response")
+            if text not in (None, ""):
+                lines.append(f"{speaker}: {text}".strip())
+        return "\n".join(lines) or None
+    return str(value) if value not in (None, "") else None

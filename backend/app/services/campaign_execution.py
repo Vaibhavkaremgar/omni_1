@@ -218,6 +218,8 @@ def dispatch_single_contact(
     call.dispatch_metadata = {
         **(call.dispatch_metadata or {}),
         "provider_status": result.status,
+        "provider_request_id": getattr(result, "provider_request_id", None),
+        "provider_call_id_received_at_dispatch": bool(result.provider_call_id),
     }
     contact.last_call_id = call.id
     db.commit()

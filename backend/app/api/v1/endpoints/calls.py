@@ -100,15 +100,22 @@ def refresh_call(
     call = db.scalar(select(Call).where(Call.id == parsed_call_id, Call.tenant_id == current_user.tenant.id))
     if call is None:
         raise HTTPException(status_code=404, detail="Call not found")
-    if not call.provider_call_id or call.status not in {"queued", "ringing", "in_progress"}:
+    if call.status not in {"queued", "ringing", "in_progress"}:
         return call
     try:
         provider = get_instant_call_service().provider
-        payload = provider.get_call_log(call.provider_call_id)
+        request_id = (call.dispatch_metadata or {}).get("provider_request_id")
+        payload = (
+            provider.get_call_log(call.provider_call_id)
+            if call.provider_call_id
+            else provider.get_call_log_by_request_id(str(request_id)) if request_id else None
+        )
+        if not payload:
+            return call
         logger.info(
             "Provider call-log refresh local_call_id=%s provider_call_id=%s top_level_keys=%s "
             "status=%s end_reason=%s termination_source=%s",
-            call.id, call.provider_call_id, list(payload) if isinstance(payload, dict) else type(payload).__name__,
+            call.id, call.provider_call_id or request_id, list(payload) if isinstance(payload, dict) else type(payload).__name__,
             payload.get("call_status") or payload.get("status") if isinstance(payload, dict) else None,
             payload.get("end_reason") or payload.get("termination_reason") or payload.get("hangup_reason") if isinstance(payload, dict) else None,
             payload.get("termination_source") or payload.get("end_source") if isinstance(payload, dict) else None,

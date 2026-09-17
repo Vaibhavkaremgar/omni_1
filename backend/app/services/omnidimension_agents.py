@@ -222,8 +222,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "say that clearly and ask what help they need. Keep the conversation moving from the caller's first question. "
         "Do not restart with name or mobile-number collection. Collect caller details only near the end, when needed for a confirmed business follow-up or next action."
     )
-    if _text(configuration.get("call_type")).casefold() == "outbound":
-        opening_body += " This is outbound: immediately after the welcome ask 'Mee peru cheppagalara?' and store the caller's answer as customer_name. Never use the employee name as customer_name."
+    if _text(configuration.get("call_type")).casefold() in {"inbound", "outbound", "both"}:
+        opening_body += " Immediately after the welcome ask 'Mee peru cheppagalara?' and store the caller's answer as customer_name. Never use the employee name as customer_name. This applies to incoming and outgoing calls."
     context.append({
         "title": "Opening State and First Caller Response",
         "body": opening_body,

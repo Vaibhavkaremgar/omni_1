@@ -128,7 +128,7 @@ export default function EmployeesPage() {
               <Users className="w-7 h-7 text-blue-500" />
             </div>
             <h2 className="text-base font-semibold text-gray-900">No employees yet</h2>
-            <p className="mt-1 text-sm text-gray-500">Create your first AI employee with Shabdha.</p>
+            <p className="mt-1 text-sm text-gray-500">Tell Shabdha what your employee needs to do, and we’ll build it with you.</p>
             <Link
               to="/employees/new"
               className="inline-flex items-center gap-2 mt-5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-5 py-2.5 text-sm font-semibold transition"

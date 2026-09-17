@@ -676,3 +676,12 @@ def test_grounded_business_research_reaches_omni_context_without_source_metadata
     research = next(item for item in payload["context_breakdown"] if item["title"] == "Verified Business Research")
     assert "Open weekdays" in research["body"]
     assert "https://example.com" not in research["body"]
+
+
+def test_incoming_agent_uses_same_caller_name_first_flow():
+    employee = SimpleNamespace(name="Incoming Assistant", purpose="Answer customer questions", call_type="inbound", llm_model="gpt-4o", language="Telugu")
+    payload = map_employee_configuration(employee, {"name": employee.name, "purpose": employee.purpose, "call_type": "inbound", "language": "Telugu"})
+    bodies = "\n".join(section["body"] for section in payload["context_breakdown"])
+    assert "Mee peru cheppagalara?" in bodies
+    assert "customer_name" in bodies
+    assert payload["call_type"] == "Incoming"

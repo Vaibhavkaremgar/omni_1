@@ -18,11 +18,11 @@ def test_public_voice_catalog_preserves_frontend_contract(monkeypatch):
 
     response = voice_catalog_service.public_voice_catalog()
 
-    assert len(response) == 5
+    assert len(response) == 6
     charan = next(item for item in response if item["name"] == "Charan - Clear Concierge")
     assert charan["provider"] == "cartesia"
     assert "provider_voice_id" not in charan
-    assert [item["name"] for item in response] == ["Achird", "Aoede", "Charon", "Kore", "Charan - Clear Concierge"]
+    assert [item["name"] for item in response] == ["Achird", "Aoede", "Charon", "Kore", "Charan - Clear Concierge", "Ramana"]
     assert all("id" in item and "provider_voice_id" not in item for item in response)
     assert all({"name", "tier", "gender", "provider", "supports_cloning"} <= item.keys() for item in response)
 
@@ -40,8 +40,23 @@ def test_global_provider_catalog_is_not_treated_as_account_cloned_voices(monkeyp
     monkeypatch.setattr(voice_catalog_service, "OmniDimensionClient", MustNotBeCalled, raising=False)
 
     assert voice_catalog_service.public_voice_catalog() == [
-        {key: value for key, value in voice_catalog_service.BUILTIN_VOICES[0].items() if key != "provider_voice_id"}
+        {key: value for key, value in voice_catalog_service.BUILTIN_VOICES[0].items() if key != "provider_voice_id"},
+        {key: value for key, value in voice_catalog_service.BUILTIN_VOICES[1].items() if key != "provider_voice_id"},
     ]
+
+
+def test_builtin_ramana_voice_is_available_without_catalog_configuration(monkeypatch):
+    monkeypatch.setattr(
+        voice_catalog_service,
+        "get_settings",
+        lambda: type("Settings", (), {"omnidimension_voice_catalog_json": ""})(),
+    )
+
+    ramana = next(item for item in voice_catalog_service.public_voice_catalog() if item["id"] == "cloned_cartesia_ramana")
+    assert ramana["name"] == "Ramana"
+    assert ramana["provider"] == "cartesia"
+    assert ramana["is_cloned"] is True
+    assert voice_catalog_service.provider_voice_id("cloned_cartesia_ramana") == "a56d7710-2e82-4522-b6d5-e3f2786630f9"
 
 
 def test_configured_cloned_voices_are_normalized_and_resolved(monkeypatch):

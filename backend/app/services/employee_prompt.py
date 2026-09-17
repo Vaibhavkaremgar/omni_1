@@ -141,8 +141,8 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         "If the caller asks what services are available, explain the configured services or say that the available details are not configured; "
         "never answer with another introduction. Treat every caller turn as progress in the same conversation."
     )
-    if _text(configuration.get("call_type")).casefold() == "outbound":
-        opening_rules += " This is an outbound call. Immediately after the welcome, ask exactly one short identity question: 'Mee peru cheppagalara?' (What is your name?). Treat the caller's answer as customer_name, repeat it once for confirmation, and then continue to the business objective. Never use the AI employee's name as customer_name."
+    if _text(configuration.get("call_type")).casefold() in {"inbound", "outbound", "both"}:
+        opening_rules += " Immediately after the welcome, ask exactly one short identity question: 'Mee peru cheppagalara?' (What is your name?). Treat the caller's answer as customer_name, repeat it once for confirmation, and then continue to the business objective. Never use the AI employee's name as customer_name. This rule applies to both incoming and outgoing calls."
     sections.append(("OPENING AND FIRST CALLER TURN", opening_rules))
     shabdha_brief = _text(configuration.get("original_shabdha_brief"))
     direct_prompt = _text(configuration.get("direct_prompt"))
@@ -185,8 +185,8 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         "Do not ask for profession unless it is genuinely relevant to the configured business objective. "
         "Repeat any collected detail once for confirmation, then continue or close based on the caller's response."
     )
-    if _text(configuration.get("call_type")).casefold() == "outbound":
-        details_rule = "For this outbound call, the first caller question after the welcome must be 'Mee peru cheppagalara?'. Store the caller's answer as customer_name; the employee/assistant name is never the customer name. Ask mobile number and any other follow-up details only later when the business objective requires them."
+    if _text(configuration.get("call_type")).casefold() in {"inbound", "outbound", "both"}:
+        details_rule = "For this incoming or outgoing call, the first caller question after the welcome must be 'Mee peru cheppagalara?'. Store the caller's answer as customer_name; the employee/assistant name is never the customer name. Ask mobile number and any other follow-up details only later when the business objective requires them."
     sections.append(("CALLER DETAILS AT THE END", details_rule))
     if language:
         language_rule = f"Speak in {language}. Follow the caller's language preference when appropriate."

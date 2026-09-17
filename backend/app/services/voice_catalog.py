@@ -16,14 +16,24 @@ BUILTIN_VOICES = [{
     "supports_cloning": False,
     "languages": ["English", "English (India)"],
     "is_cloned": False,
+}, {
+    "id": "cloned_cartesia_ramana",
+    "name": "Ramana",
+    "tier": "cloned",
+    "gender": "male",
+    "provider": "cartesia",
+    "provider_voice_id": "a56d7710-2e82-4522-b6d5-e3f2786630f9",
+    "supports_cloning": True,
+    "languages": ["English"],
+    "is_cloned": True,
 }]
 
 def voice_catalog() -> list[dict[str, Any]]:
     raw = getattr(get_settings(), "omnidimension_voice_catalog_json", "") or ""
-    if not raw.strip(): return []
+    if not raw.strip(): return BUILTIN_VOICES.copy()
     try: values = json.loads(raw)
-    except json.JSONDecodeError: return []
-    if not isinstance(values, list): return []
+    except json.JSONDecodeError: return BUILTIN_VOICES.copy()
+    if not isinstance(values, list): return BUILTIN_VOICES.copy()
     configured = []
     for item in values:
         if not isinstance(item, dict) or not item.get("id") or not item.get("provider_voice_id"):

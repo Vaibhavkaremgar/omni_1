@@ -169,4 +169,9 @@ class CallResultService:
         provider_call_id = event.get("provider_call_id")
         if provider_call_id:
             return db.scalar(select(Call).where(Call.provider_call_id == provider_call_id))
+        provider_request_id = event.get("provider_request_id")
+        if provider_request_id:
+            return db.scalar(select(Call).where(
+                Call.dispatch_metadata["provider_request_id"].as_string() == str(provider_request_id)
+            ))
         return None
