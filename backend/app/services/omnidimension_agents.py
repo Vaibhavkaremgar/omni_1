@@ -384,6 +384,30 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         # every agent, the provider's internal LLM tool can hang up after a
         # single answered question or after a false silence detection.
         "is_end_call_enabled": False,
+        # Provider-level idle handling: prompt the caller once after a short
+        # pause and wait for speech instead of advancing the workflow.
+        "user_idle_threshold_sec": 3,
+        "first_ideal_message": (
+            "Vinipisthunda andi?"
+            if lang == "Telugu" else
+            "Kya aap sun rahe hain ji?"
+            if lang == "Hindi" else
+            "Are you still there?"
+        ),
+        "second_ideal_message": (
+            "Vinipisthunda andi?"
+            if lang == "Telugu" else
+            "Kya aap sun rahe hain ji?"
+            if lang == "Hindi" else
+            "Are you still there?"
+        ),
+        "last_ideal_message": (
+            "Vinipisthunda andi?"
+            if lang == "Telugu" else
+            "Kya aap sun rahe hain ji?"
+            if lang == "Hindi" else
+            "Are you still there?"
+        ),
     }
 
     configured_end_call = configuration.get("end_call")
