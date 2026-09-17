@@ -523,6 +523,19 @@ def test_outbound_prompt_requires_offer_before_qualification():
     assert "Never open with 'What is your requirement?'" in prompt
 
 
+def test_outbound_welcome_turns_a_festival_brief_into_an_offer():
+    employee = SimpleNamespace(name="Nani", purpose="Call customers", call_type="outbound", llm_model="m", language="Telugu")
+    payload = map_employee_configuration(employee, {
+        "name": "Nani", "business_name": "VSL Electronics", "call_type": "outbound",
+        "purpose": "he needs to call the customers and explain about the offers he has and know if the customer is interested in the buying the printers as this Ganesh Chaturthi we are giving 30% festival discounts.",
+        "language": "Telugu", "llm_model": "m",
+    })
+    welcome = payload["welcome_message"]
+    assert "Ganesh Chaturthi offer lo printers meeda 30% festival discounts nadusthundhi" in welcome
+    assert "he needs to call" not in welcome
+    assert "ఆసక్తి ఉందా?" in welcome
+
+
 def test_prompt_answers_first_turn_and_defers_customer_details():
     from app.services.employee_prompt import build_employee_prompt
 

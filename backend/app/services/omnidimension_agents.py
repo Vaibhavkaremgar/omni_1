@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 import logging
 from typing import Any
@@ -416,7 +417,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         payload["is_end_call_enabled"] = True
         payload["end_call"] = {
             "condition": _text(configured_end_call["condition"]),
-            "message": _text(configured_end_call.get("message")) or "Thank you for your time.",
+            "message": _text(configured_end_call.get("message")) or _default_end_call_message(lang),
             "message_prompt": _text(configured_end_call.get("message_prompt")) or (
                 "End politely only after the caller clearly indicates they are finished."
             ),
@@ -535,6 +536,8 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
         # Teluglish: conversational Telugu with the English words customers
         # naturally use for business details.
         if business_name:
+            if outbound:
+                return f"నమస్కారం, నేను {name}. {business_name} తరఫున మాట్లాడుతున్నాను. మా దగ్గర {business_purpose} ఉంది. దీని గురించి మరింత తెలుసుకోవడానికి మీకు ఆసక్తి ఉందా?"
             return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {business_name} \u0c24\u0c30\u0c2b\u0c41\u0c28 {((business_purpose + ' gurinchi matladataniki call chesanu.') if outbound else '\u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f.')}"
         if outbound:
             return f"Namaskaram, nenu {name}. {business_purpose} gurinchi matladataniki call chesanu. Dini gurinchi meeru inka telusukovalani anukuntunnara?"
@@ -564,10 +567,58 @@ def _outbound_offer_summary(configuration: dict[str, Any], purpose: str) -> str:
         for key in ("product_or_service", "products", "products_services", "offer", "service")
         if _text(configuration.get(key)) or _text(values.get(key))
     ), "")
-    description = _text(configuration.get("business_description"))
-    # Prefer a specific configured product/service.  The purpose remains the
-    # safe fallback when no offer detail has been supplied.
-    return product or description or purpose
+    brief = _text(configuration.get("business_description")) or purpose
+    promotion = _promotion_from_brief(brief)
+    if product:
+        return f"{product} {promotion}".strip()
+    if promotion:
+        return promotion
+    # Never speak the owner's workflow instruction (for example, "he needs to
+    # call customers...") to a customer. A neutral fallback is preferable to
+    # exposing internal wording when no specific offer has been configured.
+    if _looks_like_internal_instruction(brief):
+        return "our current printer offer"
+    return brief
+
+
+def _promotion_from_brief(brief: str) -> str:
+    """Extract a customer-facing festival promotion from a free-form brief."""
+    normalized = " ".join(brief.split())
+    match = re.search(
+        r"(?:buy(?:ing)?\s+(?:the\s+)?)?(?P<product>[A-Za-z][A-Za-z0-9 &/-]{1,60}?)?\s*"
+        r"(?:as\s+)?this\s+(?P<festival>[A-Za-z][A-Za-z ]{2,40}?)\s+"
+        r"(?:we\s+are|we're)\s+(?:giving|offering)\s+(?P<discount>[^.,;]*?(?:discount|offer)[^.,;]*)",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    product = (match.group("product") or "").strip(" -")
+    # The pattern may include workflow words before the product; retain only a
+    # clean final product phrase when it contains a known product noun.
+    product_match = re.search(r"(printers?|products?|services?)\b", product, flags=re.IGNORECASE)
+    product = product_match.group(1) if product_match else ""
+    festival = match.group("festival").strip()
+    discount = match.group("discount").strip().rstrip(".")
+    # Keep the offer terms in English, but let the Telugu welcome own the
+    # sentence structure: "maa daggara Ganesh Chaturthi offer lo printers
+    # meeda 30% discount nadusthundhi."
+    offer = f"{festival} offer lo {product} meeda {discount} nadusthundhi".strip()
+    return re.sub(r"\s+", " ", offer)
+
+
+def _looks_like_internal_instruction(value: str) -> bool:
+    lowered = value.casefold()
+    return any(marker in lowered for marker in (
+        "needs to call", "need to call", "call the customer", "call customers",
+        "explain about", "know if the customer", "know whether the customer",
+    ))
+
+
+def _default_end_call_message(language: str) -> str:
+    if language == "Telugu":
+        return "Thank you andi, have a nice day."
+    return "Thank you for your time."
 
 
 def _safe_purpose(configured: Any, employee_purpose: Any) -> str:
