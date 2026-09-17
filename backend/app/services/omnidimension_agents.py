@@ -584,13 +584,19 @@ def _outbound_offer_summary(configuration: dict[str, Any], purpose: str) -> str:
 def _promotion_from_brief(brief: str) -> str:
     """Extract a customer-facing festival promotion from a free-form brief."""
     normalized = " ".join(brief.split())
-    match = re.search(
+    patterns = (
+        # "Tell leads the current Vinayaka Chaturthi offer of 30% discount
+        # on printers" -> Telugu-led offer phrase below.
+        r"(?:the\s+)?(?:current\s+)?(?P<festival>(?:[A-Za-z]+\s+)?Chaturthi|festival\s+season)\s+offer\s*"
+        r"(?:of\s+)?(?P<discount>[^.,;]*?(?:discount|off))\s+(?:on|for)\s+(?P<product>[A-Za-z][A-Za-z0-9 &/-]{1,60})",
+        # "printers with 50% off on this festival season"
+        r"(?P<product>printers?|products?|services?)\s+with\s+(?P<discount>[^.,;]*?(?:discount|off))\s+"
+        r"(?:on|for)\s+(?:this\s+)?(?P<festival>[A-Za-z][A-Za-z ]{2,40})",
         r"(?:buy(?:ing)?\s+(?:the\s+)?)?(?P<product>[A-Za-z][A-Za-z0-9 &/-]{1,60}?)?\s*"
         r"(?:as\s+)?this\s+(?P<festival>[A-Za-z][A-Za-z ]{2,40}?)\s+"
         r"(?:we\s+are|we're)\s+(?:giving|offering)\s+(?P<discount>[^.,;]*?(?:discount|offer)[^.,;]*)",
-        normalized,
-        flags=re.IGNORECASE,
     )
+    match = next((re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns if re.search(pattern, normalized, flags=re.IGNORECASE)), None)
     if not match:
         return ""
     product = (match.group("product") or "").strip(" -")
@@ -612,6 +618,7 @@ def _looks_like_internal_instruction(value: str) -> bool:
     return any(marker in lowered for marker in (
         "needs to call", "need to call", "call the customer", "call customers",
         "explain about", "know if the customer", "know whether the customer",
+        "employee must call", "employee should call", "tell the leads",
     ))
 
 

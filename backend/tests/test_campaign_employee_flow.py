@@ -536,6 +536,26 @@ def test_outbound_welcome_turns_a_festival_brief_into_an_offer():
     assert "ఆసక్తి ఉందా?" in welcome
 
 
+@pytest.mark.parametrize("brief, expected_offer", [
+    (
+        "The employee must call the leads and tell the current Vinayaka Chaturthi offer of 30% discount on printers.",
+        "Vinayaka Chaturthi offer lo printers meeda 30% discount nadusthundhi",
+    ),
+    (
+        "The employee must call the leads about printers with 50% off on this festival season.",
+        "festival season offer lo printers meeda 50% off nadusthundhi",
+    ),
+])
+def test_outbound_welcome_converts_common_festival_offer_briefs_to_telugu(brief, expected_offer):
+    employee = SimpleNamespace(name="Nani", purpose=brief, call_type="outbound", llm_model="m", language="Telugu")
+    payload = map_employee_configuration(employee, {
+        "name": "Nani", "business_name": "VSL Electronics", "call_type": "outbound",
+        "purpose": brief, "language": "Telugu", "llm_model": "m",
+    })
+    assert expected_offer in payload["welcome_message"]
+    assert "The employee must call" not in payload["welcome_message"]
+
+
 def test_prompt_answers_first_turn_and_defers_customer_details():
     from app.services.employee_prompt import build_employee_prompt
 
