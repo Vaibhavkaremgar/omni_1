@@ -13,6 +13,7 @@ from app.webhooks.router import router as webhooks_router
 from app.api.v1.endpoints.billing import router as billing_router
 from app.api.v1.endpoints.instant_leads import router as instant_leads_router
 from app.api.v1.endpoints.admin import router as admin_router
+from app.api.v1.endpoints.debug import router as debug_router
 
 
 api_router = APIRouter(prefix="/api/v1")
@@ -29,3 +30,4 @@ api_router.include_router(settings_router)
 api_router.include_router(integrations_router)
 api_router.include_router(instant_leads_router)
 api_router.include_router(admin_router)
+api_router.include_router(debug_router)
