@@ -14,7 +14,7 @@ type Session = { messages: Array<{ role: string; content: string }>; current_que
 function NewEmployeeChat() {
   const navigate = useNavigate();
   const [requirement, setRequirement] = useState('');
-  const [companyName, setCompanyName] = useState(''); const callType = 'outbound' as const;
+  const [companyName, setCompanyName] = useState(''); const [callType, setCallType] = useState<'inbound' | 'outbound'>('outbound');
   const [name, setName] = useState('');
   const [language, setLanguage] = useState('Telugu');
   const [voiceId, setVoiceId] = useState('');
