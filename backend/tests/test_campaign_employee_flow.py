@@ -41,7 +41,7 @@ from app.models.campaign_contact import CampaignContact
 from app.models.enums import CampaignStatus, ContactStatus, EmployeeStatus, NumberStatus
 from app.models.phone_number import PhoneNumber
 from app.services import auth as auth_service
-from app.services.employee_prompt import SCRIPT_SECTION_NAMES, build_call_script
+from app.services.employee_prompt import SCRIPT_SECTION_NAMES, build_call_script, compose_employee_configuration
 from app.services.omnidimension_agents import OmniDimensionAgentService, map_employee_configuration
 
 
@@ -773,12 +773,12 @@ def test_grounded_business_research_reaches_omni_context_without_source_metadata
     assert "https://example.com" not in research["body"]
 
 
-def test_incoming_agent_uses_same_caller_name_first_flow():
+def test_incoming_agent_starts_with_help_request_flow():
     employee = SimpleNamespace(name="Incoming Assistant", purpose="Answer customer questions", call_type="inbound", llm_model="gpt-4o", language="Telugu")
     payload = map_employee_configuration(employee, {"name": employee.name, "purpose": employee.purpose, "call_type": "inbound", "language": "Telugu"})
     bodies = "\n".join(section["body"] for section in payload["context_breakdown"])
-    assert "Mee peru cheppagalara?" in bodies
-    assert "customer_name" in bodies
+    assert "ask how you can help" in bodies
+    assert "unless they become relevant to the requested action" in bodies
     assert payload["call_type"] == "Incoming"
 
 
@@ -806,6 +806,27 @@ def test_telugu_and_hindi_fallback_scripts_use_native_script_with_english_terms(
     assert any("\u0900" <= char <= "\u097f" for char in hindi_text)
     assert "call" in hindi_text and "details" in hindi_text
     assert "main" not in hindi_text and "bol raha" not in hindi_text and "kya aap" not in hindi_text
+
+
+def test_call_type_generates_distinct_inbound_and_outbound_canonical_flows():
+    common = {
+        "name": "Mani",
+        "business_name": "KMG Insurance",
+        "purpose": "Help customers with insurance renewal",
+        "language": "English",
+    }
+    inbound = compose_employee_configuration({**common, "call_type": "inbound"})
+    outbound = compose_employee_configuration({**common, "call_type": "outbound"})
+
+    inbound_greeting = inbound["call_script"]["Greeting & Intro"].casefold()
+    outbound_greeting = outbound["call_script"]["Greeting & Intro"].casefold()
+    assert "how you can help" in inbound_greeting
+    assert "interested" not in inbound_greeting
+    assert "interested" in outbound_greeting
+    qualification = outbound["call_script"]["Qualification"].casefold()
+    assert qualification.index("only after explaining the offer") < qualification.index("understand their need")
+    assert "inbound call" in inbound["final_prompt"].casefold()
+    assert "outbound call" in outbound["final_prompt"].casefold()
 
 
 def test_publish_sends_exact_saved_call_script_as_omni_source_of_truth(campaign_db, monkeypatch):

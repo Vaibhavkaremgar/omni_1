@@ -237,12 +237,23 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "Do not restart with name or mobile-number collection. Collect caller details only near the end, when needed for a confirmed business follow-up or next action."
     )
     if _text(configuration.get("call_type")).casefold() == "inbound":
-        opening_body += " Immediately after the welcome ask 'Mee peru cheppagalara?' and store the caller's answer as customer_name. Never use the employee name as customer_name. This applies to incoming and outgoing calls."
+        opening_body += " This is an inbound call: the caller initiated it. Ask how you can help, understand the caller's request, and answer or assist before qualifying. Do not assume the reason for the call or ask for identity details unless they become relevant to the requested action."
     else:
         opening_body += " This is an outbound call with customer details already configured. Never ask for the customer's name, phone number, profession, or any other detail already supplied; use those details silently and focus on the call purpose."
     context.append({
         "title": "Opening State and First Caller Response",
         "body": opening_body,
+        "is_enabled": True,
+    })
+
+    call_type = _text(configuration.get("call_type", employee.call_type)).casefold()
+    context.append({
+        "title": "Authoritative Call Type Mode",
+        "body": (
+            "OUTBOUND MODE: The employee called the customer. Identify the employee and company, explain the actual reason for calling and the configured product, service, or offer, then ask whether it is relevant or whether the customer is interested. Do not begin with name, identity, location, requirement, or profile questions. Qualify only after interest."
+            if call_type == "outbound" else
+            "INBOUND MODE: The customer initiated the call. Greet the caller, ask how you can help, understand the request, and answer or assist first. Do not use an outbound sales opening or assume the caller's purpose. Qualify only when relevant to resolving the request."
+        ),
         "is_enabled": True,
     })
 

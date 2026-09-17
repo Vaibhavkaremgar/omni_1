@@ -129,7 +129,7 @@ def build_call_script(configuration: dict[str, Any]) -> dict[str, str]:
         objection = "Acknowledge the concern, answer only from configured business information, and offer a human follow-up when the answer is unknown."
         cta = "When the caller's goal is clear, summarize the next step and ask whether they would like the configured action or a human follow-up."
     identity = (f"You are {name}. {('Represent ' + business_name + '. ') if business_name else ''}" + (f"The customer initiated this inbound call; assist them with {purpose}. Never claim you called them." if inbound else f"You initiated this outbound call. Represent the business and explain the verified reason for calling before qualifying the customer's need. Never claim the customer initiated the call."))
-    greeting = (f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, and ask how you can help with {domain}." if inbound else f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, explain the verified business purpose or offer for calling, and ask whether it is relevant to the customer.")
+    greeting = (f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, and ask how you can help with {domain}." if inbound else f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, explain the verified business purpose or offer for calling, and ask whether the customer is interested or whether it is relevant to them.")
     qualification_text = (qualification if inbound else "Do not begin by asking 'What is your requirement?' or any discovery question. First explain the configured business purpose, product, service, and verified offer details in a concise natural way. Only after explaining the offer, ask whether the customer is interested or whether it is relevant, then understand their need without interrogating them. Qualify only from verified details.")
     cta_text = (cta if inbound else "When the customer is interested, explain verified benefits and move toward the actual configured next step such as a booking, callback, visit, or purchase. Never invent an offer, price, feature, or guarantee.")
     if _is_telugu(language):
@@ -225,8 +225,8 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
             "If the caller asks what the call is about, restate the configured offer and its verified benefit before asking any qualifying question. "
             "Do not turn an outbound call into a support-style conversation by asking what the customer needs before explaining what the business is offering."
         )
-    if _text(configuration.get("call_type")).casefold() == "inbound":
-        opening_rules += " Immediately after the welcome, ask exactly one short identity question: 'Mee peru cheppagalara?' (What is your name?). Treat the caller's answer as customer_name, repeat it once for confirmation, and then continue to the business objective. Never use the AI employee's name as customer_name. This rule applies to both incoming and outgoing calls."
+    elif call_type == "inbound":
+        opening_rules += " This is an inbound call: the caller initiated it. Ask how you can help, understand the caller's request, and answer or assist before qualifying. Do not assume the reason for the call, use an outbound sales opening, or ask for identity details unless they become relevant to the requested action."
     sections.append(("OPENING AND FIRST CALLER TURN", opening_rules))
     shabdha_brief = _text(configuration.get("original_shabdha_brief"))
     direct_prompt = _text(configuration.get("direct_prompt"))
@@ -270,7 +270,7 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         "Repeat any collected detail once for confirmation, then continue or close based on the caller's response."
     )
     if _text(configuration.get("call_type")).casefold() == "inbound":
-        details_rule = "For this incoming or outgoing call, the first caller question after the welcome must be 'Mee peru cheppagalara?'. Store the caller's answer as customer_name; the employee/assistant name is never the customer name. Ask mobile number and any other follow-up details only later when the business objective requires them."
+        details_rule = "For this inbound call, understand the caller's request before collecting identity or contact details. Ask for the name, mobile number, or other details only when the requested action genuinely requires them, one question at a time, and never as a fixed opening step."
     sections.append(("CALLER DETAILS AT THE END", details_rule))
     if language:
         language_rule = f"Speak in {language}. Follow the caller's language preference when appropriate."

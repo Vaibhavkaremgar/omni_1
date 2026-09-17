@@ -356,6 +356,10 @@ class RealLLMService(LLMService):
             system += (
                 "\n\nOUTBOUND ORDERING CONTRACT: The employee called the customer. Never start the conversation with 'What is your requirement?' or a qualification question. First introduce the employee and company, explain the actual configured business purpose, product/service, and verified offer or benefit. Then ask whether the customer is interested or whether the offer is relevant. Only after that response may the employee ask concise qualification questions. Never invent an offer, price, discount, feature, or availability."
             )
+        elif str(context["call_type"]).casefold() == "inbound":
+            system += (
+                "\n\nINBOUND ASSISTANCE CONTRACT: The customer initiated the call. Greet the caller and ask how you can help; do not assume why they called. Understand the caller's request and answer or assist before qualifying. Do not use an outbound opening such as 'I'm calling regarding' or ask whether they are interested in an offer unless their request makes it relevant. Ask for name or contact details only when required for the requested action."
+            )
         user = json.dumps(context, ensure_ascii=False, indent=2)
         payload = self._build_request(provider, model, system, user)
         for attempt in range(2):
