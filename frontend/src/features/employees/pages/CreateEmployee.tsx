@@ -20,7 +20,7 @@ function NewEmployeeChat() {
   const [voiceId, setVoiceId] = useState('');
   const [voices, setVoices] = useState<Voice[]>([]);
   const [recommendedVoiceIds, setRecommendedVoiceIds] = useState<string[]>([]);
-  const [messages, setMessages] = useState<Array<{ role: 'assistant' | 'user'; content: string }>>([{ role: 'assistant', content: 'Tell me your requirement, and Shabdha will build your employee.' }]);
+  const [messages, setMessages] = useState<Array<{ role: 'assistant' | 'user'; content: string }>>([]);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
   const suggestions = ['Build a sales employee', 'Create a customer support agent', 'Create an appointment assistant', 'Help me describe my employee'];
