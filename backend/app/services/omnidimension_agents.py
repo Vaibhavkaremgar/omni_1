@@ -37,6 +37,27 @@ class OmniDimensionAgentService:
             len(payload.get("welcome_message", "")), payload.get("languages"),
             payload.get("is_welcome_message_dynamic", False), "voice" in payload,
         )
+        context_sections = payload.get("context_breakdown") if isinstance(payload.get("context_breakdown"), list) else []
+        context_bodies = [section.get("body", "") for section in context_sections if isinstance(section, dict)]
+        voice = payload.get("voice") if isinstance(payload.get("voice"), dict) else None
+        logger.info(
+            "[OMNI_AGENT_CONFIG_SENT] employee_id=%s operation=%s existing_agent_id=%s "
+            "payload_keys=%s welcome_present=%s welcome_chars=%s context_present=%s context_sections=%s "
+            "context_titles=%s context_chars=%s prompt_section_present=%s prompt_chars=%s "
+            "model_present=%s model=%s voice_present=%s voice_provider=%s voice_id_present=%s "
+            "languages=%s call_type=%s transcriber=%s post_call_webhook_present=%s",
+            employee.id,
+            "update" if (version.provider_agent_id or (employee.published_version and employee.published_version.provider_agent_id)) else "create",
+            version.provider_agent_id or (employee.published_version.provider_agent_id if employee.published_version else None),
+            sorted(payload.keys()), bool(payload.get("welcome_message")), len(str(payload.get("welcome_message") or "")),
+            bool(context_sections), len(context_sections), [section.get("title") for section in context_sections if isinstance(section, dict)],
+            sum(len(str(body)) for body in context_bodies),
+            any(isinstance(section, dict) and section.get("title") in {"Complete Employee Instructions", "Additional Behavioral Instructions"} for section in context_sections),
+            sum(len(str(body)) for body in context_bodies),
+            isinstance(payload.get("model"), dict), payload.get("model"), bool(voice), voice.get("provider") if voice else None,
+            bool(voice and voice.get("voice_id")), payload.get("languages"), payload.get("call_type"), payload.get("transcriber"),
+            bool(((payload.get("post_call_actions") or {}).get("webhook"))),
+        )
         # Draft versions deliberately do not duplicate the unique provider
         # identity. When publishing a draft, update the currently published
         # Omni agent; only create an agent when the employee has never been
@@ -89,6 +110,22 @@ class OmniDimensionAgentService:
                     str(readback.get("first_ideal_message") or "")[:180], str(readback.get("second_ideal_message") or "")[:180],
                     str(readback.get("last_ideal_message") or "")[:180], readback.get("speech_start_timeout"),
                     readback.get("max_call_duration_in_sec"), bool(readback.get("transfer")),
+                )
+                readback_voice = readback.get("voice") if isinstance(readback.get("voice"), dict) else {}
+                readback_languages = readback.get("languages")
+                readback_sections = readback.get("context_breakdown") if isinstance(readback.get("context_breakdown"), list) else []
+                logger.info(
+                    "[OMNI_AGENT_CONFIG_READBACK] agent_id=%s stored_call_type=%s stored_asr=%s "
+                    "stored_languages=%s stored_voice_provider=%s stored_voice_id_present=%s "
+                    "stored_context_sections=%s stored_context_titles=%s stored_prompt_chars=%s "
+                    "stored_post_call_config_ids=%s stored_end_call_enabled=%s stored_idle_threshold=%s",
+                    provider_agent.provider_id, readback.get("bot_call_type") or readback.get("call_type"),
+                    readback.get("asr_service") or readback.get("transcriber"), readback_languages,
+                    readback_voice.get("provider") or readback.get("voice_provider"),
+                    bool(readback_voice.get("voice_id") or readback.get("voice_external_id")), len(readback_sections),
+                    [section.get("context_title") or section.get("title") for section in readback_sections if isinstance(section, dict)],
+                    len(str(readback.get("context") or "")), readback.get("post_call_config_ids"),
+                    readback.get("is_end_call_enabled"), readback.get("user_idle_threshold_sec"),
                 )
         except Exception as exc:
             logger.warning("Omni agent readback unavailable agent_id=%s exception_class=%s", provider_agent.provider_id, type(exc).__name__)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from .client import OmniDimensionClient
@@ -20,6 +21,7 @@ class OmniDimensionCallProvider:
 
     def __init__(self, client: OmniDimensionClient):
         self.client = client
+        self.logger = logging.getLogger(__name__)
 
     def dispatch(
         self,
@@ -38,6 +40,14 @@ class OmniDimensionCallProvider:
             "metadata": metadata,
         }
         response = self.client.post(self.endpoint, json=payload)
+        self.logger.info(
+            "[OMNI_CALL_DISPATCH_RESPONSE] endpoint=%s agent_id=%s status=%s request_id=%s "
+            "provider_call_id=%s response_keys=%s",
+            self.endpoint, agent_id, response.get("status") if isinstance(response, dict) else None,
+            response.get("requestId") if isinstance(response, dict) else None,
+            (response.get("callId") or response.get("call_id") or response.get("call_log_id")) if isinstance(response, dict) else None,
+            sorted(response.keys()) if isinstance(response, dict) else type(response).__name__,
+        )
         if not isinstance(response, dict) or not response.get("requestId"):
             raise OmniDimensionResponseError("OmniDimension returned an invalid dispatch response.")
         status = str(response.get("status") or "dispatched")
