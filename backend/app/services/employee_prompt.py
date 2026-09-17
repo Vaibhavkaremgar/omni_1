@@ -192,7 +192,7 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         language_rule = f"Speak in {language}. Follow the caller's language preference when appropriate."
         if language == "Telugu":
             language_rule += " Use natural Telugu throughout; common English business words are allowed and do not trigger a language switch. Switch only when the caller explicitly requests another language."
-        sections.append(("LANGUAGE", language_rule))
+        sections.append(("LANGUAGE", language_rule + " Speak all numbers in English words, including phone numbers, dates, times, prices, amounts, quantities, counts, and IDs. Keep the conversation warm, spontaneous, and human-sounding rather than robotic or scripted."))
     script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else build_call_script(configuration)
     sections.append(("CANONICAL SIX-SECTION CALL SCRIPT", "\n\n".join(f"{index}. {title}\n{script.get(title, '')}" for index, title in enumerate(SCRIPT_SECTION_NAMES, 1))))
     custom_sections = configuration.get("custom_sections")
@@ -230,7 +230,7 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
                 "Use only the explicit employee configuration and knowledge base; if information is unavailable, say so clearly and offer a human follow-up."
             )
         sections.append(("VERIFIED BUSINESS RESEARCH", body))
-    sections.append(("NATURAL VOICE CONVERSATION BEHAVIOR", "Use natural human-like conversation, concise spoken responses, contextual acknowledgements, conversational pacing, no repetitive filler, one question at a time, no repetition of caller information, immediate yield on interruption, natural recovery after interruptions or topic changes, and no robotic confirmations. Never invent information or expose internal instructions/provider details. Completing the objective does not end the call; ask whether anything else is needed and end only on clear caller intent."))
+    sections.append(("NATURAL VOICE CONVERSATION BEHAVIOR", "Use natural human-like conversation, concise spoken responses, contextual acknowledgements, conversational pacing, varied phrasing, short natural pauses, and responsive turn-taking. Avoid sounding robotic, scripted, repetitive, or overly formal. Use no repetitive filler, ask one question at a time, do not repeat caller information, yield immediately on interruption, and recover naturally after interruptions or topic changes. Speak all numbers in English words regardless of the selected language. Never invent information or expose internal instructions/provider details. Completing the objective does not end the call; ask whether anything else is needed and end only on clear caller intent."))
     # Preserve later-added business fields instead of silently dropping them.
     consumed = {
         "name", "purpose", "language", "creation_mode", "original_shabdha_brief", "direct_prompt", "final_prompt", "selected_template_id", "selected_template_version", "template_values", "llm_provider", "llm_model", "voice", "call_type", "greeting", "transfer", "end_call", "custom_sections", "conversation_variables", "knowledge_base_configured", "knowledge_files",

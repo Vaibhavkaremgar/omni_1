@@ -298,7 +298,15 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
 
     # ── Language / Communication Rules ───────────────────────────────────────
     lang = _language_name(_text(configuration.get("language"), employee.language))
-    language_rules = f"Speak in {lang}. Be clear, professional, and concise."
+    language_rules = (
+        f"Speak in {lang}. Be clear, professional, and concise. "
+        "Sound like a warm, attentive human rather than a scripted or robotic system: "
+        "use natural contractions and brief acknowledgements, vary phrasing naturally, "
+        "pause briefly where a human would, and respond directly to what the caller just said. "
+        "Speak every number in English words, regardless of the selected language. This includes "
+        "phone numbers, dates, times, prices, amounts, quantities, ages, counts, and IDs; "
+        "do not pronounce numbers using Telugu, Hindi, or other local-language number words."
+    )
     if lang == "Telugu":
         language_rules += " Converse naturally in Telugu throughout the call. Follow the universal Telugu speaking style below."
     context.append({
