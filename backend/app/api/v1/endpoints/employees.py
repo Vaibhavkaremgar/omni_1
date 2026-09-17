@@ -1,6 +1,8 @@
 from uuid import UUID
 import logging
 import base64
+from io import BytesIO
+from pypdf import PdfReader
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
 from datetime import datetime, timezone
@@ -33,6 +35,9 @@ from app.services.voice_catalog import voice_catalog
 from app.services.voice_recommendations import recommend_voices
 from app.services.employee_templates import template_library, render_template, get_template
 from app.services.employee_prompt import compose_employee_configuration
+
+
+MAX_KNOWLEDGE_FILE_SIZE = 4 * 1024 * 1024
 from app.services.employee_interview import RealLLMService
 from app.services.business_research import ensure_business_research
 
@@ -177,13 +182,17 @@ async def upload_knowledge_file(employee_id: UUID, file: UploadFile = File(...),
     content = await file.read()
     if not filename.lower().endswith(".pdf") or file.content_type not in (None, "application/pdf") or not content or not content.startswith(b"%PDF"):
         raise HTTPException(status_code=422, detail="Only non-empty PDF files are supported.")
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Knowledge files must be 10 MB or smaller.")
+    if len(content) >= MAX_KNOWLEDGE_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="Knowledge files must be smaller than 4 MB.")
+    try:
+        knowledge_text = "\n\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(content)).pages).strip()
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="The PDF text could not be extracted.") from exc
     version = employee.published_version
     agent_id = version.provider_agent_id if version else None
     if not agent_id:
         raise HTTPException(status_code=422, detail="Publish the employee before uploading knowledge files.")
-    row = EmployeeKnowledgeFile(tenant_id=current_user.tenant.id, employee_id=employee_id, filename=filename[:255], content_type="application/pdf", file_size=len(content), status="uploading")
+    row = EmployeeKnowledgeFile(tenant_id=current_user.tenant.id, employee_id=employee_id, filename=filename[:255], content_type="application/pdf", file_size=len(content), knowledge_text=knowledge_text, status="uploading")
     db.add(row); db.commit(); db.refresh(row)
     provider = get_agent_service().provider
     try:
@@ -191,6 +200,15 @@ async def upload_knowledge_file(employee_id: UUID, file: UploadFile = File(...),
         row.status = "attaching"; db.commit()
         provider.attach_knowledge_file(row.provider_file_id, agent_id)
         row.status = "ready"; row.error_message = None; db.commit(); db.refresh(row)
+        version.configuration = compose_employee_configuration({
+            **(version.configuration or {}),
+            "knowledge_base_configured": True,
+            "knowledge_files": [
+                {"filename": item.filename, "text": item.knowledge_text or ""}
+                for item in db.scalars(select(EmployeeKnowledgeFile).where(EmployeeKnowledgeFile.employee_id == employee_id, EmployeeKnowledgeFile.tenant_id == current_user.tenant.id, EmployeeKnowledgeFile.status == "ready")).all()
+            ],
+        })
+        db.commit()
         return _public_knowledge_file(row)
     except Exception as exc:
         row.status = "failed"; row.error_message = "Knowledge file processing failed. Please retry."; db.commit()
@@ -467,6 +485,23 @@ def publish_employee(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Unable to synchronize the AI employee with the provider. Please retry.",
+        ) from exc
+    # Re-attach existing files so the knowledge base follows the published
+    # Omni voice assistant when its provider identity changes.
+    knowledge_files = db.scalars(select(EmployeeKnowledgeFile).where(
+        EmployeeKnowledgeFile.employee_id == employee_id,
+        EmployeeKnowledgeFile.tenant_id == current_user.tenant.id,
+        EmployeeKnowledgeFile.provider_file_id.is_not(None),
+    )).all()
+    try:
+        provider = get_agent_service().provider
+        for knowledge_file in knowledge_files:
+            provider.attach_knowledge_file(knowledge_file.provider_file_id, provider_result.provider_id)
+    except OmniDimensionError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to attach the knowledge base to the Omni voice assistant. Please retry.",
         ) from exc
     version.provider_name = "omnidimension"
     version.provider_agent_id = provider_result.provider_id

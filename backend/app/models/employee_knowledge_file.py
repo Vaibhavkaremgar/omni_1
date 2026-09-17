@@ -14,6 +14,7 @@ class EmployeeKnowledgeFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    knowledge_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploading")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

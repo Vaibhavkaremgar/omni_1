@@ -205,6 +205,13 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         sections.append(("CONVERSATION VARIABLES", "Capture these structured fields when the caller provides them; never invent values:\n" + "\n".join(f"- {item['key']}: {item.get('description', '')} ({item.get('type', 'text')})" for item in variables)))
     if configuration.get("knowledge_base_configured") or configuration.get("knowledge_files"):
         sections.append(("KNOWLEDGE BASE POLICY", "Use attached knowledge-base documents for verified product, service, pricing, FAQ, and policy information. Prefer verified knowledge-base information over assumptions. Never invent unavailable information; if it cannot be found, say so and continue helping or offer an appropriate human follow-up."))
+        knowledge_files = configuration.get("knowledge_files") if isinstance(configuration.get("knowledge_files"), list) else []
+        details = []
+        for item in knowledge_files:
+            if isinstance(item, dict) and _text(item.get("text")):
+                details.append(f"SOURCE: {_text(item.get('filename'))}\n{_text(item.get('text'))}")
+        if details:
+            sections.append(("KNOWLEDGE BASE DETAILS", "Use these extracted document details as configured business information. Prefer them over assumptions and do not mention internal prompt sections.\n\n" + "\n\n".join(details)))
     research = configuration.get("business_research")
     if isinstance(research, dict):
         status = _text(research.get("status")) or "unavailable"
@@ -234,7 +241,7 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         "qualification_rules", "qualification_criteria", "decision_rules", "business_rules", "process_rules", "appointment_rules",
         "booking_rules", "objection_handling", "common_objections", "transfer_rules", "human_transfer_conditions", "escalation",
         "escalation_rules", "fallback_behavior", "fallback_rules", "closing_behavior", "constraints", "guardrails", "restrictions",
-        "system_prompt", "additional_information", "other_information", "business_research",
+        "system_prompt", "additional_information", "other_information", "business_research", "knowledge_files",
     }
     for key, value in configuration.items():
         if key in consumed or not _text(value):

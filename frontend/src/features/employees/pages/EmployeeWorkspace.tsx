@@ -48,7 +48,7 @@ export default function EmployeeWorkspace() {
   useEffect(() => { const timer = window.setTimeout(() => { if (id) void load(); void backendJson<Voice[]>('/employees/voice-catalog').then(items => { setVoices(items); const cloned = items.filter(v => v.is_cloned || v.tier === 'cloned' || v.tier === 'custom'); if (cloned.length) setNotice(`My Cloned Voices: ${cloned.map(v => `${v.name} · ${v.gender} · ${v.languages?.join(', ') || 'Language not specified'} · Ready`).join(' | ')}`); }).catch(() => setError('Voice catalog could not be loaded.')); }, 0); return () => window.clearTimeout(timer); }, [id]);
   useEffect(() => { if (requirement.trim().length < 2) return; const timer = window.setTimeout(() => { const params = new URLSearchParams({ language, requirement: requirement.trim() }); void backendJson<{ recommended_voices: VoiceRecommendation[] }>(`/employees/voice-recommendations?${params}`).then(result => { const names = result.recommended_voices.map(item => voices.find(voice => voice.id === item.id)?.name).filter(Boolean); if (names.length) setNotice(`Voice Suggestions: Recommended for your employee: ${names.join(' · ')}`); }).catch(() => undefined); }, 500); return () => window.clearTimeout(timer); }, [language, requirement, voices]);
 
-  const languageVoices = useMemo(() => voices.filter(v => !v.languages?.length || v.languages.includes(language)), [voices, language]);
+  const languageVoices = useMemo(() => voices.filter(v => !v.languages?.length || v.languages.includes(language) || v.is_cloned || v.tier === 'cloned' || v.tier === 'custom'), [voices, language]);
   const selectedVoice = voices.find(v => v.id === voiceId);
   const script = config.call_script ?? {};
   const businessName = String(config.business_name ?? '');

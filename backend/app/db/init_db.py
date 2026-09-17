@@ -45,6 +45,11 @@ def _ensure_employee_knowledge_file_columns() -> None:
     if "employee_knowledge_files" not in inspect(engine).get_table_names():
         from app.models.employee_knowledge_file import EmployeeKnowledgeFile
         EmployeeKnowledgeFile.__table__.create(bind=engine, checkfirst=True)
+    elif engine.dialect.name in {"sqlite", "postgresql"}:
+        existing = {column["name"] for column in inspect(engine).get_columns("employee_knowledge_files")}
+        if "knowledge_text" not in existing:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE employee_knowledge_files ADD COLUMN knowledge_text TEXT"))
 
 def _bootstrap_admin() -> None:
     settings = get_settings()

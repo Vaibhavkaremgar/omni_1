@@ -56,7 +56,7 @@ def test_builtin_ramana_voice_is_available_without_catalog_configuration(monkeyp
     assert ramana["name"] == "Ramana"
     assert ramana["provider"] == "cartesia"
     assert ramana["is_cloned"] is True
-    assert voice_catalog_service.provider_voice_id("cloned_cartesia_ramana") == "a56d7710-2e82-4522-b6d5-e3f2786630f9"
+    assert voice_catalog_service.provider_voice_id("cloned_cartesia_ramana") == "9242c388-deef-42b1-b4dd-20552eff448b"
 
 
 def test_configured_cloned_voices_are_normalized_and_resolved(monkeypatch):

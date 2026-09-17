@@ -22,9 +22,9 @@ BUILTIN_VOICES = [{
     "tier": "cloned",
     "gender": "male",
     "provider": "cartesia",
-    "provider_voice_id": "a56d7710-2e82-4522-b6d5-e3f2786630f9",
+    "provider_voice_id": "9242c388-deef-42b1-b4dd-20552eff448b",
     "supports_cloning": True,
-    "languages": ["English"],
+    "languages": ["Telugu"],
     "is_cloned": True,
 }]
 
