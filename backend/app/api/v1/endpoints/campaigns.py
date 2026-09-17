@@ -35,7 +35,7 @@ router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class CampaignCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     employee_id: UUID
 
@@ -55,7 +55,7 @@ class CampaignContactCreate(BaseModel):
 
 
 class CampaignStartRequest(BaseModel):
-    phone_number_id: UUID
+    phone_number_id: UUID | None = None
 
 
 class EmployeeSummary(BaseModel):
@@ -278,7 +278,7 @@ def create_campaign(
     employee = _get_published_employee(payload.employee_id, current_user.tenant.id, db)
     campaign = Campaign(
         tenant_id=current_user.tenant.id,
-        name=payload.name.strip(),
+        name=(payload.name or f"{employee.name} - Bulk Campaign - {utc_now():%Y-%m-%d %H:%M}").strip(),
         description=payload.description,
         employee_id=employee.id,
         status=CampaignStatus.draft.value,

@@ -66,6 +66,18 @@ def _parse_xlsx(content: bytes) -> list[dict[str, str]]:
         result.append({headers[i]: (str(cell).strip() if cell is not None else "") for i, cell in enumerate(row)})
     return result
 
+def _parse_xls(content: bytes) -> list[dict[str, str]]:
+    try:
+        import xlrd  # type: ignore
+    except ImportError as exc:
+        raise HTTPException(status_code=422, detail="XLS support requires xlrd.") from exc
+    book = xlrd.open_workbook(file_contents=content)
+    sheet = book.sheet_by_index(0)
+    if sheet.nrows == 0:
+        return []
+    headers = [str(v).strip().lower() for v in sheet.row_values(0)]
+    return [{headers[i]: str(v).strip() for i, v in enumerate(sheet.row_values(row)) if i < len(headers) and headers[i]} for row in range(1, sheet.nrows)]
+
 
 def _find_column(row: dict[str, str], candidates: list[str]) -> str:
     for key in candidates:
@@ -150,9 +162,10 @@ async def upload_contacts_preview(
     content_type = (file.content_type or "").lower().split(";")[0].strip()
     filename = (file.filename or "").lower()
     is_xlsx = filename.endswith(".xlsx") or content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    is_xls = filename.endswith(".xls") or content_type == "application/vnd.ms-excel"
     is_csv = filename.endswith(".csv") or content_type in {"text/csv", "application/csv"}
 
-    if not is_csv and not is_xlsx:
+    if not is_csv and not is_xlsx and not is_xls:
         raise HTTPException(status_code=422, detail="Only CSV and XLSX files are supported.")
 
     raw_content = await file.read()
@@ -162,7 +175,7 @@ async def upload_contacts_preview(
         raise HTTPException(status_code=422, detail="Uploaded file is empty.")
 
     try:
-        raw_rows = _parse_xlsx(raw_content) if is_xlsx else _parse_csv(raw_content)
+        raw_rows = _parse_xlsx(raw_content) if is_xlsx else (_parse_xls(raw_content) if is_xls else _parse_csv(raw_content))
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Unable to parse file: {exc}") from exc
 

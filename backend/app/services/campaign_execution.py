@@ -251,7 +251,7 @@ class CampaignExecutionService:
         db: Session,
         campaign_id: UUID,
         tenant_id: UUID,
-        phone_number_id: UUID,
+        phone_number_id: UUID | None,
     ) -> Campaign:
         """Transition draft/ready campaign to running and dispatch the first batch."""
         campaign = _require_campaign(db, campaign_id, tenant_id)
@@ -261,6 +261,14 @@ class CampaignExecutionService:
                 "Only draft or scheduled campaigns can be started."
             )
         employee = _require_published_employee(db, campaign.employee_id, tenant_id)
+        if phone_number_id is None:
+            phone_number_id = db.scalar(select(PhoneNumber.id).where(
+                PhoneNumber.tenant_id == tenant_id,
+                PhoneNumber.status == NumberStatus.active.value,
+                PhoneNumber.provider_phone_number_id.is_not(None),
+            ).order_by(PhoneNumber.created_at))
+        if phone_number_id is None:
+            raise CampaignExecutionError("No active outbound phone number is configured.")
         phone = _require_usable_phone(db, phone_number_id, tenant_id)
         try:
             require_minimum_balance(db, tenant_id, get_settings().minimum_call_balance_inr)

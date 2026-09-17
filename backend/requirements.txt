@@ -9,6 +9,7 @@ bcrypt
 PyJWT
 email-validator
 openpyxl
+xlrd
 python-multipart
 cryptography
 pypdf
