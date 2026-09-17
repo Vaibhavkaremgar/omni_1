@@ -155,7 +155,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     business_description = _text(configuration.get("business_description"))
     identity = f"Business: {business_name}\n" if business_name else ""
     identity += f"Business description: {business_description}\n" if business_description else ""
-    identity += f"Employee role and purpose: {purpose}"
+    identity += f"Employee role and purpose: {purpose}\nDo not volunteer these internal labels in spoken conversation; share relevant business information naturally only when asked or needed."
     context.append({"title": "Agent Identity & Purpose", "body": identity, "is_enabled": True})
 
     research = configuration.get("business_research")
@@ -222,8 +222,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "say that clearly and ask what help they need. Keep the conversation moving from the caller's first question. "
         "Do not restart with name or mobile-number collection. Collect caller details only near the end, when needed for a confirmed business follow-up or next action."
     )
-    if _text(configuration.get("call_type")).casefold() in {"inbound", "outbound", "both"}:
+    if _text(configuration.get("call_type")).casefold() == "inbound":
         opening_body += " Immediately after the welcome ask 'Mee peru cheppagalara?' and store the caller's answer as customer_name. Never use the employee name as customer_name. This applies to incoming and outgoing calls."
+    else:
+        opening_body += " This is an outbound call with customer details already configured. Never ask for the customer's name, phone number, profession, or any other detail already supplied; use those details silently and focus on the call purpose."
     context.append({
         "title": "Opening State and First Caller Response",
         "body": opening_body,
