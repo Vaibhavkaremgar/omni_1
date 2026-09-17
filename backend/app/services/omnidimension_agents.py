@@ -161,6 +161,18 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         context.append({"title": "Conversation Flow", "body": "\n".join(flow_parts), "is_enabled": True})
 
     context.append({
+        "title": "Opening State and First Caller Response",
+        "body": (
+            "The welcome_message has already been spoken. Never reintroduce yourself, repeat the business name, repeat the reason for calling, "
+            "or deliver another generic greeting after the caller responds. Wait for the caller's first speech, answer that exact request first, "
+            "and then ask one relevant follow-up question. If they ask about available services, explain only configured services; if none are configured, "
+            "say that clearly and ask what help they need. Keep the conversation moving from the caller's first question. "
+            "Do not restart with name or mobile-number collection. Collect caller details only near the end, when needed for a confirmed business follow-up or next action."
+        ),
+        "is_enabled": True,
+    })
+
+    context.append({
         "title": "Multi-Turn Conversation Behavior",
         "body": (
             "Continue listening and responding after every caller turn. Ask the next relevant question when information is incomplete. "
@@ -247,8 +259,12 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             context.append({"title": title, "body": _text(val), "is_enabled": True})
 
     # ── Build the final payload ───────────────────────────────────────────────
-    canonical_prompt = _text(configuration.get("final_prompt")) or build_employee_prompt(configuration)
-    if canonical_prompt:
+    configured_final_prompt = _text(configuration.get("final_prompt"))
+    canonical_prompt = configured_final_prompt or build_employee_prompt(configuration)
+    # A persisted final_prompt already contains the complete employee script.
+    # Sending it again alongside the structured sections increases latency and
+    # can make stale instructions compete with the current flow sections.
+    if canonical_prompt and not configured_final_prompt:
         context.append({
             "title": "Complete Employee Instructions",
             "body": canonical_prompt,
@@ -280,6 +296,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "model": {"model": _text(configuration.get("llm_model"), employee.llm_model)},
         "languages": [lang],
         "post_call_actions": post_call_actions,
+        # Make the speech handoff explicit so the provider starts listening
+        # immediately after the static welcome instead of relying on account
+        # defaults. All values can be overridden by employee configuration.
+        "transcriber": _transcriber_configuration(configuration, lang),
         "is_welcome_message_dynamic": False,
         "is_welcome_message_interruption": True,
         "is_interruption_allowed": True,
@@ -339,6 +359,40 @@ def _automatic_post_call_actions() -> dict[str, Any]:
             "trigger_call_statuses": ["completed", "failed", "no_answer", "busy", "voicemail_detected"],
         }
     }
+
+
+def _transcriber_configuration(configuration: dict[str, Any], language: str) -> dict[str, Any]:
+    """Return explicit speech handoff settings while preserving per-agent overrides."""
+    configured = configuration.get("transcriber")
+    result: dict[str, Any] = {
+        "provider": "deepgram_stream",
+        "model": "nova-3",
+        "language": _language_code(language),
+        "silence_timeout_ms": 800,
+        "interruption_min_words": 1,
+    }
+    if isinstance(configured, dict):
+        result.update({key: value for key, value in configured.items() if value is not None})
+    return result
+
+
+def _language_code(language: str) -> str:
+    return {
+        "English": "en-US",
+        "English (India)": "en-IN",
+        "English (UK)": "en-GB",
+        "Hindi": "hi-IN",
+        "Telugu": "te-IN",
+        "Tamil": "ta-IN",
+        "Kannada": "kn-IN",
+        "Malayalam": "ml-IN",
+        "Marathi": "mr-IN",
+        "Bengali": "bn-IN",
+        "Gujarati": "gu-IN",
+        "Punjabi": "pa-IN",
+        "Odia": "or-IN",
+        "Assamese": "as-IN",
+    }.get(language, language)
 
 
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:

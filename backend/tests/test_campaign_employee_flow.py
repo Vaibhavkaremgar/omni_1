@@ -499,6 +499,49 @@ def test_map_welcome_message_uses_employee_name():
     assert "Ava" in payload["welcome_message"]
 
 
+def test_prompt_answers_first_turn_and_defers_customer_details():
+    from app.services.employee_prompt import build_employee_prompt
+
+    prompt = build_employee_prompt({
+        "name": "Vaibhav",
+        "business_name": "KMG Insurance Company",
+        "purpose": "Remind customers about policy renewal within the next 7 days",
+        "language": "Telugu",
+    })
+    assert "welcome message" in prompt
+    assert "Do not repeat the greeting" in prompt
+    assert "respond directly to what they said first" in prompt
+    assert "Do not ask for the caller's name, mobile number, or profession at the beginning" in prompt
+    assert "Always collect the caller's full name" not in prompt
+    assert "renewal-related next action" not in prompt
+    assert "appropriate next action for the configured objective" in prompt
+
+
+def test_payload_explicitly_configures_listening_and_post_call_delivery(monkeypatch):
+    from app.services import omnidimension_agents as service
+
+    monkeypatch.setattr(service, "get_settings", lambda: SimpleNamespace(
+        backend_public_url="https://voice.example.com"
+    ))
+    employee = SimpleNamespace(
+        name="Sales Assistant", purpose="Qualify demo requests", call_type="outbound",
+        llm_model="gpt-4o-mini", language="English (India)",
+    )
+    payload = service.map_employee_configuration(employee, {
+        "name": employee.name, "purpose": employee.purpose,
+        "language": employee.language, "llm_model": employee.llm_model,
+    })
+    assert payload["is_welcome_message_interruption"] is True
+    assert payload["is_interruption_allowed"] is True
+    assert payload["transcriber"] == {
+        "provider": "deepgram_stream", "model": "nova-3", "language": "en-IN",
+        "silence_timeout_ms": 800, "interruption_min_words": 1,
+    }
+    webhook = payload["post_call_actions"]["webhook"]
+    assert webhook["url"] == "https://voice.example.com/api/v1/webhooks/omnidimension/post-call"
+    assert set(webhook["trigger_call_statuses"]) == {"completed", "failed", "no_answer", "busy", "voicemail_detected"}
+
+
 def test_voice_payload_keeps_objective_completion_active_and_requires_explicit_end():
     employee = SimpleNamespace(name="Telugu Assistant", purpose="Book appointments", call_type="inbound", llm_model="gpt-4o", language="Telugu")
     payload = map_employee_configuration(employee, {
