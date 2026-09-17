@@ -67,15 +67,17 @@ def _language_conversation_guidance(language: str) -> str:
     selected = language or "the selected language"
     normalized = selected.casefold()
     if normalized in {"telugu", "te", "te-in", "telugu (india)"}:
-        fillers = "Use Telugu conversational expressions such as 'artham ayyindhi andi', 'sare andi', 'ok andi', 'tappakunda andi', and 'avunu andi'. Alternate 'sare andi' and 'ok andi' naturally; do not force fillers into every sentence. Prefer 'inka' over repeatedly using 'mariyu' where grammatically appropriate."
+        fillers = "Use natural everyday Telugu with a good amount of commonly used English words for business and conversation: 'thanks', 'thank you', 'sorry', 'okay', 'actually', 'sure', 'right', 'details', 'budget', 'location', 'meeting', 'appointment', 'booking', 'follow-up', and 'confirm'. Use Telugu fillers such as 'andi', 'sare andi', 'ok andi', 'avunu andi', 'tappakunda andi', 'artham ayyindhi andi', 'okay andi', and 'cheppandi' naturally and vary them. Use the English words 'thanks', 'thank you', and 'sorry' only; do not translate those three expressions."
         hello = "For repeated hello or attention-seeking, acknowledge the caller with varied Telugu responses such as 'Hello andi, vinipisthunda?' or 'Avunu andi, nenu vintunnanu.'"
     elif normalized in {"hindi", "hi", "hi-in", "hindi (india)"}:
-        fillers = "Use Hindi conversational expressions such as 'ji', 'haan ji', 'achha ji', 'theek hai ji', 'bilkul ji', 'samajh gaya ji', and 'zaroor ji'. Never use Telugu fillers such as 'andi'."
+        fillers = "Use natural everyday Hindi with a good amount of commonly used English words for business and conversation: 'thanks', 'thank you', 'sorry', 'okay', 'actually', 'sure', 'right', 'details', 'budget', 'location', 'meeting', 'appointment', 'booking', 'follow-up', and 'confirm'. Use Hindi fillers such as 'ji', 'haan ji', 'achha ji', 'theek hai ji', 'bilkul ji', 'samajh gaya ji', and 'zaroor ji' naturally and vary them. Use the English words 'thanks', 'thank you', and 'sorry' only; never translate those three expressions and never use Telugu fillers such as 'andi'."
         hello = "For repeated hello or attention-seeking, acknowledge the caller with varied Hindi responses such as 'Hello ji, meri awaaz aa rahi hai?' or 'Ji, main sun raha hoon.' Never use Telugu fillers."
     else:
         fillers = f"Use natural conversational acknowledgements and fillers from {selected}; never import Telugu or Hindi-specific fillers unless that is the selected language."
         hello = f"For repeated hello or attention-seeking, acknowledge the caller with varied, natural responses in {selected}, rather than repeating the same greeting."
     return f"""The selected conversation language is {selected}. Generate these behaviors dynamically in that language and preserve the existing business, safety, inbound/outbound, interruption, call-lifecycle, research, Knowledge Base, variable, and six-section script rules.
+
+For every regional-language conversation, code-switch naturally with commonly used English business and conversational words; do not make the speech overly formal or fully translated. Say 'thanks', 'thank you', and 'sorry' in English only. Say every numeric value in English pronunciation, including phone numbers, dates, times, prices, quantities, percentages, ages, IDs, model numbers, and codes; never use regional-language number words. Respond as soon as the caller finishes speaking: keep the response concise and do not add an artificial pause or wait for extra silence.
 
 {fillers} Natural English fillers such as actually, sorry, okay, right, exactly, basically, and sure may be used sparingly in any language where natural. Keep business/product names, features, specifications, offerings, and important terminology in English; do not over-translate them.
 
