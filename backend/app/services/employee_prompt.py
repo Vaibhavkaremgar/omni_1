@@ -269,8 +269,6 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         "Do not ask for profession unless it is genuinely relevant to the configured business objective. "
         "Repeat any collected detail once for confirmation, then continue or close based on the caller's response."
     )
-    if call_type == "outbound":
-        details_rule = "For this outbound call, never ask the customer for their name, mobile number, location, profession, profile, or other personal details. Use the supplied campaign/customer variables silently. Keep the conversation focused on the reason for the call, interest, business-relevant qualification, and the configured objective."
     if _text(configuration.get("call_type")).casefold() == "inbound":
         details_rule = "For this inbound call, understand the caller's request before collecting identity or contact details. Ask for the name, mobile number, or other details only when the requested action genuinely requires them, one question at a time, and never as a fixed opening step."
     sections.append(("CALLER DETAILS AT THE END", details_rule))

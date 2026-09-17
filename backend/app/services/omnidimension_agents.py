@@ -387,16 +387,6 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
                 variables.append({"key": f"field_{index + 1}", "prompt": str(item)})
         if variables:
             post_call_actions["webhook"]["extracted_variables"] = variables
-    if call_type == "outbound":
-        context.append({
-            "title": "FINAL OUTBOUND DATA COLLECTION BAN",
-            "body": (
-                "HIGHEST PRIORITY OUTBOUND RULE: Never ask the customer for their name, phone number, mobile number, location, profession, identity, profile, or any other personal/detail field during this call. "
-                "Campaign variables are already available and must be used silently. Do not ask 'May I know your name?', 'Who am I speaking with?', 'What is your requirement?', or equivalent questions. "
-                "After identifying the company and explaining the reason, product, service, or offer, ask only whether the customer is interested or whether the offer is relevant. Continue with business-relevant qualification only after interest, and end without collecting personal details."
-            ),
-            "is_enabled": True,
-        })
     payload: dict[str, Any] = {
         "name": _text(configuration.get("name"), employee.name),
         "welcome_message": _welcome_message(employee, configuration, lang),
