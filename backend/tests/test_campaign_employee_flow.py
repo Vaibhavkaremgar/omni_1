@@ -839,7 +839,9 @@ def test_call_type_generates_distinct_inbound_and_outbound_canonical_flows():
     assert "interested" not in inbound_greeting
     assert "interested" in outbound_greeting
     qualification = outbound["call_script"]["Qualification"].casefold()
-    assert qualification.index("only after explaining the offer") < qualification.index("understand their need")
+    assert "no qualification is required" in qualification
+    assert "do not ask" in qualification
+    assert "personal-detail" in qualification
     assert "inbound call" in inbound["final_prompt"].casefold()
     assert "outbound call" in outbound["final_prompt"].casefold()
 

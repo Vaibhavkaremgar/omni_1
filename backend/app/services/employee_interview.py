@@ -260,7 +260,7 @@ class RealLLMService(LLMService):
         return self._to_generation(response)
 
     def generate_call_script(self, employee: AIEmployee, configuration: dict[str, Any]) -> dict[str, str]:
-        """Generate a business-specific, executable dynamic conversation script.
+        """Generate a business-specific, executable six-section voice script.
 
         The model is asked to design the conversation from the complete employee
         context first.  Keeping this contract here (rather than in the UI) means
@@ -299,14 +299,14 @@ class RealLLMService(LLMService):
             "role, caller context, call purpose, success condition, information to collect, likely "
             "caller questions and objections, supported next steps, unavailable information, "
             "continuation conditions, and safe closing conditions. Only then write the sections.\n\n"
-            "OUTPUT CONTRACT: Return only valid JSON with a sections array. Generate the smallest "
-            "logical flow required by the user's actual objective, normally 4 to 5 stages and never "
-            "more than 7. The number, names, order, and purpose of sections must be dynamic. Do not "
-            "automatically create Identity & Purpose, Greeting & Intro, Qualification, Handling "
-            "Objections, Call to Action, or Closing. Those are optional examples, not mandatory "
-            "sections. Include a section only when the objective requires it; do not add irrelevant "
-            "questions or stages. Each item must contain a unique key, a context-specific title, "
-            "and concise operational content. Return only this JSON object; never "
+            "OUTPUT CONTRACT: Return only valid JSON, with exactly six objects in this exact order "
+            "and with exactly these key/title pairs: identity_purpose / Identity & Purpose, "
+            "greeting_intro / Greeting & Intro, qualification / Qualification, "
+            "handling_objections / Handling Objections, call_to_action / Call to Action, "
+            "closing / Closing. Each content value is a concise, complete set of operational "
+            "instructions, not an essay. The sections property is required and must contain exactly "
+            "6 populated items: never return an empty array, omit a section, add a section, invent "
+            "a section name, or leave required content blank. Return only this JSON object; never "
             "return markdown, code fences, commentary, explanations, or prose outside JSON. Do not "
             "substitute generic boilerplate for use-case-specific content.\n\n"
             "LANGUAGE CONTRACT: Write internal agent instructions primarily in clear English. "
@@ -314,13 +314,13 @@ class RealLLMService(LLMService):
             "responses, CTA phrases, and closing phrases in the selected language. Do not translate "
             "the whole internal prompt. Spoken language must sound natural for a real phone call, "
             "not like word-for-word translation; keep sentences short and avoid repetitive filler.\n\n"
-            "SECTION DESIGN: First identify the employee, caller, actual objective, required information, "
-            "and required outcome. Then create only the stages needed for that job. Do not force "
-            "qualification, questions, objections, a CTA, or a closing. Every question must be "
-            "justified by the objective, business context, current conversation, and next action. "
-            "For each stage provide what the employee does, natural example language, relevant "
-            "possible responses, and what happens next. Use caller-provided information immediately, "
-            "skip questions already answered, and stop unnecessary questioning once the objective is complete.\n\n"
+            "SECTION DESIGN:\n"
+            "1. Identity & Purpose: identify company, employee, role, caller, reason, exact business objective, success, relevant information, and boundaries.\n"
+            "2. Greeting & Intro: create a context-specific inbound or outbound opening with name, company, concise reason, permission when appropriate, and a transition to one question.\n"
+            "3. Qualification: determine the minimum useful information for this business, explain why it matters, ask one question at a time, order the questions, and define branches, stop conditions, and responses to short answers. Use only configured variables and placeholders such as {{customer_name}} when useful; never force irrelevant variables.\n"
+            "4. Handling Objections: identify realistic objections for this business. For each, give English internal guidance plus a natural selected-language spoken example. Do not pressure.\n"
+            "5. Call to Action: derive the actual next step from the objective. For outbound promotion, this is only checking interest, answering doubts, and offering more configured information; do not collect personal details or perform actions. For other objectives, follow COLLECT -> VERIFY -> SUMMARIZE -> ASK FOR CONFIRMATION -> WAIT FOR EXPLICIT CONFIRMATION -> EXECUTE -> VERIFY SUCCESS -> INFORM CALLER. Never claim an action happened without a supported successful action.\n"
+            "6. Closing: check for additional questions, offer relevant help, continue for another request, and end only after clear caller end intent. Make the spoken closing context-specific.\n\n"
             "VOICE BEHAVIOR (must be explicit in the relevant sections): Short answers such as "
             "'Printers.', 'Renewal.', 'Yes.', 'HP.', 'Hyderabad.', or '25 thousand.' are valid "
             "answers, never hang-up instructions. Use the answer as context and ask the next useful "
@@ -344,7 +344,7 @@ class RealLLMService(LLMService):
             )
         if str(context["call_type"]).casefold() == "outbound":
             system += (
-                "\n\nOUTBOUND ORDERING CONTRACT: The employee called the customer. Never start the conversation with 'What is your requirement?' or a qualification question. First introduce the employee and company, explain the actual configured business purpose, product/service, and verified offer or benefit. Then ask whether the customer is interested or whether the offer is relevant. Only after that response may the employee ask concise qualification questions. Never invent an offer, price, discount, feature, or availability."
+                "\n\nOUTBOUND PROMOTION CONTRACT (NON-NEGOTIABLE): The employee called the customer to promote the configured business and explain what it has in store. First introduce the employee and company, then explain the actual configured business purpose, product/service, and verified offer or benefit. Ask only whether the customer is interested or wants more information. Answer the customer's doubts using configured facts. Never ask qualification, discovery, profile, budget, location, timeline, preference, contact, or personal-detail questions. Do not perform bookings, purchases, transfers, callbacks, or other actions. Never invent an offer, price, discount, feature, or availability."
             )
         elif str(context["call_type"]).casefold() == "inbound":
             system += (
@@ -377,23 +377,26 @@ class RealLLMService(LLMService):
                     request_id, provider, model,
                 )
                 correction = (
-                    "\n\nCORRECTION: Return a valid JSON object with only the context-specific stages genuinely "
-                    "required by the objective. Use between 1 and 7 unique populated items. Do not "
-                    "add generic stages. Do not reason aloud. Output JSON only."
+                    "\n\nCORRECTION: Your previous response was rejected because sections did not contain six items. "
+                    "Output exactly six objects now, one for each required key/title pair, with non-empty "
+                    "meaningful content in every content field. Do not reason aloud. Output JSON only."
                 )
                 payload = self._build_request(provider, model, system + correction, user)
         else:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned no call script. [request_id={request_id}]")
+        expected = ("Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
+        expected_keys = ("identity_purpose", "greeting_intro", "qualification", "handling_objections", "call_to_action", "closing")
         sections = response.get("sections") if isinstance(response, dict) else None
         # Some JSON-mode providers follow the field contract but omit the
         # wrapper and return {identity_purpose: "...", ...}. Normalize that
         # equivalent representation before validating the six sections.
         if not isinstance(sections, list) and isinstance(response, dict):
             direct_sections = []
-            for key, content in response.items():
-                if key != "sections" and isinstance(content, str) and content.strip():
-                    direct_sections.append({"key": key, "title": key.replace("_", " ").title(), "content": content})
-            if direct_sections:
+            for key, title in zip(expected_keys, expected):
+                content = response.get(key)
+                if isinstance(content, str):
+                    direct_sections.append({"key": key, "title": title, "content": content})
+            if len(direct_sections) == len(expected):
                 sections = direct_sections
         if not isinstance(sections, list):
             logger.error("LLM script invalid response request_id=%s response_type=%s response_keys=%s", request_id, type(response).__name__, list(response.keys()) if isinstance(response, dict) else None)
@@ -402,23 +405,24 @@ class RealLLMService(LLMService):
         def normalized(value: Any) -> str:
             return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
-        # Providers may vary punctuation or casing in keys; preserve the
-        # model's context-specific titles while validating uniqueness.
-        by_key: dict[str, tuple[str, str]] = {}
+        # Providers occasionally reorder JSON array items or add punctuation to
+        # keys. Re-key harmless variations, but still require all six sections.
+        by_key: dict[str, str] = {}
+        aliases = {normalized(key): title for key, title in zip(expected_keys, expected)}
+        aliases.update({normalized(title): title for title in expected})
         for item in sections:
             if not isinstance(item, dict) or not isinstance(item.get("content"), str):
                 continue
-            title = str(item.get("title") or item.get("key") or "").strip()
-            key = normalized(item.get("key") or title)
-            if title and key and item["content"].strip():
-                if key in by_key:
+            title = aliases.get(normalized(item.get("key"))) or aliases.get(normalized(item.get("title")))
+            if title and item["content"].strip():
+                if title in by_key:
                     logger.error("LLM script duplicate section request_id=%s section=%s", request_id, title)
                     raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned duplicate call-script sections. [request_id={request_id}]")
-                by_key[key] = (title, item["content"].strip())
-        result = {title: content for title, content in by_key.values()}
-        if not 1 <= len(result) <= 7 or len(result) != len(sections):
+                by_key[title] = item["content"].strip()
+        result = {title: by_key[title] for title in expected if title in by_key}
+        if len(sections) != len(expected) or tuple(result) != expected:
             logger.error("LLM script incomplete response request_id=%s received_count=%s received_sections=%s", request_id, len(sections), list(by_key))
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned an invalid dynamic call script. [request_id={request_id}]")
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned an incomplete call script. [request_id={request_id}]")
         return result
 
     def _perform_json_request(self, provider: str, payload: dict[str, Any]) -> dict[str, Any]:

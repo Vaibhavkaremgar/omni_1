@@ -184,7 +184,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         context.append({
             "title": "Published Call Script Source of Truth",
             "body": (
-                "Use these dynamically generated Call Script sections as the authoritative spoken behavior. "
+                "Use these exact six Call Script sections as the authoritative spoken behavior. "
                 "Do not replace them with a regenerated script. Runtime instructions may constrain pacing, safety, and provider behavior, "
                 "but they must not modify or supersede the script below.\n\n"
                 + _format_call_script(saved_script)
@@ -284,7 +284,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     context.append({
         "title": "Authoritative Call Type Mode",
         "body": (
-            "OUTBOUND MODE: The employee called the customer. Identify the employee and company, explain the actual reason for calling and the configured product, service, or offer, then ask whether it is relevant or whether the customer is interested. Do not begin with name, identity, location, requirement, or profile questions. Qualify only after interest."
+            "OUTBOUND MODE: The employee called the customer to promote the configured business. Identify the employee and company, explain what the business offers and the reason for calling, then ask only whether the customer is interested or wants more information. Answer doubts from configured facts. Never ask qualification, discovery, profile, budget, location, timeline, preference, contact, or personal-detail questions. Do not perform actions such as booking, purchase, transfer, or callback."
             if call_type == "outbound" else
             "INBOUND MODE: The customer initiated the call. Greet the caller, ask why they called or what help they need, understand the request, and answer or assist first. Do not use an outbound sales opening or assume the caller's purpose. Qualify only when relevant to resolving the request."
         ),
@@ -532,14 +532,14 @@ def _canonical_call_script(configuration: dict[str, Any]) -> dict[str, str]:
     script = configuration.get("call_script")
     if not isinstance(script, dict):
         return {}
-    result = {str(title): _text(content) for title, content in script.items() if _text(content)}
-    return result if result else {}
+    result = {title: _text(script.get(title)) for title in SCRIPT_SECTION_NAMES}
+    return result if all(result.values()) else {}
 
 
 def _format_call_script(script: dict[str, str]) -> str:
     return "\n\n".join(
-        f"{index}. {title}\n{content}"
-        for index, (title, content) in enumerate(script.items(), 1)
+        f"{index}. {title}\n{script[title]}"
+        for index, title in enumerate(SCRIPT_SECTION_NAMES, 1)
     )
 
 

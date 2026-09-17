@@ -208,7 +208,7 @@ def _language_conversation_guidance(language: str) -> str:
         fillers = HINDI_ENGINE_CONTRACT + "\n\n" + fillers
         fillers += " MANDATORY SCRIPT RULE: every Hindi word spoken to callers must be written in Devanagari, mixed naturally with English words like okay, actually, requirement, details, available, budget, price, location, offer, product, service, booking, appointment, confirm, support, team, and follow-up. Never write Hindi in Roman letters."
         hello = "If the caller is silent for approximately 2-3 seconds, say '\u0915\u094d\u092f\u093e \u0906\u092a \u0935\u0939\u093e\u0902 \u0939\u0948\u0902 \u091c\u0940?' to check that they are present, then STOP speaking and WAIT for the caller's response."
-    return f"""The selected conversation language is {selected}. Generate these behaviors dynamically in that language and preserve the existing business, safety, inbound/outbound, interruption, call-lifecycle, research, Knowledge Base, variable, and dynamically generated script rules.
+    return f"""The selected conversation language is {selected}. Generate these behaviors dynamically in that language and preserve the existing business, safety, inbound/outbound, interruption, call-lifecycle, research, Knowledge Base, variable, and six-section script rules.
 
 For every regional-language conversation, code-switch naturally with commonly used English business and conversational words; do not make the speech overly formal or fully translated. Say 'thanks', 'thank you', and 'sorry' in English only. Speak every numeric string digit-by-digit in English, including product names and property terms such as 2 BHK, 3 BHK, 150 square yards, phone numbers, dates, times, prices, quantities, percentages, ages, IDs, model numbers, and codes; for example, 230 must be spoken as 'two three zero', never as 'two hundred thirty' or regional-language number words. Respond as soon as the caller finishes speaking: keep the response concise and do not add an artificial pause or wait for extra silence.
 
@@ -277,7 +277,7 @@ def build_call_script(configuration: dict[str, Any]) -> dict[str, str]:
         cta = profile["cta"]
     identity = (f"You are {name}. {('Represent ' + business_name + '. ') if business_name else ''}" + (f"The customer initiated this inbound call; assist them with {purpose}. Never claim you called them." if inbound else f"You initiated this outbound call. Represent the business and explain the verified reason for calling before qualifying the customer's need. Never claim the customer initiated the call."))
     greeting = (f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, and ask how you can help with {domain}." if inbound else f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, explain the verified business purpose or offer for calling, and ask whether the customer is interested or whether it is relevant to them.")
-    qualification_text = (qualification if inbound else "Do not begin by asking 'What is your requirement?' or any discovery question. First explain the configured business purpose, product, service, and verified offer details in a concise natural way. Only after explaining the offer, ask whether the customer is interested or whether it is relevant, then understand their need without interrogating them. Qualify only from verified details.")
+    qualification_text = (qualification if inbound else "OUTBOUND: No qualification is required. Do not ask discovery, profile, budget, location, timeline, preference, contact, or personal-detail questions. Explain the configured business, product or service, reason for calling, and verified benefits, then ask only whether the customer is interested or wants more information. Answer relevant doubts clearly and end or offer the configured informational next step without collecting details.")
     cta_text = (cta if inbound else "When the customer is interested, explain verified benefits and move toward the actual configured next step such as a booking, callback, visit, or purchase. Never invent an offer, price, feature, or guarantee.")
     if _is_telugu(language):
         business = f" {business_name}" if business_name else ""
@@ -443,7 +443,7 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
     if _text(configuration.get("call_type")).casefold() == "inbound":
         details_rule = "For this inbound call, understand the caller's request before collecting identity or contact details. Ask for the name, mobile number, or other details only when the requested action genuinely requires them, one question at a time, and never as a fixed opening step."
     elif call_type == "outbound":
-        details_rule = "ABSOLUTE OUTBOUND RULE: Never ask for the customer's name, phone number, mobile number, location, profession, identity, profile, or any other personal/detail field. Use campaign variables silently. Keep the call focused on explaining the purpose and offer, checking interest, relevant business qualification after interest, and the configured objective."
+        details_rule = "ABSOLUTE OUTBOUND RULE: Never ask for the customer's name, phone number, mobile number, location, profession, identity, profile, budget, timeline, preferences, or any other personal/detail field. Use campaign variables silently. Keep the call focused only on introducing the company, explaining what the business offers and why it is relevant, checking whether the customer is interested, answering doubts, and offering information. There is no outbound qualification step. Do not perform bookings, purchases, transfers, callbacks, or other actions unless a separate configured action explicitly requires it."
     sections.append(("CALLER DETAILS AT THE END", details_rule))
     if language:
         language_rule = f"Speak in {language}. Follow the caller's language preference when appropriate."
@@ -461,9 +461,7 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         idle_phrase = "Are you still there?"
     sections.append(("MANDATORY IDLE CONFIRMATION", f"If the caller becomes silent or idle for 2–3 seconds, ask exactly: '{idle_phrase}' Then STOP speaking and WAIT silently for the caller's response. Do not repeat the previous question, ask a new question, infer an answer, or continue the conversation while waiting. If the caller says 'hello' repeatedly instead of answering, ask the same phrase '{idle_phrase}' and WAIT for the caller's response. This is a mandatory idle-confirmation step, not an optional suggestion."))
     script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else build_call_script(configuration)
-    script_items = [(title, _text(content)) for title, content in script.items() if _text(content)]
-    script_title = "CANONICAL SIX-SECTION CALL SCRIPT" if tuple(title for title, _ in script_items) == SCRIPT_SECTION_NAMES else "DYNAMIC CALL SCRIPT"
-    sections.append((script_title, "\n\n".join(f"{index}. {title}\n{content}" for index, (title, content) in enumerate(script_items, 1))))
+    sections.append(("CANONICAL SIX-SECTION CALL SCRIPT", "\n\n".join(f"{index}. {title}\n{script.get(title, '')}" for index, title in enumerate(SCRIPT_SECTION_NAMES, 1))))
     custom_sections = configuration.get("custom_sections")
     if isinstance(custom_sections, list):
         for item in custom_sections:
@@ -526,16 +524,16 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
 def compose_employee_configuration(configuration: dict[str, Any]) -> dict[str, Any]:
     """Build the one deployable prompt while retaining all original customer input.
 
-    The script is canonical: edits to its configured sections must be reflected in the
+    The script is canonical: edits to its six sections must be reflected in the
     prompt shown in the UI and sent to OmniDimension on the next publish.
     """
     result = normalize_business_identity(configuration)
     result.setdefault("original_requirement", _text(result.get("direct_prompt")) or _text(result.get("purpose")))
     existing_script = result.get("call_script")
-    if not isinstance(existing_script, dict) or not any(_text(value) for value in existing_script.values()):
+    if not isinstance(existing_script, dict) or any(not _text(existing_script.get(title)) for title in SCRIPT_SECTION_NAMES):
         result["call_script"] = build_call_script(result)
     result["conversation_variables"] = _conversation_variables(result)
-    result["opening"] = result["call_script"].get("Greeting & Intro") or next(iter(result["call_script"].values()), "")
+    result["opening"] = result["call_script"]["Greeting & Intro"]
     generated = build_employee_prompt(result)
     result["final_prompt"] = generated
     return result

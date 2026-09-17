@@ -441,7 +441,7 @@ def generate_employee_script(
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AIEmployeeVersionRead:
-    """Generate the editable dynamic script from the canonical employee context."""
+    """Generate the editable six-section script from the canonical employee context."""
     employee = get_employee_or_404(employee_id, current_user.tenant.id, db)
     draft = _draft_for(employee)
     if draft is None:
