@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.schemas.ai_employee_version import AIEmployeeVersionRead
 
 
-CallType = Literal["inbound", "outbound"]
+CallType = Literal["outbound"]
 CreationMode = Literal["chat", "prompt"]
 SUPPORTED_EMPLOYEE_LANGUAGES = {"English", "Hindi", "Telugu", "Tamil", "Kannada", "Malayalam", "Marathi", "Bengali", "Gujarati", "Punjabi", "Odia", "Assamese"}
 

@@ -389,14 +389,14 @@ def update_employee(
     configuration = changes.pop("configuration", None)
     draft = _ensure_draft(employee, current_user)
     normalized = {field: value.strip() if isinstance(value, str) else value for field, value in changes.items()}
-    if "call_type" in normalized and normalized["call_type"] not in ("inbound", "outbound"):
-        raise HTTPException(status_code=422, detail="call_type must be inbound or outbound")
+    if "call_type" in normalized and normalized["call_type"] != "outbound":
+        raise HTTPException(status_code=422, detail="Only outbound employees are supported")
     draft.configuration = {**(draft.configuration or {}), **normalized}
     if configuration is not None:
         if not isinstance(configuration, dict):
             raise HTTPException(status_code=422, detail="Configuration must be an object")
-        if configuration.get("call_type") not in (None, "inbound", "outbound"):
-            raise HTTPException(status_code=422, detail="call_type must be inbound or outbound")
+        if configuration.get("call_type") not in (None, "outbound"):
+            raise HTTPException(status_code=422, detail="Only outbound employees are supported")
         draft.configuration = {
             **(draft.configuration or {}),
             **strip_customer_internal_configuration(configuration),
