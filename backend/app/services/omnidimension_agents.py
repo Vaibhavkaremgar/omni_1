@@ -49,6 +49,17 @@ class OmniDimensionAgentService:
             if existing_provider_id
             else self.provider.create_agent(payload)
         )
+        logger.info(
+            "[OMNI_END_CALL_CONFIG] agent_id=%s is_end_call_enabled=%s "
+            "user_idle_threshold_sec=%s max_call_duration_in_sec=%s silence_timeout=%s "
+            "end_call_condition_present=%s",
+            provider_agent.provider_id,
+            payload.get("is_end_call_enabled", "provider_default"),
+            payload.get("user_idle_threshold_sec", "provider_default"),
+            payload.get("max_call_duration_in_sec", "provider_default"),
+            payload.get("silence_timeout", "provider_default"),
+            bool(payload.get("end_call_condition")),
+        )
         try:
             readback = self.provider.get_agent(provider_agent.provider_id)
             sections = readback.get("context_breakdown") if isinstance(readback, dict) else None
@@ -284,6 +295,17 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "end_call_message": "Thank you for your time. Is there anything else you need before we finish?",
         "end_call_message_type": "prompt",
         "end_call_message_prompt": "Use a warm, brief goodbye only after clear caller end intent; otherwise keep listening and continue the conversation.",
+        # Current OmniDimension API shape. Keep the legacy flat keys above for
+        # older agents/readbacks, but send the documented nested configuration.
+        "end_call": {
+            "condition": (
+                "End only when the caller clearly says they are finished or explicitly confirms they want to end "
+                "after the agent asks whether anything else is needed. Never end because of a short answer, a normal "
+                "yes, a product/category, a name, a budget, incomplete information, silence, or objective completion."
+            ),
+            "message": "Thank you for your time. Is there anything else you need before we finish?",
+            "message_prompt": "Use a warm, brief goodbye only after clear caller end intent; otherwise keep listening and continue the conversation.",
+        },
     }
 
     voice = configuration.get("voice")

@@ -85,6 +85,11 @@ class OmniDimensionClient:
         headers.update(kwargs.pop("extra_headers", None) or {})
         if "json" in kwargs and kwargs["json"] is not None:
             headers["Content-Type"] = "application/json"
+            logger.info(
+                "[OMNI_REQUEST_JSON] method=%s path=%s json=%s",
+                method, "/" + path.lstrip("/"),
+                json.dumps(_redact(kwargs["json"]), ensure_ascii=False, separators=(",", ":")),
+            )
             _log_agent_payload_diagnostic(method, path, kwargs["json"])
         try:
             response = self.client.request(
@@ -112,6 +117,13 @@ class OmniDimensionClient:
             "Omni HTTP diagnostic method=%s path=%s params=%s response_status=%s response_body=%s",
             method, "/" + path.lstrip("/"), _safe_params(kwargs.get("params")), response.status_code, _safe_response_body(response),
         )
+        logger.info(
+            "[OMNI_RAW_RESPONSE] method=%s path=%s status=%s request_id=%s body=%s",
+            method, "/" + path.lstrip("/"), response.status_code,
+            response.headers.get("x-request-id") or response.headers.get("request-id") or "unknown",
+            _safe_response_body(response, limit=None),
+        )
+        _log_provider_warnings(method, path, response)
         if response.status_code >= 400:
             logger.warning(
                 "Omni provider response path=%s status=%s code=%s message=%s",
@@ -170,12 +182,30 @@ def _log_agent_payload_diagnostic(method: str, path: str, payload: Any) -> None:
     )
 
 
-def _safe_response_body(response: httpx.Response) -> str:
+def _log_provider_warnings(method: str, path: str, response: httpx.Response) -> None:
+    """Surface provider warnings embedded in an otherwise successful response."""
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        return
+    if not isinstance(payload, Mapping):
+        return
+    warnings = payload.get("warnings") or payload.get("warning") or payload.get("issues")
+    if warnings:
+        logger.warning(
+            "[OMNI_PROVIDER_WARNING] method=%s path=%s status=%s warnings=%s",
+            method, "/" + path.lstrip("/"), response.status_code,
+            json.dumps(_redact(warnings), ensure_ascii=False),
+        )
+
+
+def _safe_response_body(response: httpx.Response, *, limit: int | None = 1000) -> str:
     try:
         value = response.json()
     except (ValueError, TypeError):
         value = response.text
-    return json.dumps(_redact(value), ensure_ascii=False)[:1000]
+    body = json.dumps(_redact(value), ensure_ascii=False)
+    return body if limit is None else body[:limit]
 
 
 def _redact(value: Any) -> Any:

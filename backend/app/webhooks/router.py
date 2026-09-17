@@ -1,3 +1,4 @@
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -24,11 +25,25 @@ async def receive_omnidimension_post_call(request: Request, db: Session = Depend
     try:
         payload = await request.json()
     except ValueError as exc:
+        logger.warning("[OMNI_WEBHOOK_REJECTED] method=%s path=%s reason=invalid_json", request.method, request.url.path)
         raise HTTPException(status_code=400, detail="Webhook payload must be valid JSON.") from exc
     if not isinstance(payload, dict):
+        logger.warning("[OMNI_WEBHOOK_REJECTED] method=%s path=%s reason=payload_not_object", request.method, request.url.path)
         raise HTTPException(status_code=400, detail="Webhook payload must be a JSON object.")
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     report = payload.get("call_report") if isinstance(payload.get("call_report"), dict) else {}
+    logger.info(
+        "[OMNI_WEBHOOK_RECEIVED] method=%s path=%s event_type=%s provider_call_id=%s provider_request_id=%s",
+        request.method, request.url.path,
+        payload.get("event_type") or payload.get("type") or payload.get("event") or report.get("event_type") or "unknown",
+        payload.get("call_log_id") or payload.get("call_id") or payload.get("id") or "unknown",
+        payload.get("requestId") or payload.get("request_id") or metadata.get("provider_request_id") or "unknown",
+    )
+    logger.info(
+        "[OMNI_WEBHOOK_RAW_PAYLOAD] method=%s path=%s payload=%s",
+        request.method, request.url.path,
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+    )
     logger.info(
         "[OMNI_EVENT_RECEIVED] local_call_id=%s employee_id=%s employee_version_id=%s provider_agent_id=%s "
         "provider_request_id=%s provider_call_id=%s event_type=%s provider_status=%s raw_reason=%s event_timestamp=%s",
@@ -48,9 +63,12 @@ async def receive_omnidimension_post_call(request: Request, db: Session = Depend
             metadata.get("local_call_id"), payload.get("call_id") or payload.get("call_log_id") or payload.get("id"),
             type(exc).__name__, str(exc)[:300],
         )
+        logger.warning("[OMNI_WEBHOOK_REJECTED] method=%s path=%s reason=processing_error exception_type=%s", request.method, request.url.path, type(exc).__name__)
         raise
     if call is None:
+        logger.warning("[OMNI_WEBHOOK_REJECTED] method=%s path=%s reason=unmatched_call", request.method, request.url.path)
         return {"status": "ignored"}
+    logger.info("[OMNI_WEBHOOK_PROCESSED] method=%s path=%s local_call_id=%s provider_call_id=%s provider_request_id=%s status=%s", request.method, request.url.path, call.id, call.provider_call_id or "unknown", (call.dispatch_metadata or {}).get("provider_request_id") or "unknown", call.status)
     return {"status": "processed", "call_id": str(call.id)}
 
 

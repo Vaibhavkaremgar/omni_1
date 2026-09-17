@@ -121,6 +121,11 @@ class InstantCallService:
         db.add(call)
         db.commit()
         db.refresh(call)
+        logger.info(
+            "[CALL_LIFECYCLE_CREATED] local_call_id=%s employee_id=%s employee_version_id=%s provider_agent_id=%s "
+            "provider_request_id=unknown provider_call_id=unknown created_at=%s",
+            call.id, employee.id, employee.published_version.id, provider_agent_id, call.created_at,
+        )
 
         call_context = {}
         if call.customer_name:
@@ -147,6 +152,20 @@ class InstantCallService:
 
         try:
             version_config = employee.published_version.configuration or {}
+            logger.info(
+                "[OMNI_DISPATCH_CONFIG] local_call_id=%s provider_agent_id=%s voice_configured=%s language=%s "
+                "phone_configured=%s custom_variables_count=%s call_duration_limit=%s silence_timeout=%s "
+                "end_call_config=%s other_termination_config=%s",
+                call.id, provider_agent_id, bool(version_config.get("voice")), version_config.get("language", employee.language),
+                bool(from_number_id), len(call_context), version_config.get("max_call_duration_in_sec", "none"),
+                version_config.get("silence_timeout", "none"), version_config.get("end_call_condition", "none"),
+                {key: version_config.get(key) for key in ("is_end_call_enabled", "user_idle_threshold_sec", "speech_start_timeout") if key in version_config},
+            )
+            logger.info(
+                "[CALL_LIFECYCLE_DISPATCH_START] local_call_id=%s employee_id=%s employee_version_id=%s "
+                "provider_agent_id=%s provider_request_id=unknown provider_call_id=unknown dispatch_started_at=%s",
+                call.id, employee.id, employee.published_version.id, provider_agent_id, metadata["dispatch_timestamp"],
+            )
             logger.info(
                 "[CALL_RUNTIME_CONFIG] local_call_id=%s provider_agent_id=%s is_end_call_enabled=%s "
                 "end_call_condition=%s user_idle_threshold_sec=%s silence_timeout=%s "
@@ -195,6 +214,12 @@ class InstantCallService:
             "provider_request_id": str(result.provider_request_id or result.provider_call_id or ""),
             "provider_call_id_received_at_dispatch": bool(result.provider_call_id),
         }
+        logger.info(
+            "[CALL_LIFECYCLE_DISPATCH_RESULT] local_call_id=%s employee_id=%s employee_version_id=%s provider_agent_id=%s "
+            "provider_request_id=%s provider_call_id=%s dispatch_completed_at=%s terminal_status=unknown",
+            call.id, employee.id, employee.published_version.id, provider_agent_id,
+            result.provider_request_id or result.provider_call_id or "unknown", result.provider_call_id or "unknown", utc_now(),
+        )
         logger.info(
             "[OMNI_DISPATCH_RESULT] local_call_id=%s employee_id=%s employee_version_id=%s "
             "provider_agent_id=%s provider_call_id=%s dispatch_timestamp=%s final_local_status=%s",

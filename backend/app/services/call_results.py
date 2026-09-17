@@ -47,6 +47,11 @@ class CallResultService:
 
         if event["provider_call_id"]:
             call.provider_call_id = call.provider_call_id or event["provider_call_id"]
+            logger.info(
+                "[OMNI_CALL_CORRELATION] local_call_id=%s provider_request_id=%s provider_call_id=%s",
+                call.id, event.get("provider_request_id") or (call.dispatch_metadata or {}).get("provider_request_id") or "unknown",
+                call.provider_call_id,
+            )
         if event["status"]:
             call.status = event["status"]
         for field in ("duration_seconds", "transcript", "summary", "recording_url", "sentiment", "outcome", "customer_intent", "key_points", "action_items", "follow_up_required", "follow_up_notes", "started_at"):
@@ -106,6 +111,17 @@ class CallResultService:
                         _update_campaign_progress(db, campaign)
         db.commit()
         db.refresh(call)
+        turns = event.get("transcript_data") if isinstance(event.get("transcript_data"), list) else []
+        first_assistant = next((turn for turn in turns if isinstance(turn, dict) and turn.get("speaker") == "assistant"), None)
+        first_customer = next((turn for turn in turns if isinstance(turn, dict) and turn.get("speaker") == "customer"), None)
+        if event.get("status") in {CallStatus.ringing.value, CallStatus.in_progress.value}:
+            logger.info("[CALL_LIFECYCLE_PROVIDER_STARTED] local_call_id=%s provider_request_id=%s provider_call_id=%s provider_event_type=%s event_timestamp=%s", call.id, (call.dispatch_metadata or {}).get("provider_request_id") or "unknown", call.provider_call_id or "unknown", event.get("event_type") or "unknown", event.get("event_timestamp") or "unknown")
+        if first_assistant:
+            logger.info("[CALL_LIFECYCLE_WELCOME_STARTED] local_call_id=%s provider_call_id=%s event_timestamp=%s", call.id, call.provider_call_id or "unknown", first_assistant.get("timestamp") or event.get("event_timestamp") or "unknown")
+            logger.info("[CALL_LIFECYCLE_WELCOME_COMPLETED] local_call_id=%s provider_call_id=%s event_timestamp=%s", call.id, call.provider_call_id or "unknown", first_assistant.get("timestamp") or event.get("event_timestamp") or "unknown")
+        if first_customer:
+            logger.info("[CALL_LIFECYCLE_CALLER_SPEECH] local_call_id=%s provider_call_id=%s event_timestamp=%s", call.id, call.provider_call_id or "unknown", first_customer.get("timestamp") or event.get("event_timestamp") or "unknown")
+        logger.info("[CALL_LIFECYCLE_PROVIDER_EVENT] local_call_id=%s provider_request_id=%s provider_call_id=%s provider_event_type=%s provider_status=%s termination_source=%s termination_reason=%s event_timestamp=%s", call.id, (call.dispatch_metadata or {}).get("provider_request_id") or "unknown", call.provider_call_id or "unknown", event.get("event_type") or "unknown", event.get("provider_status") or "unknown", event.get("termination_source") or "unknown", event.get("termination_reason") or "unknown", event.get("event_timestamp") or "unknown")
         if event.get("status") in TERMINAL_STATUSES:
             turns = event.get("transcript_data") if isinstance(event.get("transcript_data"), list) else []
             user_spoke = any(isinstance(turn, dict) and turn.get("speaker") == "customer" for turn in turns)
@@ -127,6 +143,8 @@ class CallResultService:
                 user_spoke, agent_spoke, str(event.get("event_type") or "").casefold() == "end_call",
                 False, "timeout" in reason_text or "idle" in reason_text, False,
             )
+            logger.info("[CALL_LIFECYCLE_TERMINAL] local_call_id=%s provider_request_id=%s provider_call_id=%s terminal_event_at=%s terminal_status=%s termination_source=%s termination_reason=%s", call.id, (call.dispatch_metadata or {}).get("provider_request_id") or "unknown", call.provider_call_id or "unknown", event.get("event_timestamp") or call.ended_at or "unknown", call.status, event.get("termination_source") or "unknown", event.get("termination_reason") or "unknown")
+            logger.info("[CALL_LIFECYCLE_FINAL] local_call_id=%s provider_request_id=%s provider_call_id=%s terminal_status=%s termination_source=%s termination_reason=%s", call.id, (call.dispatch_metadata or {}).get("provider_request_id") or "unknown", call.provider_call_id or "unknown", call.status, event.get("termination_source") or "unknown", event.get("termination_reason") or "unknown")
         if call.transcript and call.analysis_status not in {"pending", "running", "completed"}:
             call.analysis_status = "pending"
             db.commit()
