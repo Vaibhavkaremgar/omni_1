@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Any
 
-from app.services.employee_templates import get_template, UNIVERSAL_TELUGU_VOICE_GUIDANCE
+from app.services.employee_templates import get_template
 
 SCRIPT_SECTION_NAMES = (
     "Identity & Purpose",
@@ -184,7 +184,7 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
     name = _text(configuration.get("name")) or "AI employee"
     call_type = _text(configuration.get("call_type")).casefold()
     mode_rules = (
-        "CALL MODE: INBOUND. The customer initiated this call. Greet, ask how you can help, understand and answer their request, and guide them to a suitable next action. Never say or imply that you called the customer or invent a reason for calling."
+        "CALL MODE: INBOUND. The customer initiated this call. Greet them, ask why they called / what help they need, understand and answer their request, and guide them to a suitable next action. Never say or imply that you called the customer or invent a reason for calling."
         if call_type == "inbound" else
         "CALL MODE: OUTBOUND. You initiated this call. The opening is offer-first: identify yourself and the company, then clearly explain the configured business, product/service, reason for calling, and any verified benefit before asking the customer anything. The first customer-directed question may only ask whether they would like to hear more or whether the offer is relevant. Never open with 'What is your requirement?', 'How can I help?', or any discovery/qualification question. Ask qualification questions only after the customer has heard the offer and shown interest. Never say or imply that the customer initiated the call; never invent an offer or claim."
     )
@@ -212,8 +212,10 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         if business:
             sections.append(("CUSTOMER PLACEHOLDER VALUES", business))
     language = _text(configuration.get("language"))
-    if not language or language.casefold() in {"telugu", "te", "te-in", "telugu (india)"}:
-        sections.append(("UNIVERSAL LANGUAGE & SPEAKING STYLE", UNIVERSAL_TELUGU_VOICE_GUIDANCE))
+    if language.casefold() in {"telugu", "te", "te-in", "telugu (india)"}:
+        sections.append(("TELUGU LANGUAGE ENGINE", TELUGU_ENGINE_CONTRACT))
+    elif language.casefold() in {"hindi", "hi", "hi-in", "hindi (india)"}:
+        sections.append(("HINDI LANGUAGE ENGINE", HINDI_ENGINE_CONTRACT))
     if purpose: sections.append(("IDENTITY AND ROLE", f"You are {name}. {purpose}"))
     opening_rules = (
         "The platform has already spoken the welcome message before this conversation begins. "
@@ -231,7 +233,7 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
             "Do not turn an outbound call into a support-style conversation by asking what the customer needs before explaining what the business is offering."
         )
     elif call_type == "inbound":
-        opening_rules += " This is an inbound call: the caller initiated it. Ask how you can help, understand the caller's request, and answer or assist before qualifying. Do not assume the reason for the call, use an outbound sales opening, or ask for identity details unless they become relevant to the requested action."
+        opening_rules += " This is an inbound call: the caller initiated it. Ask why they called or what help they need, understand the caller's request, and answer or assist before qualifying. Do not assume the reason for the call, use an outbound sales opening, or ask for identity details unless they become relevant to the requested action."
     sections.append(("OPENING AND FIRST CALLER TURN", opening_rules))
     shabdha_brief = _text(configuration.get("original_shabdha_brief"))
     direct_prompt = _text(configuration.get("direct_prompt"))
@@ -276,6 +278,8 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
     )
     if _text(configuration.get("call_type")).casefold() == "inbound":
         details_rule = "For this inbound call, understand the caller's request before collecting identity or contact details. Ask for the name, mobile number, or other details only when the requested action genuinely requires them, one question at a time, and never as a fixed opening step."
+    elif call_type == "outbound":
+        details_rule = "ABSOLUTE OUTBOUND RULE: Never ask for the customer's name, phone number, mobile number, location, profession, identity, profile, or any other personal/detail field. Use campaign variables silently. Keep the call focused on explaining the purpose and offer, checking interest, relevant business qualification after interest, and the configured objective."
     sections.append(("CALLER DETAILS AT THE END", details_rule))
     if language:
         language_rule = f"Speak in {language}. Follow the caller's language preference when appropriate."

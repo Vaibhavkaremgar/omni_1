@@ -777,7 +777,7 @@ def test_incoming_agent_starts_with_help_request_flow():
     employee = SimpleNamespace(name="Incoming Assistant", purpose="Answer customer questions", call_type="inbound", llm_model="gpt-4o", language="Telugu")
     payload = map_employee_configuration(employee, {"name": employee.name, "purpose": employee.purpose, "call_type": "inbound", "language": "Telugu"})
     bodies = "\n".join(section["body"] for section in payload["context_breakdown"])
-    assert "ask how you can help" in bodies
+    assert "ask why they called or what help they need" in bodies
     assert "unless they become relevant to the requested action" in bodies
     assert payload["call_type"] == "Incoming"
 
