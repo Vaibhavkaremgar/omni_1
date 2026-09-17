@@ -23,6 +23,7 @@ export default function EmployeeWorkspace() {
   const [name, setName] = useState('');
   const [requirement, setRequirement] = useState('');
   const [language, setLanguage] = useState('Telugu');
+  const [callType, setCallType] = useState<'inbound' | 'outbound'>('inbound');
   const [voiceId, setVoiceId] = useState('');
   const [voices, setVoices] = useState<Voice[]>([]);
   const [phones, setPhones] = useState<Phone[]>([]);
@@ -40,7 +41,7 @@ export default function EmployeeWorkspace() {
     try {
       const [e, ps] = await Promise.all([backendJson<Employee>(`/employees/${id}`), backendJson<Phone[]>('/phone-numbers')]);
       const c = e.configuration ?? {};
-      setEmployee(e); setConfig(c); setName(e.name); setRequirement(String(c.original_requirement ?? c.business_description ?? e.purpose)); setLanguage(String(c.language ?? e.language));
+      setEmployee(e); setConfig(c); setName(e.name); setRequirement(String(c.original_requirement ?? c.business_description ?? e.purpose)); setLanguage(String(c.language ?? e.language)); setCallType((c.call_type ?? e.call_type) as 'inbound' | 'outbound');
       setVoiceId(String((c.voice as { id?: string } | undefined)?.id ?? ''));
       const active = ps.filter(p => p.status === 'active'); setPhones(active); if (active[0]) setFromPhone(active[0].id);
     } catch { setError('Unable to load this employee.'); }
@@ -57,7 +58,7 @@ export default function EmployeeWorkspace() {
   const save = async (publish = false) => {
     setBusy(true); setError(''); setNotice('');
     try {
-      const next = { ...config, name: name.trim(), purpose: requirement, original_requirement: requirement, language, ...(voiceId ? { voice: { id: voiceId, name: selectedVoice?.name, tier: selectedVoice?.tier, gender: selectedVoice?.gender } } : {}) };
+      const next = { ...config, name: name.trim(), purpose: requirement, original_requirement: requirement, language, call_type: callType, ...(voiceId ? { voice: { id: voiceId, name: selectedVoice?.name, tier: selectedVoice?.tier, gender: selectedVoice?.gender } } : {}) };
       const updated = await backendJson<Employee>(`/employees/${id}`, { method: 'PATCH', body: JSON.stringify({ name: name.trim(), language, configuration: next }) });
       setEmployee(updated); setConfig(updated.configuration ?? next);
       if (publish) { const published = await backendJson<Employee>(`/employees/${id}/publish`, { method: 'POST' }); setEmployee(published); setConfig(published.configuration ?? next); setNotice('Employee published successfully.'); } else setNotice('Changes saved.');

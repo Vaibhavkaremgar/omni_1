@@ -124,7 +124,7 @@ def _ensure_draft(employee: AIEmployee, current_user: AuthenticatedUser) -> AIEm
 def _validate_publish(employee: AIEmployee, draft: AIEmployeeVersion | None) -> None:
     if draft is None or not isinstance(draft.configuration, dict):
         raise HTTPException(status_code=422, detail="A draft configuration is required before publishing")
-    required = ("name", "llm_provider", "llm_model", "language")
+    required = ("name", "llm_provider", "llm_model", "language", "call_type")
     missing = [field for field in required if not str(draft.configuration.get(field, "")).strip()]
     if not str(draft.configuration.get("purpose", "")).strip() and not str(draft.configuration.get("direct_prompt", "")).strip() and not str(draft.configuration.get("final_prompt", "")).strip():
         missing.append("purpose, direct_prompt, or final_prompt")
@@ -389,15 +389,14 @@ def update_employee(
     configuration = changes.pop("configuration", None)
     draft = _ensure_draft(employee, current_user)
     normalized = {field: value.strip() if isinstance(value, str) else value for field, value in changes.items()}
-    # Enforce self-service call_type restriction at the configuration level too
-    if "call_type" in normalized and normalized["call_type"] not in ("inbound", "both"):
-        raise HTTPException(status_code=422, detail="Outbound calling is available by request. Contact us to enable it.")
+    if "call_type" in normalized and normalized["call_type"] not in ("inbound", "outbound"):
+        raise HTTPException(status_code=422, detail="call_type must be inbound or outbound")
     draft.configuration = {**(draft.configuration or {}), **normalized}
     if configuration is not None:
         if not isinstance(configuration, dict):
             raise HTTPException(status_code=422, detail="Configuration must be an object")
-        if configuration.get("call_type") not in (None, "inbound", "both"):
-            raise HTTPException(status_code=422, detail="Outbound calling is available by request. Contact us to enable it.")
+        if configuration.get("call_type") not in (None, "inbound", "outbound"):
+            raise HTTPException(status_code=422, detail="call_type must be inbound or outbound")
         draft.configuration = strip_customer_internal_configuration(configuration)
     draft.configuration = compose_employee_configuration(draft.configuration)
     normalize_employee_llm_configuration(employee, draft)
