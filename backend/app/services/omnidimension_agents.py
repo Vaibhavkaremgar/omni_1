@@ -12,6 +12,8 @@ from app.services.employee_prompt import (
     SCRIPT_SECTION_NAMES,
     build_employee_prompt,
     business_conversation_profile,
+    language_conversation_guidance,
+    natural_voice_conversation_behavior,
     normalize_business_identity,
 )
 from app.services.employee_templates import get_template, UNIVERSAL_TELUGU_VOICE_GUIDANCE
@@ -278,6 +280,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     })
 
     call_type = _text(configuration.get("call_type", employee.call_type)).casefold()
+    selected_language = _language_name(_text(configuration.get("language"), employee.language))
     context.append({
         "title": "Authoritative Call Type Mode",
         "body": (
@@ -295,6 +298,17 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             "Do not treat the first answer as task completion and do not end the call after one response. "
             "Completing the business objective is not permission to end the call. After the required task is complete, ask whether the caller needs anything else and wait. If they ask another question, continue helping. Treat a short answer such as 'yes', 'okay', 'sure', a product name, or a budget amount as an answer to the immediately preceding business question, not as permission to end. Treat hesitation or filler sounds such as 'ahh', 'umm', 'uh', 'hmm', 'haa', 'actually', 'one second', 'wait', and equivalent Telugu/Hindi fillers as thinking or continuation cues, not goodbye or hang-up intent. Only enter the end-call path after a clear caller statement that they are finished or a clear affirmative answer to an explicit end-of-call confirmation. Do not use silence, hesitation, or objective completion as confirmation."
         ),
+        "is_enabled": True,
+    })
+
+    context.append({
+        "title": "Natural Conversation Behavior",
+        "body": natural_voice_conversation_behavior(),
+        "is_enabled": True,
+    })
+    context.append({
+        "title": "Language-Aware Natural Conversation Contract",
+        "body": language_conversation_guidance(selected_language),
         "is_enabled": True,
     })
 

@@ -952,3 +952,56 @@ def test_omni_payload_requires_answering_questions_once_from_context():
     assert "Knowledge Base" in section["body"]
     assert "Say each substantive sentence only once" in section["body"]
     assert "Never repeat the same greeting, offer, explanation, question, or closing line back-to-back" in section["body"]
+
+
+def test_canonical_prompt_includes_natural_memory_and_code_speech_rules():
+    configuration = compose_employee_configuration({
+        "name": "Asha",
+        "business_name": "Urban Nest",
+        "purpose": "Follow up with plot leads and arrange site visits.",
+        "business_type": "real estate",
+        "call_type": "outbound",
+        "language": "English",
+    })
+
+    prompt = configuration["final_prompt"]
+    assert "Avoid repetitive sentences" in prompt
+    assert "Remember facts shared during the current call" in prompt
+    assert "asking for the same information again" in prompt
+    assert "three four five zero" in prompt
+    assert "repeat the same digits" in prompt
+    assert "For unrelated questions" in prompt
+
+
+def test_language_specific_natural_rules_stay_isolated_in_omni_context():
+    hindi_employee = SimpleNamespace(name="Asha", purpose="Qualify plot leads", call_type="outbound", llm_model="gpt-4o", language="Hindi")
+    hindi_payload = map_employee_configuration(hindi_employee, {
+        "name": "Asha",
+        "business_name": "Urban Nest",
+        "business_type": "real estate",
+        "purpose": "Follow up with customers interested in plots.",
+        "call_type": "outbound",
+        "language": "Hindi",
+    })
+    hindi_contract = next(item["body"] for item in hindi_payload["context_breakdown"] if item["title"] == "Language-Aware Natural Conversation Contract")
+
+    assert "Never use Telugu fillers" in hindi_contract
+    assert "sare andi" not in hindi_contract
+    assert "ok andi" not in hindi_contract
+    assert "artham ayyindhi andi" not in hindi_contract
+    assert "ji" in hindi_contract
+
+    telugu_employee = SimpleNamespace(name="Asha", purpose="Qualify plot leads", call_type="outbound", llm_model="gpt-4o", language="Telugu")
+    telugu_payload = map_employee_configuration(telugu_employee, {
+        "name": "Asha",
+        "business_name": "Urban Nest",
+        "business_type": "real estate",
+        "purpose": "Follow up with customers interested in plots.",
+        "call_type": "outbound",
+        "language": "Telugu",
+    })
+    telugu_contract = next(item["body"] for item in telugu_payload["context_breakdown"] if item["title"] == "Language-Aware Natural Conversation Contract")
+
+    assert "sare andi" in telugu_contract
+    assert "ok andi" in telugu_contract
+    assert "inka" in telugu_contract
