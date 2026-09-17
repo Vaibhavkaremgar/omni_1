@@ -84,6 +84,7 @@ def _language_conversation_guidance(language: str) -> str:
         hello = f"For repeated hello or attention-seeking, acknowledge the caller with varied, natural responses in {selected}, rather than repeating the same greeting."
     if _is_telugu(normalized):
         fillers = TELUGU_ENGINE_CONTRACT + "\n\n" + fillers
+        fillers += " Use correct modern Telugu grammar around English terms. Preferred pattern: 'నమస్కారం అండి, నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను. మీ insurance premium గురించి ఒక quick update ఇవ్వడానికి call చేశాను. మీకు ఈ offer గురించి details కావాలా?' Use 'నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను', not 'నేను Akshay మాట్లాడుతున్నాను' when introducing the company. Keep insurance, premium, quick update, call, offer, and details in English; keep Telugu postpositions and verbs in Telugu script."
         fillers += " MANDATORY SCRIPT RULE: every Telugu word spoken to callers must be written in Telugu script, mixed naturally with English words like insurance, renewal, policy, details, available, call, support, service, offer, booking, appointment, price, budget, product, team, and follow-up. Never write Telugu in Roman letters."
         hello = "If the caller is silent for approximately 2-3 seconds, say exactly '\u0c35\u0c3f\u0c28\u0c3f\u0c2a\u0c3f\u0c38\u0c4d\u0c24\u0c41\u0c02\u0c26\u0c3e \u0c05\u0c02\u0c21\u0c3f?' to check that they are present, then STOP speaking and WAIT for the caller's response."
     elif _is_hindi(normalized):

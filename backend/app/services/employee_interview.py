@@ -364,6 +364,10 @@ class RealLLMService(LLMService):
             system += (
                 "\n\nLANGUAGE OUTPUT GATE: A customer-facing section written entirely in pure Telugu or pure Hindi is invalid. Rewrite it using the selected native script for regional words plus natural Latin-script English business terms. Never transliterate those English terms into the regional script and never use Roman Telugu or Roman Hindi."
             )
+        if str(context["language"]).casefold() in {"telugu", "te", "te-in", "telugu (india)"}:
+            system += (
+                "\n\nTELUGU NATURAL SENTENCE PATTERNS: Use correct modern Telugu grammar around English terms. Prefer exactly this style: 'నమస్కారం అండి, నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను. మీ insurance premium గురించి ఒక quick update ఇవ్వడానికి call చేశాను. మీకు ఈ offer గురించి details కావాలా?' Do not write 'నేను Akshay మాట్లాడుతున్నాను' when the company is being introduced; use 'నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను'. Keep 'insurance', 'premium', 'quick update', 'call', 'offer', and 'details' in English. Use Telugu postpositions and verbs in Telugu script, for example 'మీ budget ఎంత range లో ఉంది?', 'మీకు details WhatsApp లో share చేయనా?', and 'నేను team తో confirm చేస్తాను'."
+            )
         user = json.dumps(context, ensure_ascii=False, indent=2)
         payload = self._build_request(provider, model, system, user)
         for attempt in range(2):
