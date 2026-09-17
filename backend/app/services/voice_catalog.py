@@ -46,6 +46,7 @@ BUILTIN_VOICES = [{
     "supports_cloning": True,
     "languages": ["Hindi"],
     "is_cloned": True,
+<<<<<<< HEAD
 }, {
     "id": "cloned_cartesia_samantha",
     "name": "Samantha",
@@ -66,6 +67,8 @@ BUILTIN_VOICES = [{
     "supports_cloning": True,
     "languages": ["Telugu"],
     "is_cloned": True,
+=======
+>>>>>>> parent of 8487696 (updated the voice of outpero)
 }]
 
 def voice_catalog() -> list[dict[str, Any]]:
