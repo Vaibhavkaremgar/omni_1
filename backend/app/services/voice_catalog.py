@@ -47,6 +47,16 @@ BUILTIN_VOICES = [{
     "languages": ["Hindi"],
     "is_cloned": True,
 }, {
+    "id": "cloned_cartesia_samantha",
+    "name": "Samantha",
+    "tier": "cloned",
+    "gender": "female",
+    "provider": "cartesia",
+    "provider_voice_id": "ad2c6cbc-403e-4e3b-91be-8e8bc5765e85",
+    "supports_cloning": True,
+    "languages": ["Hindi"],
+    "is_cloned": True,
+}, {
     "id": "cloned_cartesia_manoj",
     "name": "Manoj",
     "tier": "cloned",
