@@ -424,7 +424,9 @@ def _transcriber_configuration(configuration: dict[str, Any], language: str) -> 
     result: dict[str, Any] = {
         "provider": "soniox",
         "language": _soniox_language_code(language),
-        "silence_timeout_ms": 800,
+        # Keep end-of-turn detection responsive. This is configurable because
+        # noisy phone lines may need a larger value.
+        "silence_timeout_ms": getattr(get_settings(), "live_speech_silence_timeout_ms", 800),
         "interruption_min_words": 1,
     }
     if isinstance(configured, dict):

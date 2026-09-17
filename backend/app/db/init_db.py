@@ -29,6 +29,7 @@ def init_db() -> None:
     _ensure_integration_tables()
     _ensure_instant_lead_columns()
     _ensure_campaign_execution_columns()
+    _ensure_campaign_contact_columns()
     _ensure_employee_knowledge_file_columns()
     _bootstrap_admin()
 
@@ -364,6 +365,27 @@ def _ensure_campaign_execution_columns() -> None:
     with engine.begin() as connection:
         if "phone_number_id" not in existing:
             connection.execute(text("ALTER TABLE campaigns ADD COLUMN phone_number_id CHAR(32)"))
+
+def _ensure_campaign_contact_columns() -> None:
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    existing = {c["name"] for c in inspect(engine).get_columns("campaign_contacts")}
+    additions = {
+        "normalized_phone": "VARCHAR(32)",
+        "customer_data": "JSON",
+        "provider_request_id": "VARCHAR(255)",
+        "provider_call_id": "VARCHAR(255)",
+        "error_message": "VARCHAR(1024)",
+    }
+    with engine.begin() as connection:
+        for column, kind in additions.items():
+            if column not in existing:
+                connection.execute(text(f"ALTER TABLE campaign_contacts ADD COLUMN {column} {_column_type(kind)}"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_status ON campaign_contacts(status)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_normalized_phone ON campaign_contacts(normalized_phone)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_provider_request_id ON campaign_contacts(provider_request_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_provider_call_id ON campaign_contacts(provider_call_id)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_contact_phone ON campaign_contacts(campaign_id, normalized_phone)"))
 
 
 def _ensure_integration_tables() -> None:

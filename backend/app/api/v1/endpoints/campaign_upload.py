@@ -30,14 +30,14 @@ E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 
 
 def _normalize_phone(raw: str) -> str:
-    cleaned = re.sub(r"[\s\-().+]", "", raw.strip())
-    if cleaned.startswith("00"):
-        cleaned = "+" + cleaned[2:]
-    elif not cleaned.startswith("+"):
-        cleaned = "+" + cleaned
-    else:
-        cleaned = "+" + re.sub(r"[^\d]", "", raw.strip())
-    return cleaned
+    value = raw.strip()
+    had_plus = value.startswith("+")
+    digits = re.sub(r"\D", "", value)
+    if value.startswith("00"):
+        digits = digits[2:]
+    elif not had_plus and len(digits) == 10 and digits[0] in "6789":
+        digits = "91" + digits
+    return "+" + digits
 
 
 def _is_valid_e164(phone: str) -> bool:
@@ -93,11 +93,14 @@ def _process_rows(raw_rows: list[dict[str, str]]) -> dict[str, Any]:
             duplicates += 1
             continue
         seen_phones.add(phone)
+        normalized = {re.sub(r"[^a-z0-9]+", "_", k.strip().lower()).strip("_"): (v or "").strip() for k, v in row.items()}
         valid.append({
             "phone_number": phone,
-            "first_name": _find_column(row, ["first_name", "firstname", "first"]),
-            "last_name": _find_column(row, ["last_name", "lastname", "last"]),
-            "email": _find_column(row, ["email", "email_address"]),
+            "original_phone_number": phone_raw,
+            "first_name": normalized.get("first_name") or normalized.get("firstname") or normalized.get("first"),
+            "last_name": normalized.get("last_name") or normalized.get("lastname") or normalized.get("last"),
+            "email": normalized.get("email") or normalized.get("email_address"),
+            "customer_data": {k: v for k, v in normalized.items() if k not in {"phone", "mobile", "mobile_number", "phone_number", "contact", "contact_number", "cell", "telephone", "number"}},
         })
 
     return {
@@ -221,7 +224,7 @@ def upload_contacts_confirm(
     # Fetch existing phone numbers for this campaign to detect duplicates
     existing_phones = set(
         db.scalars(
-            select(CampaignContact.phone_number).where(CampaignContact.campaign_id == campaign.id)
+            select(CampaignContact.normalized_phone).where(CampaignContact.campaign_id == campaign.id)
         ).all()
     )
 
@@ -236,9 +239,11 @@ def upload_contacts_confirm(
             tenant_id=current_user.tenant.id,
             campaign_id=campaign.id,
             phone_number=phone,
+            normalized_phone=phone,
             first_name=row.get("first_name") or None,
             last_name=row.get("last_name") or None,
             email=row.get("email") or None,
+            customer_data=row.get("customer_data") or {},
             status=ContactStatus.pending.value,
         )
         db.add(contact)

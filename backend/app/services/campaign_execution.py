@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db.base import utc_now
@@ -150,7 +150,21 @@ def dispatch_single_contact(
     Idempotent: if a queued/in-progress call already exists for this contact
     in this campaign, returns it without re-dispatching.
     """
-    # Duplicate guard — contact already being called
+    # Claim is a single conditional UPDATE. This is the cross-worker idempotency
+    # boundary; a worker which loses the race must never reach the provider.
+    claimed = db.execute(
+        update(CampaignContact)
+        .where(CampaignContact.id == contact.id, CampaignContact.status == ContactStatus.pending.value)
+        .values(status=ContactStatus.dispatching.value, attempt_count=(CampaignContact.attempt_count + 1), last_called_at=utc_now())
+    ).rowcount
+    db.commit()
+    if claimed != 1:
+        existing = db.scalar(select(Call).where(Call.campaign_contact_id == contact.id).order_by(Call.created_at.desc()))
+        if existing is not None:
+            return existing
+        raise CampaignExecutionError("Contact is already claimed by another worker.")
+
+    # Duplicate guard — an accepted or active call is never dispatched again.
     existing = db.scalar(
         select(Call).where(
             Call.campaign_contact_id == contact.id,
@@ -183,12 +197,10 @@ def dispatch_single_contact(
     )
     db.add(call)
     contact.status = ContactStatus.in_progress.value
-    contact.attempt_count = (contact.attempt_count or 0) + 1
-    contact.last_called_at = utc_now()
     db.commit()
     db.refresh(call)
 
-    call_context: dict[str, str] = {}
+    call_context: dict[str, str] = {str(k): str(v) for k, v in (contact.customer_data or {}).items()}
     # Outbound agents ask the caller for their name first; do not pre-seed
     # customer_name with a contact or employee display name.
     metadata = {
@@ -214,13 +226,16 @@ def dispatch_single_contact(
         db.commit()
         raise
 
+    provider_request_id = getattr(result, "provider_request_id", None)
     call.provider_call_id = result.provider_call_id
     call.dispatch_metadata = {
         **(call.dispatch_metadata or {}),
         "provider_status": result.status,
-        "provider_request_id": getattr(result, "provider_request_id", None),
+        "provider_request_id": provider_request_id,
         "provider_call_id_received_at_dispatch": bool(result.provider_call_id),
     }
+    contact.provider_request_id = provider_request_id
+    contact.provider_call_id = result.provider_call_id
     contact.last_call_id = call.id
     db.commit()
     db.refresh(call)

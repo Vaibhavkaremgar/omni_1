@@ -190,16 +190,20 @@ async def upload_knowledge_file(employee_id: UUID, file: UploadFile = File(...),
         raise HTTPException(status_code=422, detail="The PDF text could not be extracted.") from exc
     version = employee.published_version
     agent_id = version.provider_agent_id if version else None
-    if not agent_id:
-        raise HTTPException(status_code=422, detail="Publish the employee before uploading knowledge files.")
     row = EmployeeKnowledgeFile(tenant_id=current_user.tenant.id, employee_id=employee_id, filename=filename[:255], content_type="application/pdf", file_size=len(content), knowledge_text=knowledge_text, status="uploading")
     db.add(row); db.commit(); db.refresh(row)
     provider = get_agent_service().provider
     try:
         row.provider_file_id = provider.upload_knowledge_file(base64.b64encode(content).decode("ascii"), row.filename)
-        row.status = "attaching"; db.commit()
-        provider.attach_knowledge_file(row.provider_file_id, agent_id)
-        row.status = "ready"; row.error_message = None; db.commit(); db.refresh(row)
+        if agent_id:
+            row.status = "attaching"; db.commit()
+            provider.attach_knowledge_file(row.provider_file_id, agent_id)
+            row.status = "ready"
+        else:
+            # Files uploaded during initial employee creation are attached
+            # automatically when the employee is first published.
+            row.status = "pending"
+        row.error_message = None; db.commit(); db.refresh(row)
         version.configuration = compose_employee_configuration({
             **(version.configuration or {}),
             "knowledge_base_configured": True,

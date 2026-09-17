@@ -51,6 +51,7 @@ class CampaignContactCreate(BaseModel):
     last_name: str | None = Field(default=None, max_length=255)
     phone_number: str = Field(min_length=7, max_length=32)
     email: str | None = Field(default=None, max_length=255)
+    customer_data: dict = Field(default_factory=dict)
 
 
 class CampaignStartRequest(BaseModel):
@@ -73,6 +74,10 @@ class CampaignProgress(BaseModel):
     completed: int
     failed: int
     skipped: int
+    queued: int = 0
+    dispatching: int = 0
+    retry_pending: int = 0
+    cancelled: int = 0
 
 
 class CampaignDetail(BaseModel):
@@ -147,6 +152,10 @@ def _campaign_progress(campaign_id: UUID, db: Session) -> CampaignProgress:
         skipped=sum(1 for c in contacts if c.status in {
             ContactStatus.skipped.value, ContactStatus.do_not_call.value
         }),
+        queued=sum(1 for c in contacts if c.status == ContactStatus.queued.value),
+        dispatching=sum(1 for c in contacts if c.status == ContactStatus.dispatching.value),
+        retry_pending=sum(1 for c in contacts if c.status == ContactStatus.retry_pending.value),
+        cancelled=sum(1 for c in contacts if c.status == ContactStatus.cancelled.value),
     )
 
 
@@ -339,7 +348,9 @@ def add_contact(
         first_name=payload.first_name,
         last_name=payload.last_name,
         phone_number=payload.phone_number,
+        normalized_phone=payload.phone_number,
         email=payload.email,
+        customer_data=payload.customer_data,
         status=ContactStatus.pending.value,
     )
     db.add(contact)
@@ -435,6 +446,20 @@ def stop_campaign(
         campaign = campaign_execution_service.stop(db, campaign_id, current_user.tenant.id)
     except CampaignExecutionError as exc:
         raise _execution_error_to_http(exc) from exc
+    return _campaign_detail(campaign, db)
+
+@router.post("/{campaign_id}/cancel", response_model=CampaignDetail)
+def cancel_campaign(
+    campaign_id: UUID,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CampaignDetail:
+    try:
+        campaign = campaign_execution_service.stop(db, campaign_id, current_user.tenant.id)
+    except CampaignExecutionError as exc:
+        raise _execution_error_to_http(exc) from exc
+    campaign.status = CampaignStatus.cancelled.value
+    db.commit()
     return _campaign_detail(campaign, db)
 
 

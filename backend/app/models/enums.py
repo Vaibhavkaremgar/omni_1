@@ -66,16 +66,21 @@ class CampaignStatus(str, Enum):
     stopped = "stopped"
     failed = "failed"
     archived = "archived"
+    cancelled = "cancelled"
 
 
 class ContactStatus(str, Enum):
     pending = "pending"
+    queued = "queued"
+    dispatching = "dispatching"
+    retry_pending = "retry_pending"
     in_progress = "in_progress"
     called = "called"
     failed = "failed"
     completed = "completed"
     do_not_call = "do_not_call"
     skipped = "skipped"
+    cancelled = "cancelled"
 
 
 class LeadStatus(str, Enum):
