@@ -360,6 +360,10 @@ class RealLLMService(LLMService):
             system += (
                 "\n\nINBOUND ASSISTANCE CONTRACT: The customer initiated the call. Greet the caller and ask how you can help; do not assume why they called. Understand the caller's request and answer or assist before qualifying. Do not use an outbound opening such as 'I'm calling regarding' or ask whether they are interested in an offer unless their request makes it relevant. Ask for name or contact details only when required for the requested action."
             )
+        if str(context["language"]).casefold() in {"hindi", "hi", "hi-in", "hindi (india)", "telugu", "te", "te-in", "telugu (india)"}:
+            system += (
+                "\n\nLANGUAGE OUTPUT GATE: A customer-facing section written entirely in pure Telugu or pure Hindi is invalid. Rewrite it using the selected native script for regional words plus natural Latin-script English business terms. Never transliterate those English terms into the regional script and never use Roman Telugu or Roman Hindi."
+            )
         user = json.dumps(context, ensure_ascii=False, indent=2)
         payload = self._build_request(provider, model, system, user)
         for attempt in range(2):
