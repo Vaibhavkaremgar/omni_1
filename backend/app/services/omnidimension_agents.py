@@ -249,16 +249,6 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         ),
         "is_enabled": True,
     })
-    idle_phrase = "Vinipisthunda andi?" if lang == "Telugu" else "Kya aap wahan hain ji?" if lang == "Hindi" else "Are you still there?"
-    context.append({
-        "title": "Mandatory Idle and Repeated Hello Handling",
-        "body": (
-            f"If the caller is silent or idle for 2–3 seconds, say exactly '{idle_phrase}', then stop speaking and wait silently for the caller's response. "
-            "Never repeat the previous question or advance to the next question while waiting. If the caller repeats hello, use the same idle phrase and wait for the response."
-        ),
-        "is_enabled": True,
-    })
-
     additional = configuration.get("additional_information") or configuration.get("other_information")
     if additional:
         context.append({"title": "Additional Context", "body": _text(additional), "is_enabled": True})
@@ -309,6 +299,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
 
     # ── Language / Communication Rules ───────────────────────────────────────
     lang = _language_name(_text(configuration.get("language"), employee.language))
+    idle_phrase = "Vinipisthunda andi?" if lang == "Telugu" else "Kya aap wahan hain ji?" if lang == "Hindi" else "Are you still there?"
+    context.append({"title": "Mandatory Idle and Repeated Hello Handling", "body": f"If the caller is silent or idle for 2–3 seconds, say exactly '{idle_phrase}', then stop speaking and wait silently for the caller's response. Never repeat the previous question or advance to the next question while waiting. If the caller repeats hello, use the same idle phrase and wait for the response.", "is_enabled": True})
     language_rules = (
         f"Speak in {lang}. Be clear, professional, and concise. "
         "Sound like a warm, attentive human rather than a scripted or robotic system: "
