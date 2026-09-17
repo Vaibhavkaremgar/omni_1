@@ -189,8 +189,8 @@ def dispatch_single_contact(
     db.refresh(call)
 
     call_context: dict[str, str] = {}
-    if call.customer_name:
-        call_context["customer_name"] = call.customer_name
+    # Outbound agents ask the caller for their name first; do not pre-seed
+    # customer_name with a contact or employee display name.
     metadata = {
         "local_call_id": str(call.id),
         "campaign_id": str(campaign.id),

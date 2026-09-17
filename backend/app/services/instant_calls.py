@@ -110,7 +110,7 @@ class InstantCallService:
             phone_number_id=phone_number.id,
             direction=CallDirection.outbound.value,
             status=CallStatus.queued.value,
-            customer_name=request.customer_name.strip() if request.customer_name else None,
+            customer_name=(request.customer_name.strip() if request.customer_name and not (request.context or "").startswith("Test call") else None),
             customer_phone_number=request.destination_phone_number,
             dispatch_metadata={
                 "source": "instant",
@@ -128,7 +128,7 @@ class InstantCallService:
         )
 
         call_context = {}
-        if call.customer_name:
+        if call.customer_name and not (request.context or "").startswith("Test call"):
             call_context["customer_name"] = call.customer_name
         if request.context:
             call_context["context"] = request.context.strip()

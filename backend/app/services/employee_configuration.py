@@ -18,7 +18,16 @@ def public_employee_configuration(configuration: dict[str, Any] | None) -> dict[
     """Keep backend LLM routing details out of customer-facing responses."""
     if configuration is None:
         return None
-    return {key: value for key, value in configuration.items() if key not in INTERNAL_CONFIGURATION_KEYS}
+    result = {key: value for key, value in configuration.items() if key not in INTERNAL_CONFIGURATION_KEYS}
+    research = result.get("business_research")
+    if isinstance(research, dict):
+        # Grounding URLs, query text, and fingerprints are internal build
+        # metadata; verified facts/status are safe product configuration.
+        result["business_research"] = {
+            key: value for key, value in research.items()
+            if key not in {"sources", "research_query", "fingerprint"}
+        }
+    return result
 
 
 def normalize_employee_llm_configuration(

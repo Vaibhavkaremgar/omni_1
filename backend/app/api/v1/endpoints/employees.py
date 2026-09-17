@@ -34,6 +34,7 @@ from app.services.voice_recommendations import recommend_voices
 from app.services.employee_templates import template_library, render_template, get_template
 from app.services.employee_prompt import compose_employee_configuration
 from app.services.employee_interview import RealLLMService
+from app.services.business_research import ensure_business_research
 
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -455,6 +456,8 @@ def publish_employee(
     if version is not None:
         version.configuration = compose_employee_configuration(version.configuration or {})
         normalize_employee_llm_configuration(employee, version)
+        version.configuration = ensure_business_research(version.configuration)
+        version.configuration = compose_employee_configuration(version.configuration)
     _validate_publish(employee, version)
     assert version is not None
     try:

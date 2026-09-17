@@ -127,6 +127,14 @@ class OmniDimensionAgentService:
                     len(str(readback.get("context") or "")), readback.get("post_call_config_ids"),
                     readback.get("is_end_call_enabled"), readback.get("user_idle_threshold_sec"),
                 )
+                stored_asr = str(readback.get("asr_service") or readback.get("transcriber") or "").casefold()
+                if stored_asr and "soniox" not in stored_asr:
+                    logger.warning("Omni agent configuration mismatch agent_id=%s requested_asr=soniox stored_asr=%s", provider_agent.provider_id, stored_asr)
+                if model_value and model_value != payload["model"]["model"]:
+                    logger.warning("Omni agent configuration mismatch agent_id=%s requested_model=%s stored_model=%s", provider_agent.provider_id, payload["model"]["model"], model_value)
+                stored_languages = readback.get("languages")
+                if stored_languages and lang not in stored_languages:
+                    logger.warning("Omni agent configuration mismatch agent_id=%s requested_language=%s stored_languages=%s", provider_agent.provider_id, lang, stored_languages)
         except Exception as exc:
             logger.warning("Omni agent readback unavailable agent_id=%s exception_class=%s", provider_agent.provider_id, type(exc).__name__)
         return _result(provider_agent)
@@ -149,6 +157,16 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     identity += f"Business description: {business_description}\n" if business_description else ""
     identity += f"Employee role and purpose: {purpose}"
     context.append({"title": "Agent Identity & Purpose", "body": identity, "is_enabled": True})
+
+    research = configuration.get("business_research")
+    if isinstance(research, dict):
+        facts = research.get("facts") if isinstance(research.get("facts"), list) else []
+        if research.get("status") == "success":
+            body = "Use these verified build-time business facts when relevant; never invent facts not listed here.\n"
+            body += "\n".join(f"- {item}" for item in facts if item) or "- No verified facts were returned."
+        else:
+            body = f"Business research status: {_text(research.get('status')) or 'unavailable'}. Do not claim research was completed or invent company facts."
+        context.append({"title": "Verified Business Research", "body": body, "is_enabled": True})
 
     # ── Responsibilities / Goals ──────────────────────────────────────────────
     goals = configuration.get("goals")
@@ -197,15 +215,18 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     if flow_parts:
         context.append({"title": "Conversation Flow", "body": "\n".join(flow_parts), "is_enabled": True})
 
+    opening_body = (
+        "The welcome_message has already been spoken. Never reintroduce yourself, repeat the business name, repeat the reason for calling, "
+        "or deliver another generic greeting after the caller responds. Wait for the caller's first speech, answer that exact request first, "
+        "and then ask one relevant follow-up question. If they ask about available services, explain only configured services; if none are configured, "
+        "say that clearly and ask what help they need. Keep the conversation moving from the caller's first question. "
+        "Do not restart with name or mobile-number collection. Collect caller details only near the end, when needed for a confirmed business follow-up or next action."
+    )
+    if _text(configuration.get("call_type")).casefold() == "outbound":
+        opening_body += " This is outbound: immediately after the welcome ask 'Mee peru cheppagalara?' and store the caller's answer as customer_name. Never use the employee name as customer_name."
     context.append({
         "title": "Opening State and First Caller Response",
-        "body": (
-            "The welcome_message has already been spoken. Never reintroduce yourself, repeat the business name, repeat the reason for calling, "
-            "or deliver another generic greeting after the caller responds. Wait for the caller's first speech, answer that exact request first, "
-            "and then ask one relevant follow-up question. If they ask about available services, explain only configured services; if none are configured, "
-            "say that clearly and ask what help they need. Keep the conversation moving from the caller's first question. "
-            "Do not restart with name or mobile-number collection. Collect caller details only near the end, when needed for a confirmed business follow-up or next action."
-        ),
+        "body": opening_body,
         "is_enabled": True,
     })
 
@@ -330,7 +351,9 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "name": _text(configuration.get("name"), employee.name),
         "welcome_message": _welcome_message(employee, configuration, lang),
         "context_breakdown": context,
-        "model": {"model": _text(configuration.get("llm_model"), employee.llm_model)},
+        # Omni's live voice agent is always Gemini; Groq remains available for
+        # Pontis-side generation but must never leak into the live call agent.
+        "model": {"model": "gemini-2.5-flash-lite"},
         "languages": [lang],
         "post_call_actions": post_call_actions,
         # Make the speech handoff explicit so the provider starts listening
@@ -363,8 +386,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     voice = configuration.get("voice")
     if isinstance(voice, dict):
         selected = voice_definition(str(voice.get("id", "")))
-        if selected:
-            payload["voice"] = {"provider": selected["provider"], "voice_id": selected["provider_voice_id"]}
+        provider = voice.get("provider") or (selected or {}).get("provider")
+        voice_id = voice.get("provider_voice_id") or voice.get("voice_id") or (selected or {}).get("provider_voice_id")
+        if provider and voice_id:
+            payload["voice"] = {"provider": str(provider), "voice_id": str(voice_id)}
 
     call_type = configuration.get("call_type", employee.call_type)
     if call_type in {"inbound", "outbound"}:
@@ -397,15 +422,26 @@ def _transcriber_configuration(configuration: dict[str, Any], language: str) -> 
     """Return explicit speech handoff settings while preserving per-agent overrides."""
     configured = configuration.get("transcriber")
     result: dict[str, Any] = {
-        "provider": "deepgram_stream",
-        "model": "nova-3",
-        "language": _language_code(language),
+        "provider": "soniox",
+        "language": _soniox_language_code(language),
         "silence_timeout_ms": 800,
         "interruption_min_words": 1,
     }
     if isinstance(configured, dict):
-        result.update({key: value for key, value in configured.items() if value is not None})
+        legacy_provider = str(configured.get("provider") or "").casefold()
+        result.update({key: value for key, value in configured.items() if value is not None and key not in {"provider", "language", "model"}})
+        if configured.get("model") and "deepgram" not in legacy_provider:
+            result["model"] = configured["model"]
+        elif configured.get("soniox_model"):
+            result["model"] = configured["soniox_model"]
+        result["provider"] = "soniox"
+        result["language"] = _soniox_language_code(language)
     return result
+
+
+def _soniox_language_code(language: str) -> str:
+    value = _language_code(language)
+    return value.split("-", 1)[0]
 
 
 def _language_code(language: str) -> str:

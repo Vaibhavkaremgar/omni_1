@@ -94,7 +94,7 @@ def test_mapper_sends_only_supported_agent_fields(agent_database):
     mapped = map_employee_configuration(employee, version.configuration)
     assert mapped["name"] == "Ava"
     assert mapped["call_type"] == "Incoming"
-    assert mapped["model"] == {"model": "gpt-4o-mini"}
+    assert mapped["model"] == {"model": "gemini-2.5-flash-lite"}
     assert "internal_secret" not in str(mapped)
     assert "context_breakdown" in mapped
 

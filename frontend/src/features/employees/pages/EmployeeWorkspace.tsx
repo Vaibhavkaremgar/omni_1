@@ -52,6 +52,7 @@ export default function EmployeeWorkspace() {
   const selectedVoice = voices.find(v => v.id === voiceId);
   const script = config.call_script ?? {};
   const businessName = String(config.business_name ?? '');
+  useEffect(() => { if (testOpen && !destination) setDestination('+91'); }, [testOpen, destination]);
 
   const save = async (publish = false) => {
     setBusy(true); setError(''); setNotice('');

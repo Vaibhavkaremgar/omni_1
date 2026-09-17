@@ -534,7 +534,7 @@ def test_payload_explicitly_configures_listening_and_post_call_delivery(monkeypa
     assert payload["is_welcome_message_interruption"] is True
     assert payload["is_interruption_allowed"] is True
     assert payload["transcriber"] == {
-        "provider": "deepgram_stream", "model": "nova-3", "language": "en-IN",
+        "provider": "soniox", "language": "en",
         "silence_timeout_ms": 800, "interruption_min_words": 1,
     }
     webhook = payload["post_call_actions"]["webhook"]
@@ -654,7 +654,7 @@ def test_payload_preserves_complete_shabdha_context_and_telugu_configuration():
     assert "Converse naturally in Telugu" in bodies
     assert "To be defined through the builder" not in bodies
     assert payload["welcome_message"] not in bodies
-    assert payload["model"]["model"] == "gpt-4o"
+    assert payload["model"]["model"] == "gemini-2.5-flash-lite"
 
 
 def test_payload_preserves_exact_paste_prompt_without_system_prompt_duplication():
@@ -665,3 +665,14 @@ def test_payload_preserves_exact_paste_prompt_without_system_prompt_duplication(
     assert "ORIGINAL CUSTOMER PROMPT" in bodies
     assert prompt in bodies
     assert bodies.count(prompt) == 1
+
+
+def test_grounded_business_research_reaches_omni_context_without_source_metadata():
+    employee = SimpleNamespace(name="Research Assistant", purpose="Answer business questions", call_type="inbound", llm_model="gpt-4o", language="English")
+    payload = map_employee_configuration(employee, {
+        "name": employee.name, "purpose": employee.purpose, "language": employee.language,
+        "business_research": {"status": "success", "summary": "Official summary", "facts": ["Open weekdays"] , "sources": [{"uri": "https://example.com"}]},
+    })
+    research = next(item for item in payload["context_breakdown"] if item["title"] == "Verified Business Research")
+    assert "Open weekdays" in research["body"]
+    assert "https://example.com" not in research["body"]
