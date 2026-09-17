@@ -233,6 +233,14 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         if language == "Telugu":
             language_rule += " Use natural Telugu throughout; common English business words are allowed and do not trigger a language switch. Switch only when the caller explicitly requests another language."
         sections.append(("LANGUAGE", language_rule + " Keep the conversation warm, spontaneous, and human-sounding rather than robotic or scripted. For ordinary numbers use English pronunciation; for codes and identifiers, speak each digit separately in English."))
+    normalized_language = language.casefold()
+    if normalized_language in {"telugu", "te", "te-in", "telugu (india)"}:
+        idle_phrase = "Vinipisthunda andi?"
+    elif normalized_language in {"hindi", "hi", "hi-in", "hindi (india)"}:
+        idle_phrase = "Kya aap wahan hain ji?"
+    else:
+        idle_phrase = "Are you still there?"
+    sections.append(("MANDATORY IDLE CONFIRMATION", f"If the caller becomes silent or idle for 2–3 seconds, ask exactly: '{idle_phrase}' Then STOP speaking and WAIT silently for the caller's response. Do not repeat the previous question, ask a new question, infer an answer, or continue the conversation while waiting. If the caller says 'hello' repeatedly instead of answering, ask the same phrase '{idle_phrase}' and WAIT for the caller's response. This is a mandatory idle-confirmation step, not an optional suggestion."))
     script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else build_call_script(configuration)
     sections.append(("CANONICAL SIX-SECTION CALL SCRIPT", "\n\n".join(f"{index}. {title}\n{script.get(title, '')}" for index, title in enumerate(SCRIPT_SECTION_NAMES, 1))))
     custom_sections = configuration.get("custom_sections")
