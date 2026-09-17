@@ -499,6 +499,30 @@ def test_map_welcome_message_uses_employee_name():
     assert "Ava" in payload["welcome_message"]
 
 
+def test_outbound_welcome_explains_offer_before_asking_a_question():
+    employee = SimpleNamespace(name="Ava", purpose="Arrange product demos", call_type="outbound", llm_model="m", language="English")
+    payload = map_employee_configuration(employee, {
+        "name": "Ava", "purpose": employee.purpose, "business_name": "Acme",
+        "template_values": {"product_or_service": "Acme inventory software"},
+        "call_type": "outbound", "llm_model": "m", "language": "English",
+    })
+    welcome = payload["welcome_message"]
+    assert "Acme inventory software" in welcome
+    assert "Would you like to hear more?" in welcome
+    assert "requirement" not in welcome.casefold()
+
+
+def test_outbound_prompt_requires_offer_before_qualification():
+    from app.services.employee_prompt import build_employee_prompt
+
+    prompt = build_employee_prompt({
+        "name": "Ava", "purpose": "Arrange product demos", "call_type": "outbound",
+        "business_name": "Acme", "products": "Acme inventory software", "language": "English",
+    })
+    assert "The opening is offer-first" in prompt
+    assert "Never open with 'What is your requirement?'" in prompt
+
+
 def test_prompt_answers_first_turn_and_defers_customer_details():
     from app.services.employee_prompt import build_employee_prompt
 

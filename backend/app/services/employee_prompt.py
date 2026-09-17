@@ -143,7 +143,7 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
     mode_rules = (
         "CALL MODE: INBOUND. The customer initiated this call. Greet, ask how you can help, understand and answer their request, and guide them to a suitable next action. Never say or imply that you called the customer or invent a reason for calling."
         if call_type == "inbound" else
-        "CALL MODE: OUTBOUND. You initiated this call. Identify yourself and the company, explain only the verified business purpose/product/service for calling, then ask whether the need is relevant and qualify naturally. Never say or imply that the customer initiated the call; never invent an offer or claim."
+        "CALL MODE: OUTBOUND. You initiated this call. The opening is offer-first: identify yourself and the company, then clearly explain the configured business, product/service, reason for calling, and any verified benefit before asking the customer anything. The first customer-directed question may only ask whether they would like to hear more or whether the offer is relevant. Never open with 'What is your requirement?', 'How can I help?', or any discovery/qualification question. Ask qualification questions only after the customer has heard the offer and shown interest. Never say or imply that the customer initiated the call; never invent an offer or claim."
     )
     sections.append(("CALL TYPE AND CONVERSATION STRATEGY", mode_rules))
     purpose = _text(configuration.get("purpose"))
@@ -181,6 +181,12 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         "If the caller asks what services are available, explain the configured services or say that the available details are not configured; "
         "never answer with another introduction. Treat every caller turn as progress in the same conversation."
     )
+    if call_type == "outbound":
+        opening_rules += (
+            " The welcome for this outbound call must already introduce the company and explain the configured product/service or offer. "
+            "If the caller asks what the call is about, restate the configured offer and its verified benefit before asking any qualifying question. "
+            "Do not turn an outbound call into a support-style conversation by asking what the customer needs before explaining what the business is offering."
+        )
     if _text(configuration.get("call_type")).casefold() == "inbound":
         opening_rules += " Immediately after the welcome, ask exactly one short identity question: 'Mee peru cheppagalara?' (What is your name?). Treat the caller's answer as customer_name, repeat it once for confirmation, and then continue to the business objective. Never use the AI employee's name as customer_name. This rule applies to both incoming and outgoing calls."
     sections.append(("OPENING AND FIRST CALLER TURN", opening_rules))

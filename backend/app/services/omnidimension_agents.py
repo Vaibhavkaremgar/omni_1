@@ -506,12 +506,15 @@ def _language_code(language: str) -> str:
 
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
     configured = _text(configuration.get("greeting"))
-    if configured and (language in {"English", "English (India)", "English (UK)"} or _contains_language_script(configured, language)):
+    outbound = _text(configuration.get("call_type", employee.call_type)).casefold() == "outbound"
+    # A saved generic greeting can otherwise undo the outbound offer-first
+    # contract. Generate this opening from the verified employee configuration.
+    if not outbound and configured and (language in {"English", "English (India)", "English (UK)"} or _contains_language_script(configured, language)):
         return configured
     # Hindi's generated six-section Greeting & Intro is the canonical spoken
     # opening. Reuse it here so OmniDimension does not receive a separately
     # generated formal-Hindi welcome that conflicts with the reviewed script.
-    if language == "Hindi":
+    if language == "Hindi" and not outbound:
         call_script = configuration.get("call_script")
         if isinstance(call_script, dict) and _text(call_script.get("Greeting & Intro")):
             return _text(call_script["Greeting & Intro"])
@@ -527,21 +530,44 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     if template:
         purpose = f"{business_name} {template['name']}" if business_name else template["name"]
     name = employee.name
-    outbound = _text(configuration.get("call_type", employee.call_type)).casefold() == "outbound"
-    business_purpose = _text(configuration.get("business_description")) or purpose
+    business_purpose = _outbound_offer_summary(configuration, purpose)
     if language == "Telugu":
         # Teluglish: conversational Telugu with the English words customers
         # naturally use for business details.
         if business_name:
             return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {business_name} \u0c24\u0c30\u0c2b\u0c41\u0c28 {((business_purpose + ' gurinchi matladataniki call chesanu.') if outbound else '\u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f.')}"
+        if outbound:
+            return f"Namaskaram, nenu {name}. {business_purpose} gurinchi matladataniki call chesanu. Dini gurinchi meeru inka telusukovalani anukuntunnara?"
         return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {purpose} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f \u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f."
     if language == "Hindi":
+        if outbound:
+            return f"Hello ji, main {name}{(' ' + business_name + ' se') if business_name else ''} bol raha hoon. Main {business_purpose} ke baare mein call kar raha hoon. Kya aap iske baare mein aur jaanna chahenge?"
         return f"Hello ji, main {name} bol raha hoon. Main {purpose} ke regarding aapki help karne ke liye hoon. Aapki requirement kya hai?"
     if language == "Telugu":
         return f"నమస్కారం, నేను {name}. {purpose} విషయంలో మీకు సహాయం చేయడానికి ఇక్కడ ఉన్నాను. మీకు ఏ సమాచారం కావాలి?"
     if language == "Tamil":
+        if outbound:
+            return f"Vanakkam, naan {name}. {business_purpose} patri pesa azhaithen. Idhai patri melum therindhukolla virumbugireergala?"
         return f"வணக்கம், நான் {name}. {purpose} தொடர்பாக உங்களுக்கு உதவ இங்கே இருக்கிறேன். உங்களுக்கு என்ன தகவல் தேவை?"
-    return f"Hello, I'm {name} from {business_name}. {('I am calling about our configured business purpose. Is that relevant to you?' if outbound else 'How can I help you today?')}"
+    if outbound:
+        company = f" from {business_name}" if business_name else ""
+        return f"Hello, I'm {name}{company}. I'm calling to tell you about {business_purpose}. Would you like to hear more?"
+    return f"Hello, I'm {name} from {business_name}. How can I help you today?"
+
+
+def _outbound_offer_summary(configuration: dict[str, Any], purpose: str) -> str:
+    """Return the customer-facing offer statement without inventing business facts."""
+    values = configuration.get("template_values")
+    values = values if isinstance(values, dict) else {}
+    product = next((
+        _text(configuration.get(key)) or _text(values.get(key))
+        for key in ("product_or_service", "products", "products_services", "offer", "service")
+        if _text(configuration.get(key)) or _text(values.get(key))
+    ), "")
+    description = _text(configuration.get("business_description"))
+    # Prefer a specific configured product/service.  The purpose remains the
+    # safe fallback when no offer detail has been supplied.
+    return product or description or purpose
 
 
 def _safe_purpose(configured: Any, employee_purpose: Any) -> str:
