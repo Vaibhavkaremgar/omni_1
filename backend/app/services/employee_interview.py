@@ -348,6 +348,10 @@ class RealLLMService(LLMService):
             system += (
                 "\n\nHINDI HINGLISH CONTRACT: Keep internal instructions in English, but every customer-facing Hindi spoken example must be natural Indian Hinglish: Hindi grammar with frequent English words and connectors embedded in the same sentence. Do not generate pure, formal, literary, Sanskritized, or textbook Hindi. Use examples such as 'Okay ji, samajh gaya.', 'Actually, aapki requirement kya hai?', 'Sure, main details check karta hoon.', 'Sorry ji, uski confirmation abhi nahi hai.', 'Thank you ji.', 'Right, aapka budget kis range mein hai?', 'Definitely, site visit schedule kar sakte hain.', 'One second please.', and 'No problem ji.' Use Hindi as the base language, not mostly English."
             )
+        if str(context["call_type"]).casefold() == "outbound":
+            system += (
+                "\n\nOUTBOUND ORDERING CONTRACT: The employee called the customer. Never start the conversation with 'What is your requirement?' or a qualification question. First introduce the employee and company, explain the actual configured business purpose, product/service, and verified offer or benefit. Then ask whether the customer is interested or whether the offer is relevant. Only after that response may the employee ask concise qualification questions. Never invent an offer, price, discount, feature, or availability."
+            )
         user = json.dumps(context, ensure_ascii=False, indent=2)
         payload = self._build_request(provider, model, system, user)
         for attempt in range(2):
