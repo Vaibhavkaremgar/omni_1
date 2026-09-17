@@ -652,6 +652,21 @@ def test_end_call_is_opt_in_and_preserves_employee_condition():
     }
 
 
+def test_telugu_default_end_call_message_uses_thanks_andi():
+    employee = SimpleNamespace(
+        name="Telugu Assistant", purpose="Book appointments", call_type="inbound",
+        llm_model="gpt-4o-mini", language="Telugu",
+    )
+    payload = map_employee_configuration(employee, {
+        "name": employee.name,
+        "purpose": employee.purpose,
+        "language": "Telugu",
+        "end_call": {"condition": "Only end after the caller says goodbye."},
+    })
+
+    assert payload["end_call"]["message"] == "thanks andi, have a nice day."
+
+
 def test_voice_payload_keeps_objective_completion_active_and_requires_explicit_end():
     employee = SimpleNamespace(name="Telugu Assistant", purpose="Book appointments", call_type="inbound", llm_model="gpt-4o", language="Telugu")
     payload = map_employee_configuration(employee, {
@@ -968,7 +983,11 @@ def test_canonical_prompt_includes_natural_memory_and_code_speech_rules():
     assert "Avoid repetitive sentences" in prompt
     assert "Remember facts shared during the current call" in prompt
     assert "asking for the same information again" in prompt
+    assert "two three zero" in prompt
+    assert "never as 'two hundred thirty'" in prompt
     assert "three four five zero" in prompt
+    assert "2 BHK" in prompt
+    assert "Speak every numeric string digit-by-digit in English" in prompt
     assert "repeat the same digits" in prompt
     assert "For unrelated questions" in prompt
 
@@ -1001,7 +1020,11 @@ def test_language_specific_natural_rules_stay_isolated_in_omni_context():
         "language": "Telugu",
     })
     telugu_contract = next(item["body"] for item in telugu_payload["context_breakdown"] if item["title"] == "Language-Aware Natural Conversation Contract")
+    telugu_language_rules = next(item["body"] for item in telugu_payload["context_breakdown"] if item["title"] == "Language & Communication Rules")
 
     assert "sare andi" in telugu_contract
     assert "ok andi" in telugu_contract
     assert "inka" in telugu_contract
+    assert "2 BHK" in telugu_language_rules
+    assert "Speak every numeric string digit-by-digit in English" in telugu_language_rules
+    assert "230 is 'two three zero'" in telugu_language_rules

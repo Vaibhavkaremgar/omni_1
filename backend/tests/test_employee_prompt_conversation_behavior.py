@@ -11,6 +11,8 @@ def test_telugu_contract_has_natural_acknowledgements_and_variation():
     result = prompt("Telugu")
     assert "sare andi" in result and "ok andi" in result
     assert "inka" in result
+    assert "thanks andi" in result
+    assert "Never translate thanks into Telugu" in result
     assert "never mechanically repeat" in result.lower()
     assert "acknowledge" in result.lower()
 
@@ -28,6 +30,7 @@ def test_contract_covers_silence_questions_grounding_and_codes():
     for phrase in ("2–3 seconds", "unrelated questions", "verified company research", "digit-by-digit", "english"):
         assert phrase.lower() in lowered
     assert "model numbers" in lowered
+    assert "230 must be spoken as 'two three zero'" in result
 
 
 def test_prompt_preserves_canonical_six_section_script_and_existing_knowledge_base():

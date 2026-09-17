@@ -376,7 +376,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "Sound like a warm, attentive human rather than a scripted or robotic system: "
         "use natural contractions and brief acknowledgements, vary phrasing naturally, "
         "pause briefly where a human would, and respond directly to what the caller just said. "
-        "Speak every number in English words, regardless of the selected language. This includes "
+        "Speak every numeric string digit-by-digit in English, regardless of the selected language. For example, 230 is 'two three zero', never 'two hundred thirty' or regional-language number words. This includes "
+        "product and property phrases such as 2 BHK, 3 BHK, and 150 square yards, plus "
         "phone numbers, dates, times, prices, amounts, quantities, ages, counts, and IDs; "
         "do not pronounce numbers using Telugu, Hindi, or other local-language number words."
     )
@@ -384,7 +385,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         language_rules += " Converse naturally in Telugu throughout the call. Follow the universal Telugu speaking style below."
     elif lang == "Hindi":
         language_rules += (
-            " Speak in natural Indian conversational Hinglish, not pure or formal Hindi: use Hindi grammar as the base and mix frequent, natural English words throughout every response, especially okay, sure, actually, sorry, thank you, right, details, requirement, budget, price, location, features, offer, product, service, booking, appointment, confirm, available, support, team, and follow-up. Keep Hindi as the main language, but do not translate commonly used business terms into literary Hindi. Use varied Hindi fillers such as ji, haan ji, achha ji, theek hai ji, bilkul ji, and samajh gaya ji. Use English only for thanks, thank you, and sorry. Never use Telugu fillers. Every number and code must be spoken digit-by-digit in English."
+            " Speak in natural Indian conversational Hinglish, not pure or formal Hindi: use Hindi grammar as the base and mix frequent, natural English words throughout every response, especially okay, sure, actually, sorry, thank you, right, details, requirement, budget, price, location, features, offer, product, service, booking, appointment, confirm, available, support, team, and follow-up. Keep Hindi as the main language, but do not translate commonly used business terms into literary Hindi. Use varied Hindi fillers such as ji, haan ji, achha ji, theek hai ji, bilkul ji, and samajh gaya ji. Use English only for thanks, thank you, and sorry. Never use Telugu fillers. Every numeric string and code must be spoken digit-by-digit in English."
         )
     context.append({
         "title": "Language & Communication Rules",
@@ -759,7 +760,7 @@ def _looks_like_internal_instruction(value: str) -> bool:
 
 def _default_end_call_message(language: str) -> str:
     if language == "Telugu":
-        return "Thank you andi, have a nice day."
+        return "thanks andi, have a nice day."
     return "Thank you for your time."
 
 

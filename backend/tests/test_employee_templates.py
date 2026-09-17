@@ -25,8 +25,10 @@ def test_rendering_fills_hospital_values_and_telugu_policy():
     assert "Cardiology, General Medicine" in result["system_prompt"]
     assert "Occasional English words do not trigger language switching" in result["system_prompt"]
     assert "do not end after the first caller response" in result["system_prompt"]
-    assert "Dhanyavadamulu, have a nice day!" in result["system_prompt"]
-    assert "Speak all numbers in English only" in result["system_prompt"]
+    assert "thanks andi, have a nice day!" in result["system_prompt"]
+    assert "Never translate thanks into Telugu" in result["system_prompt"]
+    assert "Speak all numeric strings digit-by-digit in English only" in result["system_prompt"]
+    assert "Say 230 as \"two three zero\"" in result["system_prompt"]
 
 
 def test_required_placeholder_is_enforced_and_optional_can_be_empty():
