@@ -542,6 +542,27 @@ def test_payload_explicitly_configures_listening_and_post_call_delivery(monkeypa
     assert set(webhook["trigger_call_statuses"]) == {"completed", "failed", "no_answer", "busy", "voicemail_detected"}
 
 
+def test_end_call_is_opt_in_and_preserves_employee_condition():
+    employee = SimpleNamespace(
+        name="Support Assistant", purpose="Answer support questions", call_type="inbound",
+        llm_model="gpt-4o-mini", language="English",
+    )
+    payload = map_employee_configuration(employee, {
+        "name": employee.name, "purpose": employee.purpose, "language": employee.language,
+        "end_call": {
+            "condition": "Only end after the caller says goodbye.",
+            "message": "Goodbye.",
+            "message_prompt": "Say goodbye briefly.",
+        },
+    })
+    assert payload["is_end_call_enabled"] is True
+    assert payload["end_call"] == {
+        "condition": "Only end after the caller says goodbye.",
+        "message": "Goodbye.",
+        "message_prompt": "Say goodbye briefly.",
+    }
+
+
 def test_voice_payload_keeps_objective_completion_active_and_requires_explicit_end():
     employee = SimpleNamespace(name="Telugu Assistant", purpose="Book appointments", call_type="inbound", llm_model="gpt-4o", language="Telugu")
     payload = map_employee_configuration(employee, {
@@ -555,9 +576,9 @@ def test_voice_payload_keeps_objective_completion_active_and_requires_explicit_e
     assert "explicit end-of-call confirmation" in bodies
     assert "An interruption is a normal barge-in, not a request to hang up" in bodies
     assert "ఇంకా ఏమైనా help కావాలా?" in bodies
-    assert payload["is_end_call_enabled"] is True
+    assert payload["is_end_call_enabled"] is False
     assert payload["interruption_min_words"] == 1
-    assert "short answer" in payload["end_call_condition"]
+    assert "end_call" not in payload
 
 
 def test_business_identity_uses_explicit_company_name_and_keeps_requirement_as_description():

@@ -306,27 +306,22 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         # Product/category answers can be a single word. Requiring three words
         # makes a valid barge-in such as "printers" disappear at the provider.
         "interruption_min_words": 1,
-        "is_end_call_enabled": True,
-        "end_call_condition": (
-            "End only when the caller clearly says they are finished or explicitly confirms they want to end "
-            "after the agent asks whether anything else is needed. Never end because of a short answer, a normal "
-            "yes, a product/category, a name, a budget, incomplete information, silence, or objective completion."
-        ),
-        "end_call_message": "Thank you for your time. Is there anything else you need before we finish?",
-        "end_call_message_type": "prompt",
-        "end_call_message_prompt": "Use a warm, brief goodbye only after clear caller end intent; otherwise keep listening and continue the conversation.",
-        # Current OmniDimension API shape. Keep the legacy flat keys above for
-        # older agents/readbacks, but send the documented nested configuration.
-        "end_call": {
-            "condition": (
-                "End only when the caller clearly says they are finished or explicitly confirms they want to end "
-                "after the agent asks whether anything else is needed. Never end because of a short answer, a normal "
-                "yes, a product/category, a name, a budget, incomplete information, silence, or objective completion."
-            ),
-            "message": "Thank you for your time. Is there anything else you need before we finish?",
-            "message_prompt": "Use a warm, brief goodbye only after clear caller end intent; otherwise keep listening and continue the conversation.",
-        },
+        # Automatic end_call is deliberately opt-in. If it is enabled for
+        # every agent, the provider's internal LLM tool can hang up after a
+        # single answered question or after a false silence detection.
+        "is_end_call_enabled": False,
     }
+
+    configured_end_call = configuration.get("end_call")
+    if isinstance(configured_end_call, dict) and _text(configured_end_call.get("condition")):
+        payload["is_end_call_enabled"] = True
+        payload["end_call"] = {
+            "condition": _text(configured_end_call["condition"]),
+            "message": _text(configured_end_call.get("message")) or "Thank you for your time.",
+            "message_prompt": _text(configured_end_call.get("message_prompt")) or (
+                "End politely only after the caller clearly indicates they are finished."
+            ),
+        }
 
     voice = configuration.get("voice")
     if isinstance(voice, dict):
