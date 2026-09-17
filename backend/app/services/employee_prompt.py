@@ -16,6 +16,81 @@ SUPPORTED_VARIABLE_TYPES = {"text", "number", "boolean", "date", "datetime", "ph
 TELUGU_ENGINE_CONTRACT = """TELUGU LANGUAGE ENGINE (STRICT): For customer-facing Telugu-English dialogue, write Telugu words only in Telugu Unicode script and English business/conversational words only in Latin script. This is Telugu-English mixed speech, not pure Telugu and not Roman Telugu. Preserve natural urban spoken grammar; avoid literary, textbook, Sanskritized, newsreader, or word-for-word translated Telugu. Use English terms naturally when they are common in business speech, such as requirement, budget, location, details, appointment, booking, service, product, offer, price, call, team, confirm, check, available, follow-up, WhatsApp, site visit, and support. Do not transliterate English terms into Telugu script. Do not infer Roman Telugu from the customer's input. Use Telugu script for Telugu words even when the business brief is written in English or Roman Telugu. Mix languages naturally rather than forcing English into every sentence. Keep answers short, conversational, one question at a time, and adapt to the caller's language. Before returning any Telugu dialogue, verify that Telugu words use Unicode, English business terms remain Latin, and the result does not read as pure formal Telugu or Roman Telugu."""
 HINDI_ENGINE_CONTRACT = """HINDI LANGUAGE ENGINE (STRICT): For customer-facing Hindi-English dialogue, write Hindi words only in Devanagari Unicode script and English business/conversational words only in Latin script. This is natural spoken Hinglish, not pure formal Hindi and not Roman Hindi. Preserve conversational Indian Hindi grammar; avoid literary, textbook, Sanskritized, newsreader, or word-for-word translated Hindi. Use English terms naturally when common in business speech, such as requirement, budget, location, details, appointment, booking, service, product, offer, price, call, team, confirm, check, available, follow-up, WhatsApp, site visit, and support. Do not transliterate English terms into Devanagari. Do not infer Roman Hindi from the customer's input. Use Devanagari for Hindi words even when the business brief is written in English or Roman Hindi. Mix languages naturally rather than forcing English into every sentence. Keep answers short, conversational, one question at a time, and adapt to the caller's language. Before returning any Hindi dialogue, verify that Hindi words use Devanagari, English business terms remain Latin, and the result does not read as pure formal Hindi or Roman Hindi."""
 
+BUSINESS_PROFILES: dict[str, dict[str, str]] = {
+    "hospital": {
+        "domain": "hospital appointment support",
+        "focus": "patient need, department or doctor, urgency, preferred appointment time, and safe handoff",
+        "qualification": "Ask one question at a time about the patient's need, preferred department or doctor, urgency, and appointment timing. Never give medical advice or invent doctor availability.",
+        "objection": "Acknowledge concerns about timing, cost, symptoms, or reports. Share only configured clinic information and escalate urgent or uncertain cases to the clinic team.",
+        "cta": "When the caller is ready, confirm department, doctor or service, date/time preference, patient name, and callback number before booking or arranging clinic follow-up.",
+        "telugu": "Hospital calls should sound caring and calm. Use natural terms like appointment, doctor, department, reports, emergency, available, and confirm in English when Telugu speakers commonly use them.",
+    },
+    "clinic": {
+        "domain": "clinic appointment support",
+        "focus": "patient need, service, preferred doctor, timing, and clinic follow-up",
+        "qualification": "Ask one question at a time about the caller's health/service need, preferred doctor or service, and appointment timing. Never diagnose or invent availability.",
+        "objection": "Acknowledge concerns about timings, fees, treatment, or waiting. Use configured clinic details only and offer a clinic-team follow-up when unsure.",
+        "cta": "Confirm the requested appointment/service details and offer the configured booking or callback next step.",
+        "telugu": "Clinic calls should be soft, practical, and reassuring. Mix Telugu with English words like appointment, doctor, reports, clinic, available, confirm, and follow-up.",
+    },
+    "insurance": {
+        "domain": "insurance policy support",
+        "focus": "policy type, renewal date, premium/payment status, coverage question, and compliant follow-up",
+        "qualification": "Ask about the policy or renewal context, premium/payment status, and preferred next step only when relevant. Do not give financial advice or promise coverage, claims, discounts, or approval.",
+        "objection": "Acknowledge concerns about premium, renewal timing, claims, or documents. Explain only configured policy information and arrange advisor follow-up for advice or uncertainty.",
+        "cta": "When the next step is clear, summarize the renewal or policy action and confirm whether to send details, arrange a callback, or connect the insurance team.",
+        "telugu": "Insurance Telugu should be modern and natural: keep insurance, policy, renewal, premium, claim, payment, documents, reminder, and advisor in English where natural.",
+    },
+    "real_estate": {
+        "domain": "real estate lead follow-up",
+        "focus": "property type, location, budget range, timeline, amenities, and site visit",
+        "qualification": "Ask one question at a time about property type, location preference, budget range, timeline, and site-visit interest. Never invent price, availability, possession, or legal claims.",
+        "objection": "Acknowledge concerns about budget, location, possession date, amenities, or trust. Use configured project details only and offer sales-team follow-up.",
+        "cta": "When interest is clear, summarize requirements and confirm the configured site visit, callback, brochure, or sales follow-up.",
+        "telugu": "Real-estate Telugu should use natural English fillers and terms like location, budget, project, plot, flat, amenities, price range, site visit, available, and booking.",
+    },
+    "education": {
+        "domain": "education admissions counselling",
+        "focus": "course interest, eligibility, fees, admission timeline, location, and counsellor handoff",
+        "qualification": "Ask about course interest, eligibility/background, admission timeline, fees question, and counselling need. Do not invent admission decisions, scholarships, or guarantees.",
+        "objection": "Acknowledge concerns about fees, eligibility, location, course fit, or deadlines. Share configured admission details only and offer counsellor follow-up.",
+        "cta": "Confirm the course/admission interest and route to the configured counsellor, application step, or follow-up.",
+        "telugu": "Education calls should sound like friendly counselling. Use course, admission, eligibility, fees, campus, counsellor, application, and details in English where natural.",
+    },
+    "support": {
+        "domain": "customer support",
+        "focus": "issue type, product/service, account/order reference if needed, troubleshooting status, and escalation",
+        "qualification": "Understand the issue first, then ask only the details needed to troubleshoot or escalate. Do not ask for unrelated lead-qualification fields.",
+        "objection": "Acknowledge frustration, apologize briefly when appropriate, and explain only supported policies or steps. Escalate unresolved or out-of-scope issues.",
+        "cta": "Summarize the support action, ticket/callback path, or escalation and confirm the customer has nothing else pending.",
+        "telugu": "Support Telugu should be empathetic and quick. Use issue, product, order, ticket, support, refund, replacement, status, and escalation in English where natural.",
+    },
+    "sales": {
+        "domain": "sales lead qualification",
+        "focus": "product/service interest, use case, budget, timeline, service area, and sales follow-up",
+        "qualification": "Ask one question at a time about interest, use case, budget, timeline, and fit for the configured product/service. Do not invent prices, discounts, stock, or guarantees.",
+        "objection": "Acknowledge concerns about price, fit, timing, or trust. Use configured offer/product details only and offer a sales-team follow-up.",
+        "cta": "When interest is clear, summarize the need and confirm the configured purchase, demo, callback, WhatsApp details, or sales follow-up.",
+        "telugu": "Sales Telugu should be friendly and direct. Use offer, product, service, price, budget, discount, demo, details, WhatsApp, and follow-up in English where natural.",
+    },
+    "appointment": {
+        "domain": "appointment booking",
+        "focus": "service type, preferred date/time, location, booking rules, and confirmation",
+        "qualification": "Ask about the service needed, preferred date/time, location, and any configured booking rules. Never invent availability.",
+        "objection": "Acknowledge timing or policy concerns. Explain configured booking/cancellation information only and offer human follow-up when needed.",
+        "cta": "Confirm the service, date/time preference, and contact details required for the configured booking next step.",
+        "telugu": "Appointment Telugu should be crisp and helpful. Use appointment, booking, slot, available, confirm, reschedule, and cancellation in English where natural.",
+    },
+    "collections": {
+        "domain": "payment reminder support",
+        "focus": "account/service type, due date, payment method, support need, and safe escalation",
+        "qualification": "Confirm the configured payment context and ask only about payment support or preferred next step. Do not pressure, threaten, or invent penalties.",
+        "objection": "Acknowledge payment difficulty or confusion respectfully. Share configured due-date/payment information only and offer support escalation.",
+        "cta": "Summarize the payment support path, configured payment method, callback, or escalation and confirm the customer's next step.",
+        "telugu": "Payment-reminder Telugu should be respectful, never pushy. Use payment, due date, account, reminder, support, link, and confirm in English where natural.",
+    },
+}
+
 
 def _conversation_variables(configuration: dict[str, Any]) -> list[dict[str, Any]]:
     existing = configuration.get("conversation_variables")
@@ -37,6 +112,47 @@ def _conversation_variables(configuration: dict[str, Any]) -> list[dict[str, Any
     elif any(word in brief for word in ("appointment", "booking", "doctor", "clinic")):
         variables += [{"key": "location", "label": "Location", "description": "Caller location", "type": "text", "required": False}, {"key": "preferred_datetime", "label": "Preferred Date and Time", "description": "Requested appointment time", "type": "datetime", "required": False}]
     return variables
+
+
+def business_conversation_profile(configuration: dict[str, Any]) -> dict[str, str]:
+    values = configuration.get("template_values") if isinstance(configuration.get("template_values"), dict) else {}
+    template_id = _text(configuration.get("selected_template_id")).casefold()
+    signal = " ".join(
+        _text(value)
+        for value in (
+            configuration.get("business_type"),
+            configuration.get("industry"),
+            configuration.get("category"),
+            values.get("business_type"),
+            values.get("product_or_service"),
+            values.get("products_services"),
+            values.get("service_type"),
+            values.get("services"),
+            values.get("courses"),
+            values.get("property_types"),
+            configuration.get("business_name"),
+            configuration.get("business_description"),
+            configuration.get("products"),
+            configuration.get("products_services"),
+            configuration.get("purpose"),
+            configuration.get("original_requirement"),
+            configuration.get("direct_prompt"),
+            template_id.replace("pontis_", "").replace("_v1", "").replace("_", " "),
+        )
+    ).casefold()
+    checks = (
+        ("hospital", ("hospital", "healthcare", "medical", "doctor", "patient", "department")),
+        ("clinic", ("clinic", "diagnostic", "dental", "dentist", "pharmacy")),
+        ("insurance", ("insurance", "policy", "renewal", "premium", "claim")),
+        ("real_estate", ("real estate", "property", "plot", "villa", "flat", "apartment", "site visit", "project")),
+        ("education", ("education", "school", "college", "course", "admission", "student", "counsellor", "counselor")),
+        ("support", ("support", "refund", "replacement", "ticket", "complaint", "issue", "troubleshoot")),
+        ("collections", ("collection", "payment reminder", "due date", "emi", "loan", "overdue")),
+        ("appointment", ("appointment", "booking", "slot", "reschedule")),
+        ("sales", ("sales", "sell", "lead", "product", "service", "printer", "offer", "discount", "demo")),
+    )
+    key = next((profile for profile, markers in checks if any(marker in signal for marker in markers)), "sales")
+    return {"key": key, **BUSINESS_PROFILES[key]}
 
 
 def normalize_business_identity(configuration: dict[str, Any]) -> dict[str, Any]:
@@ -99,6 +215,8 @@ For every regional-language conversation, code-switch naturally with commonly us
 
 {hello} If the caller is silent for approximately 2–3 seconds, politely check whether they are still there in {selected}, vary the wording on repeated silences, and do not end the call merely because of short silence. Answer/acknowledge customer questions before qualification follow-ups, including unrelated questions. Use configured business details, verified company research, Knowledge Base information, and supported search/grounding; never fabricate. If unavailable, say so honestly and return naturally to the business topic.
 
+Before answering, identify what the caller is asking or correcting, check the configured employee context, call script, business profile, Knowledge Base, and verified research, then answer that question directly. If the answer is not present in context, say that the detail is not configured and offer the appropriate next step; do not guess. Say each substantive sentence only once. Never repeat the same sentence, greeting, question, offer, or explanation back-to-back. If you need to clarify, use a shorter new wording instead of repeating the old wording.
+
 Acknowledge the caller's answer before moving forward, avoid repeating information already provided, and vary sentence structures and synonyms naturally. Do not make the conversation feel like a questionnaire: combine related qualification questions when appropriate, while keeping each turn short and manageable. Never mechanically repeat the same sentence or greeting.
 
 When repeating numbers, prices, phone numbers, quantities, dates, or times, keep the surrounding sentence in {selected} but pronounce the actual number in English. Speak model numbers, product codes, serial-like codes, policy numbers, and reference codes digit-by-digit in English (for example, 'HP 3 4 5 0'), preserving letters separately; never read an identifier as a mathematical quantity or translated number words.
@@ -121,19 +239,17 @@ def build_call_script(configuration: dict[str, Any]) -> dict[str, str]:
     purpose = _text(configuration.get("purpose")) or "help callers with the configured business request"
     brief = business_description or _text(configuration.get("original_requirement")) or _text(configuration.get("original_shabdha_brief")) or purpose
     lowered = f"{purpose} {brief}".casefold()
-    domain = "printer sales" if any(word in lowered for word in ("printer", "printing")) else "hospital appointment support" if any(word in lowered for word in ("hospital", "clinic", "doctor", "appointment")) else "the configured business service"
-    if "printer" in lowered:
+    profile = business_conversation_profile(configuration)
+    domain = profile["domain"]
+    if profile["key"] == "sales" and any(word in lowered for word in ("printer", "printing")):
+        domain = "printer sales"
         qualification = "Ask one question at a time about intended use, printer type, quantity, and budget. Use only product and discount details supplied by the business."
         objection = "Acknowledge concerns about price, fit, or timing. Do not invent models, stock, warranty, delivery, or pricing; offer to check or arrange a human follow-up."
         cta = "When the caller is interested, summarize their needs and ask whether they would like a sales follow-up about the configured offer."
-    elif any(word in lowered for word in ("hospital", "clinic", "doctor", "appointment")):
-        qualification = "Ask one question at a time about the caller's need, preferred department or doctor, and preferred appointment time. Never invent availability or medical advice."
-        objection = "Acknowledge concerns about timing, cost, or care. Explain only configured information and offer a human clinic handoff when needed."
-        cta = "When the caller is ready, summarize the requested appointment details and ask whether they want the configured booking or a team follow-up."
     else:
-        qualification = "Ask one question at a time to understand the caller's goal, relevant requirements, timeline, and contact details. Do not ask for facts already provided."
-        objection = "Acknowledge the concern, answer only from configured business information, and offer a human follow-up when the answer is unknown."
-        cta = "When the caller's goal is clear, summarize the next step and ask whether they would like the configured action or a human follow-up."
+        qualification = profile["qualification"]
+        objection = profile["objection"]
+        cta = profile["cta"]
     identity = (f"You are {name}. {('Represent ' + business_name + '. ') if business_name else ''}" + (f"The customer initiated this inbound call; assist them with {purpose}. Never claim you called them." if inbound else f"You initiated this outbound call. Represent the business and explain the verified reason for calling before qualifying the customer's need. Never claim the customer initiated the call."))
     greeting = (f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, and ask how you can help with {domain}." if inbound else f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, explain the verified business purpose or offer for calling, and ask whether the customer is interested or whether it is relevant to them.")
     qualification_text = (qualification if inbound else "Do not begin by asking 'What is your requirement?' or any discovery question. First explain the configured business purpose, product, service, and verified offer details in a concise natural way. Only after explaining the offer, ask whether the customer is interested or whether it is relevant, then understand their need without interrogating them. Qualify only from verified details.")
@@ -141,7 +257,7 @@ def build_call_script(configuration: dict[str, Any]) -> dict[str, str]:
     if _is_telugu(language):
         business = f" {business_name}" if business_name else ""
         return {
-            SCRIPT_SECTION_NAMES[0]: f"You are {name}. Use this script as the spoken behavior source of truth. Spoken examples must be Telugish: Telugu words in Telugu script plus natural English terms such as insurance, renewal, policy, details, call, service, offer, booking, support. Use only configured business details: {brief}.",
+            SCRIPT_SECTION_NAMES[0]: f"You are {name}. Use this script as the spoken behavior source of truth for {profile['domain']}. Spoken examples must be natural Telugu-English: Telugu words in Telugu script plus useful English fillers and business terms such as okay, actually, sure, right, details, call, service, offer, booking, appointment, support, confirm, and follow-up. {profile['telugu']} Use only configured business details: {brief}.",
             SCRIPT_SECTION_NAMES[1]: (
                 f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 {name}{business} \u0c28\u0c41\u0c02\u0c1a\u0c3f \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. \u0c2e\u0c40\u0c30\u0c41 \u0c0e\u0c02\u0c26\u0c41\u0c15\u0c41 call \u0c1a\u0c47\u0c36\u0c3e\u0c30\u0c41, \u0c0e\u0c32\u0c3e help \u0c1a\u0c47\u0c2f\u0c3e\u0c32\u0c3f \u0c05\u0c02\u0c21\u0c3f?"
                 if inbound else
@@ -212,6 +328,17 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
         )
         if business:
             sections.append(("CUSTOMER PLACEHOLDER VALUES", business))
+    profile = business_conversation_profile(configuration)
+    sections.append((
+        "BUSINESS TYPE CONVERSATION PROFILE",
+        (
+            f"Detected business type: {profile['key']} ({profile['domain']}). "
+            f"Shape the conversation around {profile['focus']}. "
+            f"Qualification: {profile['qualification']} "
+            f"Objection handling: {profile['objection']} "
+            f"Next step: {profile['cta']}"
+        ),
+    ))
     language = _text(configuration.get("language"))
     if language.casefold() in {"telugu", "te", "te-in", "telugu (india)"}:
         sections.append(("TELUGU LANGUAGE ENGINE", TELUGU_ENGINE_CONTRACT))
@@ -236,6 +363,17 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
     elif call_type == "inbound":
         opening_rules += " This is an inbound call: the caller initiated it. Ask why they called or what help they need, understand the caller's request, and answer or assist before qualifying. Do not assume the reason for the call, use an outbound sales opening, or ask for identity details unless they become relevant to the requested action."
     sections.append(("OPENING AND FIRST CALLER TURN", opening_rules))
+    sections.append((
+        "QUESTION ANSWERING AND NO REPETITION",
+        (
+            "For every caller turn, first decide what the caller is asking, correcting, confirming, or objecting to. "
+            "Answer that exact question from the employee context, canonical call script, configured business details, Knowledge Base, and verified research before asking any follow-up. "
+            "If the answer is not available in that context, say the detail is not configured and offer a callback, human follow-up, or other configured next step. "
+            "Do not hallucinate. Do not ignore the caller's question to continue a script. "
+            "Say a substantive sentence only once; never repeat the same greeting, offer, explanation, question, or closing line back-to-back. "
+            "If the caller did not understand, rephrase once in simpler conversational wording instead of repeating the same sentence."
+        ),
+    ))
     shabdha_brief = _text(configuration.get("original_shabdha_brief"))
     direct_prompt = _text(configuration.get("direct_prompt"))
     creation_mode = _text(configuration.get("creation_mode")).casefold()

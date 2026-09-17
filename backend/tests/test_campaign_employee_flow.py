@@ -904,3 +904,51 @@ def test_voice_payload_treats_fillers_and_short_answers_as_non_terminal():
     assert "not goodbye or hang-up intent" in bodies
     assert payload["is_end_call_enabled"] is False
     assert payload["user_idle_threshold_sec"] == 5
+
+
+def test_omni_payload_includes_business_type_specific_prompt_context():
+    insurance_employee = SimpleNamespace(name="Asha", purpose="Renewal reminder", call_type="outbound", llm_model="gpt-4o", language="Telugu")
+    real_estate_employee = SimpleNamespace(name="Asha", purpose="Plot follow-up", call_type="outbound", llm_model="gpt-4o", language="Telugu")
+
+    insurance_payload = map_employee_configuration(insurance_employee, {
+        "name": "Asha",
+        "business_name": "KMG Insurance",
+        "business_type": "insurance",
+        "purpose": "Call customers whose insurance renewal date is within 7 days.",
+        "call_type": "outbound",
+        "language": "Telugu",
+    })
+    real_estate_payload = map_employee_configuration(real_estate_employee, {
+        "name": "Asha",
+        "business_name": "Urban Nest",
+        "business_type": "real estate",
+        "purpose": "Follow up with customers interested in residential plots.",
+        "call_type": "outbound",
+        "language": "Telugu",
+    })
+
+    insurance_context = "\n".join(section["body"] for section in insurance_payload["context_breakdown"])
+    real_estate_context = "\n".join(section["body"] for section in real_estate_payload["context_breakdown"])
+    assert "insurance policy support" in insurance_context
+    assert "policy type, renewal date, premium/payment status" in insurance_context
+    assert "real estate lead follow-up" in real_estate_context
+    assert "property type, location, budget range" in real_estate_context
+    assert insurance_payload["welcome_message"] != real_estate_payload["welcome_message"]
+
+
+def test_omni_payload_requires_answering_questions_once_from_context():
+    employee = SimpleNamespace(name="Care Assistant", purpose="Answer appointment questions", call_type="inbound", llm_model="gpt-4o", language="Telugu")
+    payload = map_employee_configuration(employee, {
+        "name": employee.name,
+        "business_name": "Charan Care Hospital",
+        "business_type": "hospital",
+        "purpose": employee.purpose,
+        "call_type": "inbound",
+        "language": "Telugu",
+        "knowledge_base_configured": True,
+    })
+    section = next(item for item in payload["context_breakdown"] if item["title"] == "Question Answering and No Repetition")
+    assert "Answer the caller's exact question" in section["body"]
+    assert "Knowledge Base" in section["body"]
+    assert "Say each substantive sentence only once" in section["body"]
+    assert "Never repeat the same greeting, offer, explanation, question, or closing line back-to-back" in section["body"]

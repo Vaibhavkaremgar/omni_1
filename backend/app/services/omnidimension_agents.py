@@ -8,7 +8,12 @@ from typing import Any
 from app.integrations.omnidimension import OmniDimensionAgentProvider, ProviderAgent
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
-from app.services.employee_prompt import SCRIPT_SECTION_NAMES, build_employee_prompt, normalize_business_identity
+from app.services.employee_prompt import (
+    SCRIPT_SECTION_NAMES,
+    build_employee_prompt,
+    business_conversation_profile,
+    normalize_business_identity,
+)
 from app.services.employee_templates import get_template, UNIVERSAL_TELUGU_VOICE_GUIDANCE
 from app.services.voice_catalog import voice_definition
 from app.core.config import get_settings
@@ -158,6 +163,19 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     identity += f"Business description: {business_description}\n" if business_description else ""
     identity += f"Employee role and purpose: {purpose}\nDo not volunteer these internal labels in spoken conversation; share relevant business information naturally only when asked or needed."
     context.append({"title": "Agent Identity & Purpose", "body": identity, "is_enabled": True})
+    profile = business_conversation_profile(configuration)
+    context.append({
+        "title": "Business Type Conversation Profile",
+        "body": (
+            f"Business type: {profile['key']} ({profile['domain']}). "
+            f"Shape the conversation around {profile['focus']}. "
+            f"Qualification: {profile['qualification']} "
+            f"Objection handling: {profile['objection']} "
+            f"Next step: {profile['cta']} "
+            f"Telugu style when applicable: {profile['telugu']}"
+        ),
+        "is_enabled": True,
+    })
 
     saved_script = _canonical_call_script(configuration)
     if saved_script:
@@ -243,6 +261,19 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     context.append({
         "title": "Opening State and First Caller Response",
         "body": opening_body,
+        "is_enabled": True,
+    })
+
+    context.append({
+        "title": "Question Answering and No Repetition",
+        "body": (
+            "For every caller turn, first identify whether the caller is asking a question, correcting information, confirming interest, objecting, or changing topic. "
+            "Answer the caller's exact question from the employee context, published call script, configured business details, Knowledge Base, and verified business research before asking any follow-up. "
+            "If the answer is not available in context, say the detail is not configured and offer the configured callback, human follow-up, or next step. Never fabricate. "
+            "Do not continue a script while ignoring the caller's question. "
+            "Say each substantive sentence only once. Never repeat the same greeting, offer, explanation, question, or closing line back-to-back. "
+            "If the caller asks again or seems confused, rephrase once in simpler conversational wording instead of repeating the same sentence."
+        ),
         "is_enabled": True,
     })
 
