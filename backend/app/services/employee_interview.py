@@ -344,6 +344,10 @@ class RealLLMService(LLMService):
             "available, acknowledge the limitation naturally and offer an appropriate next step. "
             "Never claim capabilities or outcomes that are not configured."
         )
+        if str(context["language"]).casefold() in {"hindi", "hi", "hi-in", "hindi (india)"}:
+            system += (
+                "\n\nHINDI HINGLISH CONTRACT: Keep internal instructions in English, but every customer-facing Hindi spoken example must be natural Indian Hinglish: Hindi grammar with frequent English words and connectors embedded in the same sentence. Do not generate pure, formal, literary, Sanskritized, or textbook Hindi. Use examples such as 'Okay ji, samajh gaya.', 'Actually, aapki requirement kya hai?', 'Sure, main details check karta hoon.', 'Sorry ji, uski confirmation abhi nahi hai.', 'Thank you ji.', 'Right, aapka budget kis range mein hai?', 'Definitely, site visit schedule kar sakte hain.', 'One second please.', and 'No problem ji.' Use Hindi as the base language, not mostly English."
+            )
         user = json.dumps(context, ensure_ascii=False, indent=2)
         payload = self._build_request(provider, model, system, user)
         for attempt in range(2):

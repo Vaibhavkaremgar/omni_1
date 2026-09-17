@@ -481,6 +481,13 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     configured = _text(configuration.get("greeting"))
     if configured and (language in {"English", "English (India)", "English (UK)"} or _contains_language_script(configured, language)):
         return configured
+    # Hindi's generated six-section Greeting & Intro is the canonical spoken
+    # opening. Reuse it here so OmniDimension does not receive a separately
+    # generated formal-Hindi welcome that conflicts with the reviewed script.
+    if language == "Hindi":
+        call_script = configuration.get("call_script")
+        if isinstance(call_script, dict) and _text(call_script.get("Greeting & Intro")):
+            return _text(call_script["Greeting & Intro"])
     purpose = _safe_purpose(configuration.get("purpose"), employee.purpose)
     try:
         template = get_template(_text(configuration.get("selected_template_id")))
@@ -501,7 +508,7 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
             return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {business_name} \u0c24\u0c30\u0c2b\u0c41\u0c28 {('verified business purpose gurinchi matladataniki call chesanu.' if outbound else '\u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f.')}"
         return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {purpose} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f \u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f."
     if language == "Hindi":
-        return f"नमस्ते, मैं {name} हूँ। मैं {purpose} में आपकी मदद करने के लिए यहाँ हूँ। आप किस बारे में जानकारी चाहते हैं?"
+        return f"Hello ji, main {name} bol raha hoon. Main {purpose} ke regarding aapki help karne ke liye hoon. Aapki requirement kya hai?"
     if language == "Telugu":
         return f"నమస్కారం, నేను {name}. {purpose} విషయంలో మీకు సహాయం చేయడానికి ఇక్కడ ఉన్నాను. మీకు ఏ సమాచారం కావాలి?"
     if language == "Tamil":
