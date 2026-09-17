@@ -512,6 +512,17 @@ def test_outbound_welcome_explains_offer_before_asking_a_question():
     assert "requirement" not in welcome.casefold()
 
 
+def test_outbound_welcome_uses_reviewed_greeting_and_intro_script_verbatim():
+    employee = SimpleNamespace(name="Nani", purpose="Call leads", call_type="outbound", llm_model="m", language="Telugu")
+    greeting_intro = "Hello, this is Nani from VSL Electronics. We have a special Vinayaka Chaturthi offer – 30% off on all printers. Would you like to hear more?"
+    payload = map_employee_configuration(employee, {
+        "name": "Nani", "business_name": "VSL Electronics", "call_type": "outbound",
+        "purpose": "The employee must call leads about a festival printer offer.",
+        "call_script": {"Greeting & Intro": greeting_intro}, "language": "Telugu", "llm_model": "m",
+    })
+    assert payload["welcome_message"] == greeting_intro
+
+
 def test_outbound_prompt_requires_offer_before_qualification():
     from app.services.employee_prompt import build_employee_prompt
 

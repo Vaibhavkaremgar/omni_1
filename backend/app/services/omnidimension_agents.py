@@ -508,6 +508,16 @@ def _language_code(language: str) -> str:
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
     configured = _text(configuration.get("greeting"))
     outbound = _text(configuration.get("call_type", employee.call_type)).casefold() == "outbound"
+    call_script = configuration.get("call_script")
+    script_greeting = (
+        _text(call_script.get("Greeting & Intro"))
+        if isinstance(call_script, dict) else ""
+    )
+    # The reviewed second script section is the caller-facing source of truth.
+    # Omni plays welcome_message before the LLM gets a turn, so it must receive
+    # that exact opening rather than a separately reconstructed version.
+    if _is_spoken_welcome(script_greeting):
+        return script_greeting
     # A saved generic greeting can otherwise undo the outbound offer-first
     # contract. Generate this opening from the verified employee configuration.
     if not outbound and configured and (language in {"English", "English (India)", "English (UK)"} or _contains_language_script(configured, language)):
@@ -645,6 +655,19 @@ def _default_end_call_message(language: str) -> str:
     if language == "Telugu":
         return "Thank you andi, have a nice day."
     return "Thank you for your time."
+
+
+def _is_spoken_welcome(value: str) -> bool:
+    """Exclude builder-generated instructions from the provider's spoken welcome."""
+    if not value:
+        return False
+    lowered = value.casefold()
+    instruction_markers = (
+        "greet naturally", "identify yourself", "explain the verified",
+        "ask how you can help", "ani natural ga greet cheyyandi",
+        "munduga configured business purpose",
+    )
+    return not any(marker in lowered for marker in instruction_markers)
 
 
 def _safe_purpose(configured: Any, employee_purpose: Any) -> str:
