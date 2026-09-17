@@ -829,6 +829,21 @@ def test_call_type_generates_distinct_inbound_and_outbound_canonical_flows():
     assert "outbound call" in outbound["final_prompt"].casefold()
 
 
+def test_hindi_prompt_uses_devanagari_hinglish_engine():
+    configuration = compose_employee_configuration({
+        "name": "Asha",
+        "business_name": "KMG Insurance",
+        "purpose": "Help customers with insurance renewal",
+        "language": "Hindi",
+        "call_type": "outbound",
+    })
+    prompt = configuration["final_prompt"]
+    assert "HINDI LANGUAGE ENGINE" in prompt
+    assert "Devanagari Unicode" in prompt
+    assert "English business" in prompt
+    assert "Roman Hindi" in prompt
+
+
 def test_publish_sends_exact_saved_call_script_as_omni_source_of_truth(campaign_db, monkeypatch):
     db, _, _ = campaign_db
     seen_payloads: list[dict] = []
