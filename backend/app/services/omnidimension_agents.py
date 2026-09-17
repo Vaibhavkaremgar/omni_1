@@ -8,7 +8,7 @@ from typing import Any
 from app.integrations.omnidimension import OmniDimensionAgentProvider, ProviderAgent
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
-from app.services.employee_prompt import build_employee_prompt, normalize_business_identity
+from app.services.employee_prompt import SCRIPT_SECTION_NAMES, build_employee_prompt, normalize_business_identity
 from app.services.employee_templates import get_template, UNIVERSAL_TELUGU_VOICE_GUIDANCE
 from app.services.voice_catalog import voice_definition
 from app.core.config import get_settings
@@ -159,6 +159,19 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     identity += f"Employee role and purpose: {purpose}\nDo not volunteer these internal labels in spoken conversation; share relevant business information naturally only when asked or needed."
     context.append({"title": "Agent Identity & Purpose", "body": identity, "is_enabled": True})
 
+    saved_script = _canonical_call_script(configuration)
+    if saved_script:
+        context.append({
+            "title": "Published Call Script Source of Truth",
+            "body": (
+                "Use these exact six Call Script sections as the authoritative spoken behavior. "
+                "Do not replace them with a regenerated script. Runtime instructions may constrain pacing, safety, and provider behavior, "
+                "but they must not modify or supersede the script below.\n\n"
+                + _format_call_script(saved_script)
+            ),
+            "is_enabled": True,
+        })
+
     research = configuration.get("business_research")
     if isinstance(research, dict):
         facts = research.get("facts") if isinstance(research.get("facts"), list) else []
@@ -238,7 +251,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "body": (
             "Continue listening and responding after every caller turn. Ask the next relevant question when information is incomplete. "
             "Do not treat the first answer as task completion and do not end the call after one response. "
-            "Completing the business objective is not permission to end the call. After the required task is complete, ask whether the caller needs anything else and wait. If they ask another question, continue helping. Treat a short answer such as 'yes' as an answer to the immediately preceding business question, not as permission to end. Only enter the end-call path after a clear caller statement that they are finished or a clear affirmative answer to an explicit end-of-call confirmation. Do not use silence or objective completion as confirmation."
+            "Completing the business objective is not permission to end the call. After the required task is complete, ask whether the caller needs anything else and wait. If they ask another question, continue helping. Treat a short answer such as 'yes', 'okay', 'sure', a product name, or a budget amount as an answer to the immediately preceding business question, not as permission to end. Treat hesitation or filler sounds such as 'ahh', 'umm', 'uh', 'hmm', 'haa', 'actually', 'one second', 'wait', and equivalent Telugu/Hindi fillers as thinking or continuation cues, not goodbye or hang-up intent. Only enter the end-call path after a clear caller statement that they are finished or a clear affirmative answer to an explicit end-of-call confirmation. Do not use silence, hesitation, or objective completion as confirmation."
         ),
         "is_enabled": True,
     })
@@ -388,7 +401,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "is_end_call_enabled": False,
         # Provider-level idle handling: prompt the caller once after a short
         # pause and wait for speech instead of advancing the workflow.
-        "user_idle_threshold_sec": 3,
+        "user_idle_threshold_sec": 5,
         "first_ideal_message": (
             "Vinipisthunda andi?"
             if lang == "Telugu" else
@@ -456,6 +469,21 @@ def _automatic_post_call_actions() -> dict[str, Any]:
             "trigger_call_statuses": ["completed", "failed", "no_answer", "busy", "voicemail_detected"],
         }
     }
+
+
+def _canonical_call_script(configuration: dict[str, Any]) -> dict[str, str]:
+    script = configuration.get("call_script")
+    if not isinstance(script, dict):
+        return {}
+    result = {title: _text(script.get(title)) for title in SCRIPT_SECTION_NAMES}
+    return result if all(result.values()) else {}
+
+
+def _format_call_script(script: dict[str, str]) -> str:
+    return "\n\n".join(
+        f"{index}. {title}\n{script[title]}"
+        for index, title in enumerate(SCRIPT_SECTION_NAMES, 1)
+    )
 
 
 def _transcriber_configuration(configuration: dict[str, Any], language: str) -> dict[str, Any]:
@@ -543,6 +571,17 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     name = employee.name
     business_purpose = _outbound_offer_summary(configuration, purpose)
     if language == "Telugu":
+        company = f", {business_name} \u0c28\u0c41\u0c02\u0c1a\u0c3f" if business_name else ""
+        if outbound:
+            reason = _telugu_outbound_reason(configuration, purpose) if business_name else f"{business_purpose} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
+            return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 {name}{company} \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. {reason} \u0c2e\u0c30\u0c3f\u0c02\u0c24 details \u0c35\u0c3f\u0c28\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f \u0c2e\u0c40\u0c15\u0c41 interest \u0c09\u0c02\u0c26\u0c3e?"
+        return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 {name}{company} \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. \u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 help \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f \u0c05\u0c02\u0c21\u0c3f?"
+    if language == "Hindi":
+        company = f", {business_name} \u0938\u0947" if business_name else ""
+        if outbound:
+            return f"\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 {name}{company} \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. {business_purpose} \u0915\u0947 \u092c\u093e\u0930\u0947 \u092e\u0947\u0902 call \u0915\u093f\u092f\u093e \u0939\u0948. \u0915\u094d\u092f\u093e \u0906\u092a details \u0938\u0941\u0928\u0928\u093e \u091a\u093e\u0939\u0947\u0902\u0917\u0947?"
+        return f"\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 {name}{company} \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. \u0906\u092a\u0915\u0940 help \u0915\u0948\u0938\u0947 \u0915\u0930 \u0938\u0915\u0924\u093e \u0939\u0942\u0901?"
+    if language == "Telugu":
         # Teluglish: conversational Telugu with the English words customers
         # naturally use for business details.
         if business_name:
@@ -594,6 +633,17 @@ def _outbound_offer_summary(configuration: dict[str, Any], purpose: str) -> str:
 
 def _telugu_outbound_reason(configuration: dict[str, Any], purpose: str) -> str:
     """Turn the owner brief into a short caller-facing Telugu reason to call."""
+    brief = _text(configuration.get("business_description")) or purpose
+    promotion = _promotion_from_brief(brief)
+    if promotion:
+        return f"\u0c2e\u0c3e \u0c26\u0c17\u0c4d\u0c17\u0c30 {promotion} \u0c09\u0c02\u0c26\u0c3f."
+    if "insurance" in brief.casefold() and "renewal" in brief.casefold():
+        days = re.search(r"within\s+(\d+)\s+days?", brief, flags=re.IGNORECASE)
+        timing = f"next {days.group(1)} days \u0c32\u0c4b " if days else ""
+        return f"\u0c2e\u0c40 insurance renewal {timing}\u0c09\u0c02\u0c26\u0c3f. Renewal reminder \u0c15\u0c4b\u0c38\u0c02 call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
+    if _looks_like_internal_instruction(brief):
+        return "\u0c2e\u0c3e current offer \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
+    return f"{brief} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
     brief = _text(configuration.get("business_description")) or purpose
     promotion = _promotion_from_brief(brief)
     if promotion:

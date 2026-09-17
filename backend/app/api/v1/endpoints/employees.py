@@ -397,7 +397,10 @@ def update_employee(
             raise HTTPException(status_code=422, detail="Configuration must be an object")
         if configuration.get("call_type") not in (None, "inbound", "outbound"):
             raise HTTPException(status_code=422, detail="call_type must be inbound or outbound")
-        draft.configuration = strip_customer_internal_configuration(configuration)
+        draft.configuration = {
+            **(draft.configuration or {}),
+            **strip_customer_internal_configuration(configuration),
+        }
     draft.configuration = compose_employee_configuration(draft.configuration)
     normalize_employee_llm_configuration(employee, draft)
     for field in ("name", "purpose", "call_type", "language", "creation_mode"):
@@ -475,6 +478,16 @@ def publish_employee(
     draft = _draft_for(employee)
     version = draft or (employee.published_version if employee.status == EmployeeStatus.published.value else None)
     if version is not None:
+        version.configuration = {
+            "name": employee.name,
+            "purpose": employee.purpose,
+            "call_type": employee.call_type,
+            "llm_provider": employee.llm_provider,
+            "llm_model": employee.llm_model,
+            "language": employee.language,
+            "creation_mode": employee.creation_mode,
+            **(version.configuration or {}),
+        }
         version.configuration = compose_employee_configuration(version.configuration or {})
         normalize_employee_llm_configuration(employee, version)
         version.configuration = ensure_business_research(version.configuration)
@@ -496,16 +509,17 @@ def publish_employee(
         EmployeeKnowledgeFile.tenant_id == current_user.tenant.id,
         EmployeeKnowledgeFile.provider_file_id.is_not(None),
     )).all()
-    try:
-        provider = get_agent_service().provider
-        for knowledge_file in knowledge_files:
-            provider.attach_knowledge_file(knowledge_file.provider_file_id, provider_result.provider_id)
-    except OmniDimensionError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unable to attach the knowledge base to the Omni voice assistant. Please retry.",
-        ) from exc
+    if knowledge_files:
+        try:
+            provider = get_agent_service().provider
+            for knowledge_file in knowledge_files:
+                provider.attach_knowledge_file(knowledge_file.provider_file_id, provider_result.provider_id)
+        except OmniDimensionError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to attach the knowledge base to the Omni voice assistant. Please retry.",
+            ) from exc
     version.provider_name = "omnidimension"
     version.provider_agent_id = provider_result.provider_id
     version.provider_status = provider_result.status

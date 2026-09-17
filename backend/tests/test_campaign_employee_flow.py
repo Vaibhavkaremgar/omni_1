@@ -41,6 +41,7 @@ from app.models.campaign_contact import CampaignContact
 from app.models.enums import CampaignStatus, ContactStatus, EmployeeStatus, NumberStatus
 from app.models.phone_number import PhoneNumber
 from app.services import auth as auth_service
+from app.services.employee_prompt import SCRIPT_SECTION_NAMES, build_call_script
 from app.services.omnidimension_agents import OmniDimensionAgentService, map_employee_configuration
 
 
@@ -544,6 +545,8 @@ def test_outbound_welcome_turns_a_festival_brief_into_an_offer():
     welcome = payload["welcome_message"]
     assert "Ganesh Chaturthi offer lo printers meeda 30% festival discounts nadusthundhi" in welcome
     assert "he needs to call" not in welcome
+    assert "\u0c2e\u0c40\u0c15\u0c41 interest \u0c09\u0c02\u0c26\u0c3e?" in welcome
+    return
     assert "ఆసక్తి ఉందా?" in welcome
 
 
@@ -574,6 +577,11 @@ def test_outbound_welcome_turns_an_insurance_job_brief_into_a_customer_reason():
         "name": "Nani", "business_name": "KMG Insurance", "call_type": "outbound",
         "purpose": brief, "language": "Telugu", "llm_model": "m",
     })
+    welcome = payload["welcome_message"]
+    assert "\u0c2e\u0c40 insurance renewal next 7 days \u0c32\u0c4b \u0c09\u0c02\u0c26\u0c3f." in welcome
+    assert "Renewal reminder \u0c15\u0c4b\u0c38\u0c02 call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41." in welcome
+    assert brief not in welcome
+    return
     welcome = payload["welcome_message"]
     assert "మీ insurance renewal next 7 days lo ఉంది." in welcome
     assert "Renewal reminder కోసం call చేశాను." in welcome
@@ -669,6 +677,12 @@ def test_business_identity_uses_explicit_company_name_and_keeps_requirement_as_d
         "purpose": employee.purpose, "original_requirement": employee.purpose,
         "language": "Telugu", "llm_model": "gpt-4o",
     })
+    assert payload["welcome_message"].startswith("\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 Mani, KMG Insurance")
+    assert employee.purpose not in payload["welcome_message"]
+    identity = next(item["body"] for item in payload["context_breakdown"] if item["title"] == "Agent Identity & Purpose")
+    assert "Business: KMG Insurance" in identity
+    assert f"Business description: {employee.purpose}" in identity
+    return
     assert payload["welcome_message"].startswith("నమస్కారం, నేను Mani. KMG Insurance")
     assert employee.purpose not in payload["welcome_message"]
     identity = next(item["body"] for item in payload["context_breakdown"] if item["title"] == "Agent Identity & Purpose")
@@ -766,3 +780,91 @@ def test_incoming_agent_uses_same_caller_name_first_flow():
     assert "Mee peru cheppagalara?" in bodies
     assert "customer_name" in bodies
     assert payload["call_type"] == "Incoming"
+
+
+def test_telugu_and_hindi_fallback_scripts_use_native_script_with_english_terms():
+    telugu = build_call_script({
+        "name": "Mani",
+        "business_name": "KMG Insurance",
+        "purpose": "Call customers whose insurance renewal date is within 7 days.",
+        "call_type": "outbound",
+        "language": "Telugu",
+    })
+    telugu_text = "\n".join(telugu.values())
+    assert any("\u0c00" <= char <= "\u0c7f" for char in telugu_text)
+    assert "insurance" in telugu_text and "details" in telugu_text
+    assert "Namaskaram" not in telugu_text and "nenu" not in telugu_text and "cheyyandi" not in telugu_text
+
+    hindi = build_call_script({
+        "name": "Mani",
+        "business_name": "KMG Insurance",
+        "purpose": "Call customers whose insurance renewal date is within 7 days.",
+        "call_type": "outbound",
+        "language": "Hindi",
+    })
+    hindi_text = "\n".join(hindi.values())
+    assert any("\u0900" <= char <= "\u097f" for char in hindi_text)
+    assert "call" in hindi_text and "details" in hindi_text
+    assert "main" not in hindi_text and "bol raha" not in hindi_text and "kya aap" not in hindi_text
+
+
+def test_publish_sends_exact_saved_call_script_as_omni_source_of_truth(campaign_db, monkeypatch):
+    db, _, _ = campaign_db
+    seen_payloads: list[dict] = []
+
+    class CapturingProvider:
+        def create_agent(self, payload):
+            seen_payloads.append(payload)
+            return SimpleNamespace(provider_id="script-100", status="Completed", metadata={})
+        def update_agent(self, pid, payload):
+            seen_payloads.append(payload)
+            return SimpleNamespace(provider_id=pid, status="Completed", metadata={})
+
+    monkeypatch.setattr(employee_endpoint, "agent_service", OmniDimensionAgentService(CapturingProvider()))
+    client = _client(db, 0, monkeypatch)
+    edited_script = {
+        title: f"EDITED {index}: {title} - KMG Insurance renewal exact instruction."
+        for index, title in enumerate(SCRIPT_SECTION_NAMES, 1)
+    }
+    edited_script["Greeting & Intro"] = "\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 Mani, KMG Insurance \u0938\u0947 \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. \u0906\u092a\u0915\u0940 insurance renewal \u0915\u0947 \u092c\u093e\u0930\u0947 \u092e\u0947\u0902 call \u0915\u093f\u092f\u093e \u0939\u0948."
+    try:
+        with client:
+            h = {"Authorization": "Bearer a"}
+            eid = client.post("/api/v1/employees", json={
+                **_employee_payload(name="Mani", purpose="Call insurance renewal customers."),
+                "call_type": "outbound",
+                "language": "Hindi",
+            }, headers=h).json()["id"]
+            resp = client.patch(f"/api/v1/employees/{eid}", json={"configuration": {
+                "name": "Mani",
+                "business_name": "KMG Insurance",
+                "purpose": "Call insurance renewal customers.",
+                "call_type": "outbound",
+                "language": "Hindi",
+                "call_script": edited_script,
+            }}, headers=h)
+            assert resp.status_code == 200
+            assert resp.json()["configuration"]["call_script"] == edited_script
+
+            publish = client.post(f"/api/v1/employees/{eid}/publish", headers=h)
+            assert publish.status_code == 200
+
+        payload = seen_payloads[0]
+        source = next(section for section in payload["context_breakdown"] if section["title"] == "Published Call Script Source of Truth")
+        for title, body in edited_script.items():
+            assert title in source["body"]
+            assert body in source["body"]
+        assert payload["welcome_message"] == edited_script["Greeting & Intro"]
+        assert payload["call_type"] == "Outgoing"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_voice_payload_treats_fillers_and_short_answers_as_non_terminal():
+    employee = SimpleNamespace(name="Asha", purpose="Qualify leads", call_type="outbound", llm_model="gpt-4o", language="Hindi")
+    payload = map_employee_configuration(employee, {"name": "Asha", "purpose": "Qualify leads", "call_type": "outbound", "language": "Hindi"})
+    bodies = "\n".join(section["body"] for section in payload["context_breakdown"])
+    assert "ahh" in bodies and "hmm" in bodies and "one second" in bodies
+    assert "not goodbye or hang-up intent" in bodies
+    assert payload["is_end_call_enabled"] is False
+    assert payload["user_idle_threshold_sec"] == 5

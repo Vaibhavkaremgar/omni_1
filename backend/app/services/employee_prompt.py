@@ -59,8 +59,12 @@ def normalize_business_identity(configuration: dict[str, Any]) -> dict[str, Any]
     return result
 
 
-def _spoken(language: str, english: str, telugu: str) -> str:
-    return telugu if language.casefold() in {"telugu", "te", "te-in", "telugu (india)"} else english
+def _is_telugu(language: str) -> bool:
+    return language.casefold() in {"telugu", "te", "te-in", "telugu (india)"}
+
+
+def _is_hindi(language: str) -> bool:
+    return language.casefold() in {"hindi", "hi", "hi-in", "hindi (india)"}
 
 
 def _language_conversation_guidance(language: str) -> str:
@@ -75,6 +79,12 @@ def _language_conversation_guidance(language: str) -> str:
     else:
         fillers = f"Use natural conversational acknowledgements and fillers from {selected}; never import Telugu or Hindi-specific fillers unless that is the selected language."
         hello = f"For repeated hello or attention-seeking, acknowledge the caller with varied, natural responses in {selected}, rather than repeating the same greeting."
+    if _is_telugu(normalized):
+        fillers += " MANDATORY SCRIPT RULE: every Telugu word spoken to callers must be written in Telugu script, mixed naturally with English words like insurance, renewal, policy, details, available, call, support, service, offer, booking, appointment, price, budget, product, team, and follow-up. Never write Telugu in Roman letters."
+        hello = "If the caller is silent for approximately 2-3 seconds, say exactly '\u0c35\u0c3f\u0c28\u0c3f\u0c2a\u0c3f\u0c38\u0c4d\u0c24\u0c41\u0c02\u0c26\u0c3e \u0c05\u0c02\u0c21\u0c3f?' to check that they are present, then STOP speaking and WAIT for the caller's response."
+    elif _is_hindi(normalized):
+        fillers += " MANDATORY SCRIPT RULE: every Hindi word spoken to callers must be written in Devanagari, mixed naturally with English words like okay, actually, requirement, details, available, budget, price, location, offer, product, service, booking, appointment, confirm, support, team, and follow-up. Never write Hindi in Roman letters."
+        hello = "If the caller is silent for approximately 2-3 seconds, say '\u0915\u094d\u092f\u093e \u0906\u092a \u0935\u0939\u093e\u0902 \u0939\u0948\u0902 \u091c\u0940?' to check that they are present, then STOP speaking and WAIT for the caller's response."
     return f"""The selected conversation language is {selected}. Generate these behaviors dynamically in that language and preserve the existing business, safety, inbound/outbound, interruption, call-lifecycle, research, Knowledge Base, variable, and six-section script rules.
 
 For every regional-language conversation, code-switch naturally with commonly used English business and conversational words; do not make the speech overly formal or fully translated. Say 'thanks', 'thank you', and 'sorry' in English only. Say every numeric value in English pronunciation, including phone numbers, dates, times, prices, quantities, percentages, ages, IDs, model numbers, and codes; never use regional-language number words. Respond as soon as the caller finishes speaking: keep the response concise and do not add an artificial pause or wait for extra silence.
@@ -122,13 +132,41 @@ def build_call_script(configuration: dict[str, Any]) -> dict[str, str]:
     greeting = (f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, and ask how you can help with {domain}." if inbound else f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, explain the verified business purpose or offer for calling, and ask whether it is relevant to the customer.")
     qualification_text = (qualification if inbound else "Do not begin by asking 'What is your requirement?' or any discovery question. First explain the configured business purpose, product, service, and verified offer details in a concise natural way. Only after explaining the offer, ask whether the customer is interested or whether it is relevant, then understand their need without interrogating them. Qualify only from verified details.")
     cta_text = (cta if inbound else "When the customer is interested, explain verified benefits and move toward the actual configured next step such as a booking, callback, visit, or purchase. Never invent an offer, price, feature, or guarantee.")
+    if _is_telugu(language):
+        business = f" {business_name}" if business_name else ""
+        return {
+            SCRIPT_SECTION_NAMES[0]: f"You are {name}. Use this script as the spoken behavior source of truth. Spoken examples must be Telugish: Telugu words in Telugu script plus natural English terms such as insurance, renewal, policy, details, call, service, offer, booking, support. Use only configured business details: {brief}.",
+            SCRIPT_SECTION_NAMES[1]: (
+                f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 {name}{business} \u0c28\u0c41\u0c02\u0c1a\u0c3f \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. \u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 help \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f \u0c05\u0c02\u0c21\u0c3f?"
+                if inbound else
+                f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 {name}{business} \u0c28\u0c41\u0c02\u0c1a\u0c3f \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. {domain} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41; details \u0c35\u0c3f\u0c28\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f \u0c2e\u0c40\u0c15\u0c41 interest \u0c09\u0c02\u0c26\u0c3e?"
+            ),
+            SCRIPT_SECTION_NAMES[2]: "\u0c12\u0c15\u0c4d\u0c15\u0c4b question \u0c05\u0c21\u0c17\u0c02\u0c21\u0c3f. Caller short answer \u0c07\u0c1a\u0c4d\u0c1a\u0c3f\u0c28\u0c3e acknowledge \u0c1a\u0c47\u0c38\u0c3f next useful follow-up \u0c05\u0c21\u0c17\u0c02\u0c21\u0c3f; ahh, hmm, okay, yes \u0c32\u0c3e\u0c02\u0c1f\u0c3f filler \u0c35\u0c32\u0c4d\u0c32 call end \u0c1a\u0c47\u0c2f\u0c15\u0c02\u0c21\u0c3f.",
+            SCRIPT_SECTION_NAMES[3]: "\u0c2e\u0c41\u0c02\u0c26\u0c41 caller concern \u0c28\u0c3f acknowledge \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f. Configured information \u0c2e\u0c3e\u0c24\u0c4d\u0c30\u0c2e\u0c47 explain \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f. Unknown \u0c05\u0c2f\u0c3f\u0c24\u0c47 'Sorry \u0c05\u0c02\u0c21\u0c3f, \u0c06 detail \u0c28\u0c3e\u0c15\u0c41 available \u0c17\u0c3e \u0c32\u0c47\u0c26\u0c41; team follow-up arrange \u0c1a\u0c47\u0c38\u0c4d\u0c24\u0c3e\u0c28\u0c41' \u0c05\u0c28\u0c02\u0c21\u0c3f.",
+            SCRIPT_SECTION_NAMES[4]: "\u0c2e\u0c40 next step clear \u0c05\u0c2f\u0c4d\u0c2f\u0c3e\u0c15 details \u0c28\u0c3f short \u0c17\u0c3e summarize \u0c1a\u0c47\u0c38\u0c3f confirmation \u0c05\u0c21\u0c17\u0c02\u0c21\u0c3f. Booking, callback, site visit, renewal, purchase \u0c32\u0c3e\u0c02\u0c1f\u0c3f action configured \u0c09\u0c28\u0c4d\u0c28\u0c2a\u0c4d\u0c2a\u0c41\u0c21\u0c47 offer \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f.",
+            SCRIPT_SECTION_NAMES[5]: "Objective complete \u0c05\u0c2f\u0c4d\u0c2f\u0c3e\u0c15 '\u0c07\u0c02\u0c15\u0c3e \u0c0f\u0c2e\u0c48\u0c28\u0c3e help \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3e \u0c05\u0c02\u0c21\u0c3f?' \u0c05\u0c28\u0c3f \u0c05\u0c21\u0c17\u0c02\u0c21\u0c3f. Caller goodbye, done, \u0c32\u0c47\u0c26\u0c3e no further help \u0c05\u0c28\u0c3f clear \u0c17\u0c3e \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c3f\u0c28\u0c2a\u0c4d\u0c2a\u0c41\u0c21\u0c47 polite \u0c17\u0c3e end \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f.",
+        }
+    if _is_hindi(language):
+        business = f" {business_name}" if business_name else ""
+        return {
+            SCRIPT_SECTION_NAMES[0]: f"You are {name}. Use this script as the spoken behavior source of truth. Spoken examples must be Hinglish: Hindi words in Devanagari plus natural English terms such as insurance, renewal, policy, details, call, service, offer, booking, support. Use only configured business details: {brief}.",
+            SCRIPT_SECTION_NAMES[1]: (
+                f"\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 {name}{business} \u0938\u0947 \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. \u0906\u092a\u0915\u0940 help \u0915\u0948\u0938\u0947 \u0915\u0930 \u0938\u0915\u0924\u093e \u0939\u0942\u0901?"
+                if inbound else
+                f"\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 {name}{business} \u0938\u0947 \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. {domain} \u0915\u0947 \u092c\u093e\u0930\u0947 \u092e\u0947\u0902 call \u0915\u093f\u092f\u093e \u0939\u0948; \u0915\u094d\u092f\u093e \u0906\u092a details \u0938\u0941\u0928\u0928\u093e \u091a\u093e\u0939\u0947\u0902\u0917\u0947?"
+            ),
+            SCRIPT_SECTION_NAMES[2]: "\u090f\u0915 \u0935\u0915\u094d\u0924 \u092a\u0930 \u090f\u0915 question \u092a\u0942\u091b\u0947\u0902. Caller short answer \u0926\u0947 \u0924\u094b acknowledge \u0915\u0930\u0915\u0947 next useful follow-up \u092a\u0942\u091b\u0947\u0902; ahh, hmm, okay, yes \u091c\u0948\u0938\u0947 filler \u0915\u094b end intent \u092e\u0924 \u092e\u093e\u0928\u093f\u090f.",
+            SCRIPT_SECTION_NAMES[3]: "\u092a\u0939\u0932\u0947 caller concern acknowledge \u0915\u0930\u0947\u0902. Sirf configured information explain \u0915\u0930\u0947\u0902. Unknown \u0939\u094b \u0924\u094b 'Sorry \u091c\u0940, \u092f\u0947 detail \u0905\u092d\u0940 available \u0928\u0939\u0940\u0902 \u0939\u0948; \u092e\u0948\u0902 team follow-up arrange \u0915\u0930 \u0926\u0942\u0901\u0917\u093e' \u0915\u0939\u0947\u0902.",
+            SCRIPT_SECTION_NAMES[4]: "Next step clear \u0939\u094b\u0928\u0947 \u092a\u0930 details short \u092e\u0947\u0902 summarize \u0915\u0930\u0915\u0947 confirmation \u092a\u0942\u091b\u0947\u0902. Booking, callback, site visit, renewal, purchase \u091c\u0948\u0938\u093e action sirf configured \u0939\u094b \u0924\u092d\u0940 offer \u0915\u0930\u0947\u0902.",
+            SCRIPT_SECTION_NAMES[5]: "Objective complete \u0939\u094b\u0928\u0947 \u0915\u0947 \u092c\u093e\u0926 '\u0914\u0930 \u0915\u0941\u091b help \u091a\u093e\u0939\u093f\u090f \u091c\u0940?' \u092a\u0942\u091b\u0947\u0902. Caller goodbye, done, \u092f\u093e no further help clearly \u0915\u0939\u0947 \u0924\u092d\u0940 politely call end \u0915\u0930\u0947\u0902.",
+        }
     return {
-        SCRIPT_SECTION_NAMES[0]: _spoken(language, identity + f" Business description: {brief}. Never treat the description as the business name.", f"Meeru {name}. {((business_name + ' tarafuna ') if business_name else '')}{'Caller call chesaru; vallaki help cheyyandi. Meeru call chesinattu eppudu cheppakandi.' if inbound else 'Meeru outbound call chesi, verified reason ni explain cheyyandi. Caller call chesinattu cheppakandi.'} Business details lo unna information matrame use cheyyandi."),
-        SCRIPT_SECTION_NAMES[1]: _spoken(language, greeting, f"{name}{(' ' + business_name + ' tarafuna') if business_name else ''} ani natural ga greet cheyyandi. {'Ela help cheyyalo adagandi.' if inbound else 'Munduga configured business purpose, product/service, offer details explain cheyyandi; first question ga customer requirement adagakandi. Offer explain chesina tarvata interest unda ani adagandi.'}"),
-        SCRIPT_SECTION_NAMES[2]: _spoken(language, qualification_text + " If the caller gives a short answer, acknowledge it and ask one useful follow-up; never end the call because the answer is brief or incomplete.", f"One question at a time adagandi. Caller answer ni acknowledge chesi useful follow-up adagandi; incomplete answer valla call end cheyyakandi."),
-        SCRIPT_SECTION_NAMES[3]: _spoken(language, objection, f"Caller concern ni first acknowledge cheyyandi. Configured information matrame cheppandi. Unknown ayithe check chestamani leda human team follow-up arrange chestamani cheppandi."),
-        SCRIPT_SECTION_NAMES[4]: _spoken(language, cta_text, f"Caller needs ni short ga summarize chesi, configured next step kavala ani adagandi. Details ni confirm cheyyandi."),
-        SCRIPT_SECTION_NAMES[5]: _spoken(language, "After the objective is complete, ask whether anything else is needed. Continue if the caller has another request. End only after clear intent to finish.", "Objective complete ayyaka, 'Inka emaina help kavala?' ani adagandi. Caller ki vere request unte continue cheyyandi. Vallu finish ani clear ga cheppinappude 'Thank you andi, have a nice day' ani polite ga call end cheyyandi. Thanks ni pure Telugu lo translate cheyyakandi."),
+        SCRIPT_SECTION_NAMES[0]: identity + f" Business description: {brief}. Never treat the description as the business name.",
+        SCRIPT_SECTION_NAMES[1]: greeting,
+        SCRIPT_SECTION_NAMES[2]: qualification_text + " If the caller gives a short answer, acknowledge it and ask one useful follow-up; never end the call because the answer is brief or incomplete.",
+        SCRIPT_SECTION_NAMES[3]: objection,
+        SCRIPT_SECTION_NAMES[4]: cta_text,
+        SCRIPT_SECTION_NAMES[5]: "After the objective is complete, ask whether anything else is needed. Continue if the caller has another request. End only after clear intent to finish.",
     }
 
 def _text(value: Any) -> str:
@@ -237,7 +275,9 @@ def build_employee_prompt(configuration: dict[str, Any]) -> str:
     if language:
         language_rule = f"Speak in {language}. Follow the caller's language preference when appropriate."
         if language == "Telugu":
-            language_rule += " Use natural Telugu throughout; common English business words are allowed and do not trigger a language switch. Switch only when the caller explicitly requests another language."
+            language_rule += " Use Telugish: Telugu script for Telugu words plus natural English business terms. Never romanize Telugu."
+        elif language == "Hindi":
+            language_rule += " Use Hinglish: Devanagari for Hindi words plus natural English business terms. Never romanize Hindi."
         sections.append(("LANGUAGE", language_rule + " Keep the conversation warm, spontaneous, and human-sounding rather than robotic or scripted. For ordinary numbers use English pronunciation; for codes and identifiers, speak each digit separately in English."))
     normalized_language = language.casefold()
     if normalized_language in {"telugu", "te", "te-in", "telugu (india)"}:

@@ -71,7 +71,7 @@ class Settings(BaseSettings):
         default=15.0,
         validation_alias="OMNIDIMENSION_TIMEOUT_SECONDS",
     )
-    live_speech_silence_timeout_ms: int = Field(default=200, validation_alias="LIVE_SPEECH_SILENCE_TIMEOUT_MS", ge=150, le=2000)
+    live_speech_silence_timeout_ms: int = Field(default=900, validation_alias="LIVE_SPEECH_SILENCE_TIMEOUT_MS", ge=150, le=2000)
     omnidimension_voice_catalog_json: str = Field(default="", validation_alias="OMNIDIMENSION_VOICE_CATALOG_JSON")
     phone_number_monthly_price_inr: Decimal = Field(
         default=Decimal("650.00"), validation_alias="PHONE_NUMBER_MONTHLY_PRICE_INR", ge=0
