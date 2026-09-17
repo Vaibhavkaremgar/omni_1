@@ -309,6 +309,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     )
     if lang == "Telugu":
         language_rules += " Converse naturally in Telugu throughout the call. Follow the universal Telugu speaking style below."
+    elif lang == "Hindi":
+        language_rules += (
+            " Speak in natural Indian conversational Hinglish, not pure or formal Hindi: use Hindi grammar as the base and mix frequent, natural English words throughout every response, especially okay, sure, actually, sorry, thank you, right, details, requirement, budget, price, location, features, offer, product, service, booking, appointment, confirm, available, support, team, and follow-up. Keep Hindi as the main language, but do not translate commonly used business terms into literary Hindi. Use varied Hindi fillers such as ji, haan ji, achha ji, theek hai ji, bilkul ji, and samajh gaya ji. Use English only for thanks, thank you, and sorry. Never use Telugu fillers. Every number and code must be spoken digit-by-digit in English."
+        )
     context.append({
         "title": "Language & Communication Rules",
         "body": language_rules + ("\n\n" + UNIVERSAL_TELUGU_VOICE_GUIDANCE if lang == "Telugu" else ""),
