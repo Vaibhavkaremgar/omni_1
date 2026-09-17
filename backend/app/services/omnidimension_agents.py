@@ -537,7 +537,8 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
         # naturally use for business details.
         if business_name:
             if outbound:
-                return f"నమస్కారం, నేను {name}. {business_name} తరఫున మాట్లాడుతున్నాను. మా దగ్గర {business_purpose} ఉంది. దీని గురించి మరింత తెలుసుకోవడానికి మీకు ఆసక్తి ఉందా?"
+                reason = _telugu_outbound_reason(configuration, purpose)
+                return f"నమస్కారం, నేను {name}. {business_name} తరఫున మాట్లాడుతున్నాను. {reason} దీని గురించి మరింత తెలుసుకోవడానికి మీకు ఆసక్తి ఉందా?"
             return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {business_name} \u0c24\u0c30\u0c2b\u0c41\u0c28 {((business_purpose + ' gurinchi matladataniki call chesanu.') if outbound else '\u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f.')}"
         if outbound:
             return f"Namaskaram, nenu {name}. {business_purpose} gurinchi matladataniki call chesanu. Dini gurinchi meeru inka telusukovalani anukuntunnara?"
@@ -579,6 +580,24 @@ def _outbound_offer_summary(configuration: dict[str, Any], purpose: str) -> str:
     if _looks_like_internal_instruction(brief):
         return "our current printer offer"
     return brief
+
+
+def _telugu_outbound_reason(configuration: dict[str, Any], purpose: str) -> str:
+    """Turn the owner brief into a short caller-facing Telugu reason to call."""
+    brief = _text(configuration.get("business_description")) or purpose
+    promotion = _promotion_from_brief(brief)
+    if promotion:
+        return f"మా దగ్గర {promotion} ఉంది."
+    if "insurance" in brief.casefold() and "renewal" in brief.casefold():
+        days = re.search(r"within\s+(\d+)\s+days?", brief, flags=re.IGNORECASE)
+        timing = f"next {days.group(1)} days lo " if days else ""
+        return f"మీ insurance renewal {timing}ఉంది. Renewal reminder కోసం call చేశాను."
+    # A job brief is input for generating a welcome, never speech to play as
+    # the welcome. Use a short, neutral business reason if it has no known
+    # customer-facing fact to surface.
+    if _looks_like_internal_instruction(brief):
+        return "మా current offer గురించి మాట్లాడటానికి call చేశాను."
+    return f"{brief} గురించి మాట్లాడటానికి call చేశాను."
 
 
 def _promotion_from_brief(brief: str) -> str:

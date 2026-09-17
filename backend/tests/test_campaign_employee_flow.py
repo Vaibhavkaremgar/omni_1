@@ -556,6 +556,19 @@ def test_outbound_welcome_converts_common_festival_offer_briefs_to_telugu(brief,
     assert "The employee must call" not in payload["welcome_message"]
 
 
+def test_outbound_welcome_turns_an_insurance_job_brief_into_a_customer_reason():
+    brief = "Call customers whose insurance renewal date is within 7 days and remind them about renewal."
+    employee = SimpleNamespace(name="Nani", purpose=brief, call_type="outbound", llm_model="m", language="Telugu")
+    payload = map_employee_configuration(employee, {
+        "name": "Nani", "business_name": "KMG Insurance", "call_type": "outbound",
+        "purpose": brief, "language": "Telugu", "llm_model": "m",
+    })
+    welcome = payload["welcome_message"]
+    assert "మీ insurance renewal next 7 days lo ఉంది." in welcome
+    assert "Renewal reminder కోసం call చేశాను." in welcome
+    assert brief not in welcome
+
+
 def test_prompt_answers_first_turn_and_defers_customer_details():
     from app.services.employee_prompt import build_employee_prompt
 
