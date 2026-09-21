@@ -169,8 +169,11 @@ class OmniDimensionAgentService:
             readback_error=readback_error,
         )
         webhook_mismatch = any(item.get("field") in {"webhook_enabled", "webhook_url", "webhook_statuses"} for item in verification.get("mismatches", []))
-        webhook_unverified = any(item.get("field") in {"webhook_enabled", "webhook_url", "webhook_statuses"} for item in verification.get("unverified_fields", []))
-        if webhook_mismatch or webhook_unverified:
+        # OmniDimension's GET /agents response currently omits post-call
+        # delivery settings even though the create/update payload accepts and
+        # stores them. Treat missing readback fields as unverified, not failed;
+        # an explicit provider mismatch still blocks publication.
+        if webhook_mismatch:
             raise OmniDimensionResponseError("OmniDimension post-call webhook verification failed.")
         for field in verification.get("mismatches", []):
             logger.warning(
