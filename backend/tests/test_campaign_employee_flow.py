@@ -624,7 +624,7 @@ def test_payload_explicitly_configures_listening_and_post_call_delivery(monkeypa
     assert payload["is_interruption_allowed"] is True
     assert payload["transcriber"] == {
         "provider": "soniox", "language": "en",
-        "silence_timeout_ms": 800, "interruption_min_words": 1,
+        "silence_timeout_ms": 500, "interruption_min_words": 3,
     }
     webhook = payload["post_call_actions"]["webhook"]
     assert webhook["url"] == "https://voice.example.com/api/v1/webhooks/omnidimension/post-call"
@@ -681,7 +681,7 @@ def test_voice_payload_keeps_objective_completion_active_and_requires_explicit_e
     assert "An interruption is a normal barge-in, not a request to hang up" in bodies
     assert "ఇంకా ఏమైనా help కావాలా?" in bodies
     assert payload["is_end_call_enabled"] is False
-    assert payload["interruption_min_words"] == 1
+    assert payload["interruption_min_words"] == 3
     assert "end_call" not in payload
 
 
