@@ -16,6 +16,7 @@ import {
   PhoneIncoming,
   ArrowUpRight,
   User,
+  Gift,
 } from 'lucide-react';
 
 interface Employee {
@@ -78,6 +79,7 @@ interface Notification {
   time: string;
   read: boolean;
 }
+interface CouponOffer { id: string; title: string; description?: string; promotional_minutes?: number; expires_at?: string; status: string }
 interface DashboardSummary {
   calls_today: number; connected_today: number; credits: number;
   recent_calls: Array<{ id: string; customer_phone_number: string | null; status: string; duration_seconds: number | null; direction: string; started_at: string; employee_id: string | null; outcome: string | null }>;
@@ -93,6 +95,7 @@ export default function Dashboard() {
   const [recentCalls, setRecentCalls] = useState<Call[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [offers, setOffers] = useState<CouponOffer[]>([]);
   const [credits, setCredits] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -149,6 +152,7 @@ export default function Dashboard() {
 
     fetchData();
   }, []);
+  useEffect(() => { void backendJson<CouponOffer[]>('/coupons/offers').then(setOffers).catch(() => setOffers([])); }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -242,6 +246,7 @@ export default function Dashboard() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {offers.length > 0 && <section className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex min-w-0 items-start gap-3"><div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600" aria-label="Special offer"><Gift className="h-4 w-4" aria-hidden="true" /></div><div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Special offer</p><h2 className="mt-0.5 break-words text-sm font-semibold text-gray-900">{offers[0].title}</h2><p className="mt-0.5 break-words text-sm text-gray-600">{offers[0].description || `${offers[0].promotional_minutes} free calling minutes`}</p>{offers[0].expires_at && <p className="mt-1 text-xs text-gray-500">Valid until {new Date(offers[0].expires_at).toLocaleDateString()}</p>}{offers.length > 1 && <p className="mt-1 text-xs text-blue-600">+{offers.length - 1} more offer{offers.length > 2 ? 's' : ''}</p>}</div></div><button onClick={() => void backendJson(`/coupons/offers/${offers[0].id}/view`, { method: 'POST' })} className="w-full shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:w-auto">View offer</button></div></section>}
         {/* Quick Actions */}
         <section className="mb-2">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Quick Actions</h2>

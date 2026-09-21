@@ -19,6 +19,7 @@ import NotFound from '../features/not-found/pages/NotFound';
 import ChangePassword from '../features/auth/pages/ChangePassword';
 import { useAuth } from '../features/auth/hooks/useAuth';
 import AdminPage from '../features/admin/pages/AdminPage';
+import CouponsPage from '../features/admin/pages/CouponsPage';
 
 function AdminOnly() {
   const { user } = useAuth();
@@ -31,6 +32,7 @@ export default function AppRoutes() {
       <Route path="/login" element={<Login />} />
       <Route path="/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute><AdminOnly /></ProtectedRoute>} />
+      <Route path="/admin/coupons" element={<ProtectedRoute><AdminCouponsOnly /></ProtectedRoute>} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route
         element={
@@ -56,4 +58,9 @@ export default function AppRoutes() {
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
+}
+
+function AdminCouponsOnly() {
+  const { user } = useAuth();
+  return user?.role === 'admin' ? <CouponsPage /> : <Navigate to="/dashboard" replace />;
 }

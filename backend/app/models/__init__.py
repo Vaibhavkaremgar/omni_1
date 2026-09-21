@@ -19,3 +19,5 @@ from app.models.tenant import Tenant
 from app.models.usage_record import UsageRecord
 from app.models.user import User
 from app.models.employee_knowledge_file import EmployeeKnowledgeFile
+from app.models.coupon import Coupon
+from app.models.coupon_tenant_share import CouponTenantShare
