@@ -309,11 +309,12 @@ class RealLLMService(LLMService):
             "role, caller context, call purpose, success condition, information to collect, likely "
             "caller questions and objections, supported next steps, unavailable information, "
             "continuation conditions, and safe closing conditions. Only then write the sections.\n\n"
-            "OUTPUT CONTRACT: Return only valid JSON, with exactly six objects in this exact order "
-            "and with exactly these key/title pairs: identity_purpose / Identity & Purpose, "
-            "greeting_intro / Greeting & Intro, qualification / Qualification, "
-            "handling_objections / Handling Objections, call_to_action / Call to Action, "
-            "closing / Closing. Each content value is a concise, complete set of operational "
+            "OUTPUT CONTRACT: Return only valid JSON with exactly six objects in a logical order. "
+            "Each object must contain a concise unique key, a context-specific human-readable title, "
+            "and complete operational content. The six sections are a structural framework, not a fixed "
+            "business workflow. Determine each section's purpose, name, instructions, and conversation "
+            "behavior from the client's actual business context, call type, objective, and customer intent. "
+            "Do not copy example section names, questions, or workflows. Each content value is a concise, complete set of operational "
             "instructions, not an essay. The sections property is required and must contain exactly "
             "6 populated items: never return an empty array, omit a section, add a section, invent "
             "a section name, or leave required content blank. Return only this JSON object; never "
@@ -325,13 +326,7 @@ class RealLLMService(LLMService):
             "the whole internal prompt. Spoken language must sound natural for a real phone call, "
             "not like word-for-word translation; write like a real person on a phone call, not a textbook, government document, translator, or formal speech. Keep sentences short and avoid repetitive filler. "
             "Style examples only (never copy their business facts): English: 'Hi, I am calling to share a quick update. Would you like to hear more?' Telugu: 'నమస్కారం అండి, ఒక quick update కోసం call చేశాను. మీకు details కావాలా?' Hindi: 'नमस्ते जी, एक quick update के लिए call किया है। आपको details चाहिए?'\n\n"
-            "SECTION DESIGN:\n"
-            "1. Identity & Purpose: identify company, employee, role, caller, reason, exact business objective, success, relevant information, and boundaries.\n"
-            "2. Greeting & Intro: create a context-specific inbound or outbound opening with name, company, concise reason, permission when appropriate, and a transition to one question.\n"
-            "3. Qualification: determine the minimum useful information for this business, explain why it matters, ask one question at a time, order the questions, and define branches, stop conditions, and responses to short answers. Use only configured variables and placeholders such as {{customer_name}} when useful; never force irrelevant variables.\n"
-            "4. Handling Objections: identify realistic objections for this business. For each, give English internal guidance plus a natural selected-language spoken example. Do not pressure.\n"
-            "5. Call to Action: derive the actual next step from the objective. For outbound promotion, this is only checking interest, answering doubts, and offering more configured information; do not collect personal details or perform actions. For other objectives, follow COLLECT -> VERIFY -> SUMMARIZE -> ASK FOR CONFIRMATION -> WAIT FOR EXPLICIT CONFIRMATION -> EXECUTE -> VERIFY SUCCESS -> INFORM CALLER. Never claim an action happened without a supported successful action.\n"
-            "6. Closing: check for additional questions, offer relevant help, continue for another request, and end only after clear caller end intent. Make the spoken closing context-specific.\n\n"
+            "SECTION DESIGN: Design all six sections dynamically from the supplied business context. Do not assume every business needs qualification, objection handling, a CTA, or a sales funnel. Questions must be supported by the client's business, purpose, customer intent, or information required for the stated outcome. Do not introduce generic questions about location, occupation, family, budget, or profile unless the actual business process requires them. The following are reasoning examples only, never templates.\n\n"
             "VOICE BEHAVIOR (must be explicit in the relevant sections): Short answers such as "
             "'Printers.', 'Renewal.', 'Yes.', 'HP.', 'Hyderabad.', or '25 thousand.' are valid "
             "answers, never hang-up instructions. Use the answer as context and ask the next useful "
@@ -369,6 +364,10 @@ class RealLLMService(LLMService):
             system += (
                 "\n\nTELUGU NATURAL SENTENCE PATTERNS: Use correct modern Telugu grammar around English terms. Prefer exactly this style: 'నమస్కారం అండి, నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను. మీ insurance premium గురించి ఒక quick update ఇవ్వడానికి call చేశాను. మీకు ఈ offer గురించి details కావాలా?' Do not write 'నేను Akshay మాట్లాడుతున్నాను' when the company is being introduced; use 'నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను'. Keep 'insurance', 'premium', 'quick update', 'call', 'offer', and 'details' in English. Use Telugu postpositions and verbs in Telugu script, for example 'మీ budget ఎంత range లో ఉంది?', 'మీకు details WhatsApp లో share చేయనా?', and 'నేను team తో confirm చేస్తాను'."
             )
+            system += (
+                "\n\nTELUGU URBAN ENGLISH MIX (ADDITIVE STYLE RULE): Preserve all Telugu Unicode, native Telugu grammar, natural modern spoken phrasing, and the existing Telugu-English contract above. In addition, prefer a natural urban Telugu-English phone style with common conversational English words where people normally use them. Keep words such as time, thanks, have a nice day, information, details, campaign, election, call, update, organization, activity, interest, question, answer, confirm, available, message, support, follow-up, busy, okay, sorry, sure, right, clear, continue, and stop in English when natural. For example: 'మీ time కి thanks.', 'ఈ information clear గా ఉందా?', 'ఆ detail నాకు available గా లేదు.', 'మీకు interest లేకపోతే no problem.', 'Have a nice day అండి.' Do not translate every English word into formal Telugu, but do not make the response mostly English. Telugu words must remain in Telugu script; never use Romanized Telugu or Tinglish."
+            )
+        system += "\n\nFINAL LINGUISTIC QUALITY CHECK: Before producing the final script, internally check whether every spoken example sounds like something a real native speaker would naturally say on a phone call. If it sounds translated, literary, textbook-like, overly formal, or awkwardly mixed, rewrite it."
         user = json.dumps(context, ensure_ascii=False, indent=2)
         response = self._perform_json_request_with_fallbacks(request_id, attempts, system, user)
         expected = ("Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
@@ -442,6 +441,14 @@ class RealLLMService(LLMService):
                     logger.error("LLM script duplicate section request_id=%s section=%s", request_id, title)
                     raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned duplicate call-script sections. [request_id={request_id}]")
                 by_key[title] = item["content"].strip()
+        # Dynamic section titles are valid: preserve the six-section storage
+        # contract by mapping the provider's ordered sections to the stable
+        # structural slots used by existing saved employees.
+        if len(by_key) != len(expected) and len(sections) == len(expected) and all(
+            isinstance(item, dict) and isinstance(item.get("content"), str) and item["content"].strip()
+            for item in sections
+        ):
+            by_key = {title: sections[index]["content"].strip() for index, title in enumerate(expected)}
         result = {title: by_key[title] for title in expected if title in by_key}
         if len(sections) != len(expected) or tuple(result) != expected:
             logger.error("LLM script incomplete response request_id=%s received_count=%s received_sections=%s", request_id, len(sections), list(by_key))
