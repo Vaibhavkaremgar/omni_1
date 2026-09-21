@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.schemas.ai_employee_version import AIEmployeeVersionRead
 
 
-CallType = Literal["outbound"]
+CallType = Literal["inbound", "outbound"]
 CreationMode = Literal["chat", "prompt"]
 SUPPORTED_EMPLOYEE_LANGUAGES = {"English", "Hindi", "Telugu", "Tamil", "Kannada", "Malayalam", "Marathi", "Bengali", "Gujarati", "Punjabi", "Odia", "Assamese"}
 
@@ -15,7 +15,7 @@ SUPPORTED_EMPLOYEE_LANGUAGES = {"English", "Hindi", "Telugu", "Tamil", "Kannada"
 class AIEmployeeCreate(BaseModel):
     name: str = Field(default="New AI Employee", min_length=1, max_length=255)
     purpose: str = Field(default="To be defined through the builder", min_length=1, max_length=5000)
-    call_type: CallType
+    call_type: CallType = "inbound"
     language: str = Field(..., min_length=1, max_length=100)
     creation_mode: CreationMode = "chat"
     direct_prompt: str | None = Field(default=None, max_length=30000)
@@ -59,5 +59,5 @@ class AIEmployeeRead(BaseModel):
     draft_version: "AIEmployeeVersionRead | None" = None
     published_version: "AIEmployeeVersionRead | None" = None
     provider_name: str | None = None
-    provider_agent_id: str | None = None
     provider_status: str | None = None
+    provider_verification: dict | None = None

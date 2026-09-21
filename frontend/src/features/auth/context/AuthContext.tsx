@@ -15,6 +15,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
+  useEffect(() => {
+    const handleUnauthorized = () => { setUser(null); setLoading(false); };
+    window.addEventListener('pontis:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('pontis:unauthorized', handleUnauthorized);
+  }, []);
+
   return (
     <AuthContext.Provider value={{ user, loading, signIn: setUser, signOut }}>
       {children}

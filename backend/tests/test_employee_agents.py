@@ -14,7 +14,7 @@ from app.integrations.omnidimension import OmniDimensionAgentProvider, OmniDimen
 from app.main import app
 from app.models import AIEmployee, AIEmployeeVersion, Tenant, User
 from app.services import auth as auth_service
-from app.services.omnidimension_agents import OmniDimensionAgentService, map_employee_configuration
+from app.services.omnidimension_agents import OmniDimensionAgentService, map_employee_configuration, _provider_verification, _returned_configuration, _sent_configuration
 
 
 @pytest.fixture()
@@ -51,6 +51,17 @@ def employee_payload():
         "selected_template_id": "pontis_sales_v1",
         "selected_template_version": 1,
         "template_values": {"business_name": "Test Business", "product_or_service": "Test service", "target_customer": "Test customers", "service_area": "Hyderabad", "lead_qualification_questions": "Need", "sales_team_contact": "100", "working_hours": "9-5"},
+    }
+
+
+def six_section_script():
+    return {
+        "Identity & Purpose": "You are Ava from Test Business helping callers with support.",
+        "Greeting & Intro": "Hi, this is Ava from Test Business. How can I help you today?",
+        "Qualification": "Ask what account issue the caller needs help with.",
+        "Handling Objections": "If they are unsure, explain the support options briefly.",
+        "Call to Action": "Offer the next useful support step.",
+        "Closing": "Ask whether they need anything else, then close politely.",
     }
 
 
@@ -110,6 +121,7 @@ def test_publish_creates_agent_and_persists_provider_state(agent_database, monke
         import json
         body = json.loads(raw)
         assert body["post_call_actions"]["webhook"]["url"].endswith("/api/v1/webhooks/omnidimension/post-call")
+        assert body["post_call_actions"]["webhook"]["url"] not in str(body.get("context_breakdown"))
         assert "completed" in body["post_call_actions"]["webhook"]["trigger_call_statuses"]
         payload = raw
         assert "internal_secret" not in payload
@@ -125,7 +137,7 @@ def test_publish_creates_agent_and_persists_provider_state(agent_database, monke
             published = api.post(f"/api/v1/employees/{employee_id}/publish", headers={"Authorization": "Bearer a"})
             assert published.status_code == 200
             assert published.json()["provider_name"] == "omnidimension"
-            assert published.json()["provider_agent_id"] == "9001"
+            assert "provider_agent_id" not in published.json()
             assert published.json()["provider_status"] == "Completed"
             assert "test-agent-key" not in published.text
             version = db.scalar(select(AIEmployeeVersion).where(AIEmployeeVersion.employee_id == UUID(employee_id)))
@@ -134,6 +146,138 @@ def test_publish_creates_agent_and_persists_provider_state(agent_database, monke
     finally:
         client.close()
         app.dependency_overrides.clear()
+
+
+def test_publish_persists_verified_provider_configuration(agent_database, monkeypatch):
+    db, _, _ = agent_database
+    sent_body = {}
+
+    def handler(request: httpx.Request):
+        nonlocal sent_body
+        if request.method == "POST":
+            import json
+            sent_body = json.loads(request.read().decode())
+            return httpx.Response(200, json={"id": 9010, "status": "Completed"})
+        readback = {
+            **sent_body,
+            "id": 9010,
+            "status": "Completed",
+        }
+        return httpx.Response(200, json=readback)
+
+    client, service = provider_service(handler)
+    monkeypatch.setattr(employee_endpoint, "agent_service", service)
+    api = authenticated_client(db, "agent-user-a", monkeypatch)
+    try:
+        with api:
+            headers = {"Authorization": "Bearer a"}
+            payload = {**employee_payload(), "call_type": "outbound"}
+            employee_id = api.post("/api/v1/employees", json=payload, headers=headers).json()["id"]
+            api.patch(
+                f"/api/v1/employees/{employee_id}",
+                json={"configuration": {"call_type": "outbound", "call_script": six_section_script()}},
+                headers=headers,
+            )
+            published = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
+            assert published.status_code == 200
+            verification = published.json()["provider_verification"]
+            assert verification["status"] == "verified"
+            assert verification["intended_configuration"]["call_type"] == "Outgoing"
+            assert verification["sent_configuration"]["call_type"] == "Outgoing"
+            assert verification["returned_configuration"]["call_type"] == "Outgoing"
+            assert verification["intended_configuration"]["welcome_message"] == six_section_script()["Greeting & Intro"]
+            assert "api_key" not in published.text.casefold()
+            version = db.scalar(select(AIEmployeeVersion).where(AIEmployeeVersion.employee_id == UUID(employee_id)))
+            assert version.provider_metadata["provider_verification"]["status"] == "verified"
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
+
+
+def test_publish_persists_mismatch_without_failing(agent_database, monkeypatch):
+    db, _, _ = agent_database
+    sent_body = {}
+
+    def handler(request: httpx.Request):
+        nonlocal sent_body
+        if request.method == "POST":
+            import json
+            sent_body = json.loads(request.read().decode())
+            return httpx.Response(200, json={"id": 9011, "status": "Completed"})
+        return httpx.Response(200, json={**sent_body, "call_type": "Incoming", "id": 9011, "status": "Completed"})
+
+    client, service = provider_service(handler)
+    monkeypatch.setattr(employee_endpoint, "agent_service", service)
+    api = authenticated_client(db, "agent-user-a", monkeypatch)
+    try:
+        with api:
+            headers = {"Authorization": "Bearer a"}
+            payload = {**employee_payload(), "call_type": "outbound"}
+            employee_id = api.post("/api/v1/employees", json=payload, headers=headers).json()["id"]
+            published = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
+            assert published.status_code == 200
+            verification = published.json()["provider_verification"]
+            assert verification["status"] == "mismatch"
+            assert "call_type" in {item["field"] for item in verification["mismatches"]}
+            version = db.scalar(select(AIEmployeeVersion).where(AIEmployeeVersion.employee_id == UUID(employee_id)))
+            assert version.provider_metadata["verification_status"] == "mismatch"
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
+
+
+def test_publish_marks_provider_readback_failed_without_failing(agent_database, monkeypatch):
+    db, _, _ = agent_database
+
+    def handler(request: httpx.Request):
+        if request.method == "GET":
+            return httpx.Response(503, json={"error": "readback failed"})
+        return httpx.Response(200, json={"id": 9012, "status": "Completed"})
+
+    client, service = provider_service(handler)
+    monkeypatch.setattr(employee_endpoint, "agent_service", service)
+    api = authenticated_client(db, "agent-user-a", monkeypatch)
+    try:
+        with api:
+            headers = {"Authorization": "Bearer a"}
+            employee_id = api.post("/api/v1/employees", json=employee_payload(), headers=headers).json()["id"]
+            published = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
+            assert published.status_code == 200
+            assert published.json()["provider_verification"]["status"] == "provider_readback_failed"
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
+
+
+def test_verification_detects_reordered_six_section_prompt(agent_database):
+    _, tenant, _ = agent_database
+    employee = AIEmployee(
+        tenant_id=tenant.id,
+        name="Ava",
+        purpose="Support customers",
+        call_type="inbound",
+        llm_provider="OpenAI",
+        llm_model="gpt-4o-mini",
+        language="English",
+        creation_mode="chat",
+    )
+    configuration = {"call_type": "inbound", "language": "English", "call_script": six_section_script()}
+    payload = map_employee_configuration(employee, configuration)
+    readback_sections = []
+    for section in payload["context_breakdown"]:
+        copied = dict(section)
+        if copied.get("title") == "Published Call Script Source of Truth":
+            copied["body"] = "6. Closing\nAsk whether they need anything else, then close politely.\n\n1. Identity & Purpose\nYou are Ava from Test Business helping callers with support."
+        readback_sections.append(copied)
+    readback = {**payload, "context_breakdown": readback_sections}
+    verification = _provider_verification(
+        _sent_configuration(payload),
+        _sent_configuration(payload),
+        _returned_configuration(readback),
+        "9013",
+    )
+    assert verification["status"] == "mismatch"
+    assert "six_section_prompt" in {item["field"] for item in verification["mismatches"]}
 
 
 def test_publish_request_contract_is_bodyless_and_invalid_path_is_rejected(agent_database, monkeypatch):
@@ -191,7 +335,7 @@ def test_provider_failure_preserves_draft_and_retry_succeeds(agent_database, mon
             assert db.scalar(select(AIEmployeeVersion).where(AIEmployeeVersion.employee_id == UUID(employee_id))).status == "draft"
             retried = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert retried.status_code == 200
-            assert retried.json()["provider_agent_id"] == "9002"
+            assert "provider_agent_id" not in retried.json()
     finally:
         client.close()
         app.dependency_overrides.clear()

@@ -104,3 +104,54 @@ class OmniDimensionCallProvider:
                 return detail
             return row
         return None
+
+    @staticmethod
+    def normalize_provider_latency(record: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Keep only documented latency fields; never manufacture missing values."""
+        if not isinstance(record, dict):
+            return None
+        report = record.get("call_report")
+        if isinstance(report, dict):
+            record = {**record, **report}
+        output: dict[str, Any] = {
+            "source": "omnidimension_call_logs",
+            "measurement_type": "provider_reported",
+        }
+        for key in ("p50_latency", "p99_latency", "metric_score_latency"):
+            value = _finite_number(record.get(key))
+            if value is not None:
+                output[key] = value
+        interactions = record.get("interactions")
+        if isinstance(interactions, list):
+            normalized: list[dict[str, Any]] = []
+            for item in interactions:
+                if not isinstance(item, dict):
+                    continue
+                row: dict[str, Any] = {}
+                sequence = item.get("interaction_sequence")
+                if isinstance(sequence, (int, str)) and not isinstance(sequence, bool) and str(sequence).strip():
+                    row["interaction_sequence"] = sequence
+                for key, aliases in (
+                    ("asr_time", ("asr_time",)),
+                    ("latency_llm", ("latency_llm", "llm2_time")),
+                    ("latency_tts", ("latency_tts", "tts_time")),
+                    ("total_response_time", ("total_response_time",)),
+                    ("tts_speaking_duration", ("tts_speaking_duration",)),
+                ):
+                    value = next((_finite_number(item.get(alias)) for alias in aliases if _finite_number(item.get(alias)) is not None), None)
+                    if value is not None:
+                        row[key] = value
+                time_of_call = item.get("time_of_call")
+                if isinstance(time_of_call, str) and time_of_call.strip():
+                    row["time_of_call"] = time_of_call.strip()
+                if row:
+                    normalized.append(row)
+            if normalized:
+                output["interactions"] = normalized
+        return output if len(output) > 2 else None
+
+
+def _finite_number(value: Any) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if value >= 0 else None

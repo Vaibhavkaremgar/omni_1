@@ -137,6 +137,7 @@ def parse_post_call(payload: dict[str, Any]) -> dict[str, Any]:
         "action_items": payload.get("action_items") or analysis.get("action_items"),
         "follow_up_required": payload.get("follow_up_required") if payload.get("follow_up_required") is not None else analysis.get("follow_up_required"),
         "follow_up_notes": payload.get("follow_up_notes") or analysis.get("follow_up_notes"),
+        "callback_at": _parse_datetime(_first_value(payload, {"callback_at", "callback_time", "scheduled_callback_at"}) or _first_value(report, {"callback_at", "callback_time", "scheduled_callback_at"})),
         "started_at": _parse_datetime(_first_value(payload, {"started_at", "start_time", "call_start_time"})),
         "ended_at": _parse_datetime(_first_value(payload, {"ended_at", "time_of_call", "create_date"})),
     }

@@ -3,6 +3,7 @@ from app.models.ai_employee_version import AIEmployeeVersion
 from app.models.billing_transaction import BillingTransaction
 from app.models.campaign import Campaign
 from app.models.campaign_contact import CampaignContact
+from app.models.campaign_execution_slot import CampaignExecutionSlot
 from app.models.call import Call
 from app.models.credit_transaction import CreditTransaction
 from app.models.credit_wallet import CreditWallet

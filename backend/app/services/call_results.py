@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -15,6 +16,9 @@ from app.services.integration_dispatcher import IntegrationDispatcher
 from app.services.call_analysis import CallAnalysisService
 from app.services.usage_billing import charge_completed_call
 from app.services.wallets import WalletError
+from app.services.voice_latency import NOT_OBSERVABLE, measure_provider_timing, utc_now_iso
+from app.services.campaign_execution import release_campaign_slot, next_calling_window_time
+from app.integrations.omnidimension.calls import OmniDimensionCallProvider
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,7 @@ class CallResultService:
         self._dispatcher = IntegrationDispatcher()
 
     def process_post_call(self, db: Session, payload: dict) -> Call | None:
+        webhook_received_at = utc_now_iso()
         event = parse_post_call(payload)
         call = self._find_call(db, event)
         if call is None:
@@ -32,6 +37,7 @@ class CallResultService:
         if event["metadata_tenant_id"] and str(call.tenant_id) != str(event["metadata_tenant_id"]):
             logger.warning("Ignored cross-tenant call event local_call_id=%s provider_call_id=%s", call.id, event.get("provider_call_id"))
             return None
+        was_terminal = call.status in TERMINAL_STATUSES
 
         if event.get("status") in TERMINAL_STATUSES:
             logger.info(
@@ -67,14 +73,26 @@ class CallResultService:
             call.ended_at = call.ended_at or utc_now()
         if event["status"] in TERMINAL_STATUSES:
             call.completed_at = call.completed_at or call.ended_at or utc_now()
+            if call.campaign_id:
+                release_campaign_slot(db, call_id=call.id)
         call.raw_payload = payload
+        provider_latency = OmniDimensionCallProvider.normalize_provider_latency(payload)
         call.dispatch_metadata = {
             **(call.dispatch_metadata or {}),
             "provider_status": event["provider_status"],
             "provider_request_id": event.get("provider_request_id") or (call.dispatch_metadata or {}).get("provider_request_id"),
             "post_call_webhook_processed": True,
+            "voice_latency": measure_provider_timing(payload, webhook_received_at),
+            "provider_latency": provider_latency or {
+                "source": "omnidimension_call_logs",
+                "measurement_type": "provider_reported",
+                "status": "unavailable",
+            },
         }
-        if call.status == CallStatus.completed.value and call.duration_seconds is not None:
+        terminal_reason = str(event.get("termination_reason") or "").casefold().replace("-", "_").replace(" ", "_")
+        terminal_outcome = str(event.get("outcome") or "").casefold().replace("-", "_").replace(" ", "_")
+        non_chargeable_outcome = terminal_reason in {"wrong_number", "wrongnumber", "do_not_call", "donotcall", "dnc"} or terminal_outcome in {"wrong_number", "wrongnumber", "do_not_call", "donotcall", "dnc"}
+        if call.status == CallStatus.completed.value and call.duration_seconds is not None and not non_chargeable_outcome:
             metadata = {**(call.dispatch_metadata or {})}
             if not metadata.get("billing_attempted"):
                 metadata["billing_attempted"] = True
@@ -87,20 +105,52 @@ class CallResultService:
                     metadata["billing_error"] = "Unable to record call usage."
                 call.dispatch_metadata = metadata
         # Update campaign contact progress
-        if call.campaign_contact_id and event["status"] in TERMINAL_STATUSES:
+        if call.campaign_contact_id and event["status"] in TERMINAL_STATUSES and not was_terminal:
             contact = db.get(CampaignContact, call.campaign_contact_id)
             if contact is not None and contact.campaign_id == call.campaign_id:
                 if event["status"] == CallStatus.completed.value:
-                    contact.status = ContactStatus.completed.value
+                    reason = str(event.get("termination_reason") or "").casefold().replace("-", "_").replace(" ", "_")
+                    outcome = str(event.get("outcome") or "").casefold().replace("-", "_").replace(" ", "_")
+                    if reason in {"wrong_number", "wrongnumber"} or outcome in {"wrong_number", "wrongnumber"}:
+                        contact.status = ContactStatus.failed.value
+                        contact.completed_at = utc_now()
+                    elif reason in {"do_not_call", "donotcall", "dnc"} or outcome in {"do_not_call", "donotcall", "dnc"}:
+                        contact.status = ContactStatus.do_not_call.value
+                        contact.completed_at = utc_now()
+                    else:
+                        contact.status = ContactStatus.completed.value
+                        contact.completed_at = utc_now()
+                    contact.lease_token = None
                 elif event["status"] in {
                     CallStatus.failed.value,
                     CallStatus.no_answer.value,
                     CallStatus.busy.value,
                     CallStatus.canceled.value,
                 }:
-                    contact.status = ContactStatus.failed.value
+                    retryable = event["status"] in {CallStatus.no_answer.value, CallStatus.busy.value, CallStatus.failed.value}
+                    campaign = contact.campaign
+                    # Older campaigns/databases may have NULL until the additive
+                    # migration runs; treat that safely as the legacy enabled behavior.
+                    retry_enabled = campaign.retry_enabled is not False if campaign is not None else True
+                    retry_intervals = list(campaign.retry_intervals or [2]) if campaign is not None else [2]
+                    retry_index = max(0, contact.attempt_count - 1)
+                    if retryable and retry_enabled and contact.attempt_count < (campaign.max_attempts if campaign else 3) and retry_index < len(retry_intervals):
+                        contact.status = ContactStatus.retry_scheduled.value
+                        contact.retry_at = utc_now() + timedelta(minutes=max(1, int(retry_intervals[retry_index])))
+                    else:
+                        contact.status = ContactStatus.no_answer.value if event["status"] == CallStatus.no_answer.value else ContactStatus.busy.value if event["status"] == CallStatus.busy.value else ContactStatus.failed.value
+                    contact.completed_at = utc_now() if contact.status not in {ContactStatus.retry_scheduled.value} else None
+                    contact.lease_token = None
                 elif event["status"] == CallStatus.voicemail.value:
                     contact.status = ContactStatus.called.value
+                outcome = str(event.get("outcome") or "").casefold().replace(" ", "_")
+                if outcome in {"callback_requested", "callback_request"} and event.get("callback_at") is not None:
+                    contact.status = ContactStatus.retry_scheduled.value
+                    contact.callback_at = event["callback_at"]
+                    campaign = contact.campaign
+                    contact.retry_at = next_calling_window_time(campaign, event["callback_at"])
+                    contact.completed_at = None
+                    contact.lease_token = None
                 contact.last_call_id = call.id
                 # Check if campaign is now complete
                 if call.campaign_id:
@@ -111,16 +161,19 @@ class CallResultService:
                         _update_campaign_progress(db, campaign)
         db.commit()
         db.refresh(call)
-        turns = event.get("transcript_data") if isinstance(event.get("transcript_data"), list) else []
-        first_assistant = next((turn for turn in turns if isinstance(turn, dict) and turn.get("speaker") == "assistant"), None)
-        first_customer = next((turn for turn in turns if isinstance(turn, dict) and turn.get("speaker") == "customer"), None)
         if event.get("status") in {CallStatus.ringing.value, CallStatus.in_progress.value}:
             logger.info("[CALL_LIFECYCLE_PROVIDER_STARTED] local_call_id=%s provider_request_id=%s provider_call_id=%s provider_event_type=%s event_timestamp=%s", call.id, (call.dispatch_metadata or {}).get("provider_request_id") or "unknown", call.provider_call_id or "unknown", event.get("event_type") or "unknown", event.get("event_timestamp") or "unknown")
-        if first_assistant:
-            logger.info("[CALL_LIFECYCLE_WELCOME_STARTED] local_call_id=%s provider_call_id=%s event_timestamp=%s", call.id, call.provider_call_id or "unknown", first_assistant.get("timestamp") or event.get("event_timestamp") or "unknown")
-            logger.info("[CALL_LIFECYCLE_WELCOME_COMPLETED] local_call_id=%s provider_call_id=%s event_timestamp=%s", call.id, call.provider_call_id or "unknown", first_assistant.get("timestamp") or event.get("event_timestamp") or "unknown")
-        if first_customer:
-            logger.info("[CALL_LIFECYCLE_CALLER_SPEECH] local_call_id=%s provider_call_id=%s event_timestamp=%s", call.id, call.provider_call_id or "unknown", first_customer.get("timestamp") or event.get("event_timestamp") or "unknown")
+        latency = (call.dispatch_metadata or {}).get("voice_latency") or {}
+        logger.info(
+            "[CALL_VOICE_LATENCY] local_call_id=%s provider_call_id=%s timestamps=%s durations=%s "
+            "speech_end=%s stt_final=%s llm_start=%s llm_first_token=%s llm_complete=%s "
+            "tts_start=%s tts_first_audio=%s response_complete=%s",
+            call.id, call.provider_call_id or "unknown", latency.get("timestamps", {}), latency.get("durations", {}),
+            *(latency.get("timestamps", {}).get(key) or NOT_OBSERVABLE for key in (
+                "speech_end", "stt_final", "llm_start", "llm_first_token", "llm_complete",
+                "tts_start", "tts_first_audio", "response_complete",
+            )),
+        )
         logger.info("[CALL_LIFECYCLE_PROVIDER_EVENT] local_call_id=%s provider_request_id=%s provider_call_id=%s provider_event_type=%s provider_status=%s termination_source=%s termination_reason=%s event_timestamp=%s", call.id, (call.dispatch_metadata or {}).get("provider_request_id") or "unknown", call.provider_call_id or "unknown", event.get("event_type") or "unknown", event.get("provider_status") or "unknown", event.get("termination_source") or "unknown", event.get("termination_reason") or "unknown", event.get("event_timestamp") or "unknown")
         if event.get("status") in TERMINAL_STATUSES:
             turns = event.get("transcript_data") if isinstance(event.get("transcript_data"), list) else []

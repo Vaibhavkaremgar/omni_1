@@ -30,7 +30,8 @@ def test_contract_covers_silence_questions_grounding_and_codes():
     for phrase in ("2–3 seconds", "unrelated questions", "verified company research", "digit-by-digit", "english"):
         assert phrase.lower() in lowered
     assert "model numbers" in lowered
-    assert "230 must be spoken as 'two three zero'" in result
+    assert "HP 230 is 'HP two three zero'" in result
+    assert "five thousand rupees" in result
 
 
 def test_prompt_preserves_canonical_six_section_script_and_existing_knowledge_base():

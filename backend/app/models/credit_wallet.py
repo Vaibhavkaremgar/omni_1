@@ -15,6 +15,7 @@ class CreditWallet(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), unique=True, index=True, nullable=False)
     balance_credits: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
+    promotional_minutes: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     reserved_credits: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     currency: Mapped[str] = mapped_column(String(16), nullable=False, default="INR")
     status: Mapped[WalletStatus] = mapped_column(String(32), nullable=False, default=WalletStatus.active.value)

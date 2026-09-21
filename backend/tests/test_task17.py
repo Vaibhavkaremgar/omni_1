@@ -1,6 +1,8 @@
 """Tests for Task 17: settings toggle, bulk upload, integrations, calls."""
 import io
 import sys
+import uuid
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +29,7 @@ from app.models.phone_number import PhoneNumber
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.services import auth as auth_service
+from app.api.v1.endpoints.campaign_upload import _make_import_token
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -213,17 +216,11 @@ def test_bulk_upload_preview_deduplicates(t17_db, monkeypatch):
 
 
 def test_bulk_upload_confirm_creates_contacts(t17_db, monkeypatch):
-    import json, base64
     db, tenant_a, _ = t17_db
     emp = _make_employee(db, tenant_a)
     camp = _make_campaign(db, tenant_a, emp)
     client, token = _auth_client(db, tenant_a, "u4@test.com", monkeypatch)
-    token_data = {
-        "campaign_id": str(camp.id),
-        "tenant_id": str(tenant_a.id),
-        "rows": [{"phone_number": "+15551234567", "first_name": "Alice", "last_name": "", "email": ""}],
-    }
-    import_token = base64.b64encode(json.dumps(token_data).encode()).decode()
+    import_token = _make_import_token(camp.id, tenant_a.id, [{"phone_number": "+15551234567", "first_name": "Alice", "last_name": "", "email": "", "customer_data": {}}])
     try:
         r = client.post(
             f"/api/v1/campaigns/{camp.id}/contacts/upload-confirm",
@@ -243,18 +240,12 @@ def test_bulk_upload_confirm_creates_contacts(t17_db, monkeypatch):
 
 
 def test_bulk_upload_confirm_rejects_cross_tenant_token(t17_db, monkeypatch):
-    import json, base64
     db, tenant_a, tenant_b = t17_db
     emp_a = _make_employee(db, tenant_a)
     camp_a = _make_campaign(db, tenant_a, emp_a)
     client_a, token_a = _auth_client(db, tenant_a, "u5@test.com", monkeypatch)
     # Token claims tenant_b
-    token_data = {
-        "campaign_id": str(camp_a.id),
-        "tenant_id": str(tenant_b.id),
-        "rows": [{"phone_number": "+15551234567", "first_name": "", "last_name": "", "email": ""}],
-    }
-    import_token = base64.b64encode(json.dumps(token_data).encode()).decode()
+    import_token = _make_import_token(camp_a.id, tenant_b.id, [{"phone_number": "+15551234567"}])
     try:
         r = client_a.post(
             f"/api/v1/campaigns/{camp_a.id}/contacts/upload-confirm",
@@ -278,6 +269,72 @@ def test_bulk_upload_rejects_unsupported_format(t17_db, monkeypatch):
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_bulk_upload_confirm_token_security_and_replay(t17_db, monkeypatch):
+    db, tenant_a, tenant_b = t17_db
+    emp_a = _make_employee(db, tenant_a); camp_a = _make_campaign(db, tenant_a, emp_a)
+    emp_b = _make_employee(db, tenant_b); camp_b = _make_campaign(db, tenant_b, emp_b)
+    client_a, token_a = _auth_client(db, tenant_a, "token@test.com", monkeypatch)
+    row = [{"phone_number": "+15551234567", "first_name": "A", "customer_data": {"segment": "vip"}}]
+    valid = _make_import_token(camp_a.id, tenant_a.id, row)
+    headers = {"Authorization": f"Bearer {token_a}"}
+    try:
+        ok = client_a.post(f"/api/v1/campaigns/{camp_a.id}/contacts/upload-confirm", json={"import_token": valid}, headers=headers)
+        assert ok.status_code == 201 and ok.json() == {"imported": 1, "skipped_duplicates": 0}
+        replay = client_a.post(f"/api/v1/campaigns/{camp_a.id}/contacts/upload-confirm", json={"import_token": valid}, headers=headers)
+        assert replay.status_code == 409 and "already been applied" in replay.json()["detail"]
+        assert len(db.scalars(select(CampaignContact).where(CampaignContact.campaign_id == camp_a.id)).all()) == 1
+        before = len(db.scalars(select(CampaignContact)).all())
+        for bad, path, expected in [("not-a-token", camp_a.id, 422), (valid[:-2] + "xx", camp_a.id, 422), (valid, camp_b.id, 422)]:
+            response = client_a.post(f"/api/v1/campaigns/{path}/contacts/upload-confirm", json={"import_token": bad}, headers=headers)
+            assert response.status_code == expected
+        tenant_b_client, tenant_b_token = _auth_client(db, tenant_b, "other-token@test.com", monkeypatch)
+        cross = tenant_b_client.post(f"/api/v1/campaigns/{camp_b.id}/contacts/upload-confirm", json={"import_token": valid}, headers={"Authorization": f"Bearer {tenant_b_token}"})
+        assert cross.status_code in {403, 422}
+        assert len(db.scalars(select(CampaignContact)).all()) == before
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_bulk_upload_confirm_rejects_expired_token_without_mutation(t17_db, monkeypatch):
+    db, tenant_a, _ = t17_db; emp = _make_employee(db, tenant_a); camp = _make_campaign(db, tenant_a, emp)
+    client, token = _auth_client(db, tenant_a, "expired-token@test.com", monkeypatch)
+    import jwt
+    from app.core.config import get_settings
+    expired = jwt.encode({"purpose": "campaign_import", "campaign_id": str(camp.id), "tenant_id": str(tenant_a.id), "rows": "bad", "exp": datetime.now(timezone.utc) - timedelta(minutes=1)}, get_settings().auth_secret_key, algorithm="HS256")
+    try:
+        response = client.post(f"/api/v1/campaigns/{camp.id}/contacts/upload-confirm", json={"import_token": expired}, headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 422
+        assert db.scalars(select(CampaignContact)).all() == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_contact_attempt_history_is_persisted_ordered_and_redacted(t17_db, monkeypatch):
+    db, tenant_a, tenant_b = t17_db; emp = _make_employee(db, tenant_a); camp = _make_campaign(db, tenant_a, emp)
+    contact = CampaignContact(tenant_id=tenant_a.id, campaign_id=camp.id, phone_number="+15551234567", normalized_phone="+15551234567", callback_at=datetime.now(timezone.utc))
+    db.add(contact); db.commit(); db.refresh(contact)
+    first = Call(tenant_id=tenant_a.id, employee_id=emp.id, campaign_id=camp.id, campaign_contact_id=contact.id, direction=CallDirection.outbound.value, status=CallStatus.no_answer.value, outcome="no_answer", started_at=datetime(2024, 1, 1, tzinfo=timezone.utc), duration_seconds=12, provider_call_id="secret-1", recording_url="https://provider.invalid/secret")
+    second = Call(tenant_id=tenant_a.id, employee_id=emp.id, campaign_id=camp.id, campaign_contact_id=contact.id, direction=CallDirection.outbound.value, status=CallStatus.completed.value, outcome="connected", started_at=datetime(2024, 1, 2, tzinfo=timezone.utc), duration_seconds=42, provider_call_id="secret-2", recording_url="https://provider.invalid/secret2")
+    db.add_all([first, second]); db.commit()
+    contact.last_call_id = first.id; db.commit()
+    client, token = _auth_client(db, tenant_a, "history@test.com", monkeypatch)
+    try:
+        response = client.get(f"/api/v1/campaigns/{camp.id}/contacts/{contact.id}/attempts", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200
+        data = response.json(); assert [item["attempt_number"] for item in data] == [2, 1]
+        assert data[0]["outcome"] == "connected" and data[0]["duration_seconds"] == 42
+        assert data[1]["status"] == "no_answer" and data[1]["started_at"]
+        assert data[0]["callback_at"] is None and data[1]["callback_at"] is not None
+        raw = str(data); assert "provider_call_id" not in raw and "recording_url" not in raw and "provider.invalid" not in raw
+        empty = client.get(f"/api/v1/campaigns/{camp.id}/contacts/{uuid.uuid4()}/attempts", headers={"Authorization": f"Bearer {token}"})
+        assert empty.status_code == 404
+        other_campaign = _make_campaign(db, tenant_a, emp)
+        denied = client.get(f"/api/v1/campaigns/{other_campaign.id}/contacts/{contact.id}/attempts", headers={"Authorization": f"Bearer {token}"})
+        assert denied.status_code == 404
     finally:
         app.dependency_overrides.clear()
 

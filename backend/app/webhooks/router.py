@@ -13,6 +13,7 @@ from app.models.billing_transaction import BillingTransaction
 from app.models.enums import BillingTransactionStatus, BillingTransactionType
 from app.services.top_ups import confirm_provider_payment
 from app.services.wallets import credit_verified_top_up
+from app.services.voice_latency import utc_now_iso
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 logger = logging.getLogger(__name__)
@@ -33,11 +34,11 @@ async def receive_omnidimension_post_call(request: Request, db: Session = Depend
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     report = payload.get("call_report") if isinstance(payload.get("call_report"), dict) else {}
     logger.info(
-        "[OMNI_WEBHOOK_RECEIVED] method=%s path=%s event_type=%s provider_call_id=%s provider_request_id=%s",
+        "[OMNI_WEBHOOK_RECEIVED] method=%s path=%s event_type=%s provider_call_id=%s provider_request_id=%s received_at=%s",
         request.method, request.url.path,
         payload.get("event_type") or payload.get("type") or payload.get("event") or report.get("event_type") or "unknown",
         payload.get("call_log_id") or payload.get("call_id") or payload.get("id") or "unknown",
-        payload.get("requestId") or payload.get("request_id") or metadata.get("provider_request_id") or "unknown",
+        payload.get("requestId") or payload.get("request_id") or metadata.get("provider_request_id") or "unknown", utc_now_iso(),
     )
     logger.info(
         "[OMNI_WEBHOOK_RAW_PAYLOAD] method=%s path=%s payload=%s",

@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     database_echo: bool = Field(default=False, validation_alias="DATABASE_ECHO")
     # A configured secret keeps sessions valid across restarts. The random fallback is
     # intentionally development-only and invalidates sessions when the process restarts.
-    auth_secret_key: str = Field(default_factory=lambda: token_urlsafe(32), validation_alias="AUTH_SECRET_KEY")
+    auth_secret_key: str = Field(default="", validation_alias="AUTH_SECRET_KEY")
     auth_access_token_expire_minutes: int = Field(default=1440, validation_alias="AUTH_ACCESS_TOKEN_EXPIRE_MINUTES")
     bootstrap_admin_email: str | None = Field(default=None, validation_alias="BOOTSTRAP_ADMIN_EMAIL")
     bootstrap_admin_password: str | None = Field(default=None, validation_alias="BOOTSTRAP_ADMIN_PASSWORD")
@@ -45,6 +45,8 @@ class Settings(BaseSettings):
 
     @property
     def effective_llm_provider(self) -> str | None:
+        if self.gemini_api_key:
+            return "gemini"
         if self.llm_provider:
             return self.llm_provider
         if self.groq_api_key:
@@ -53,14 +55,18 @@ class Settings(BaseSettings):
 
     @property
     def effective_llm_api_key(self) -> str | None:
-        return self.llm_api_key or self.groq_api_key
+        return self.gemini_api_key or self.llm_api_key or self.groq_api_key
 
     @property
     def effective_llm_model(self) -> str | None:
+        if self.gemini_api_key:
+            return self.gemini_model
         return self.llm_model or self.groq_model
 
     @property
     def effective_llm_base_url(self) -> str | None:
+        if self.gemini_api_key:
+            return self.gemini_base_url
         return self.llm_base_url or self.groq_base_url
     omnidimension_api_key: str | None = Field(default=None, validation_alias="OMNIDIMENSION_API_KEY")
     omnidimension_base_url: str = Field(
@@ -112,6 +118,12 @@ class Settings(BaseSettings):
         enable_decoding=False,
         extra="ignore",
     )
+
+    def model_post_init(self, __context) -> None:
+        if self.environment.lower() in {"production", "prod"} and not self.auth_secret_key:
+            raise ValueError("AUTH_SECRET_KEY must be configured in production")
+        if not self.auth_secret_key:
+            self.auth_secret_key = token_urlsafe(32)
 
     @field_validator("debug", mode="before")
     @classmethod
@@ -166,6 +178,10 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    def validate_production_secrets(self) -> None:
+        if self.environment.lower() in {"production", "prod"} and not self.auth_secret_key:
+            raise ValueError("AUTH_SECRET_KEY must be configured in production")
 
 
 @lru_cache(maxsize=1)

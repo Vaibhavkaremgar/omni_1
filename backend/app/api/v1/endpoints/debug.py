@@ -121,6 +121,7 @@ def _diagnostic_response(
     issues = record.get("issues")
     if not isinstance(issues, list):
         issues = [issues] if issues not in (None, False, "") else []
+    provider_latency = OmniDimensionCallProvider.normalize_provider_latency(record)
     return {
         "request_id": request_id,
         "provider_call_id": _call_id_from_record(record) or _call_id_from_record(summary),
@@ -137,6 +138,7 @@ def _diagnostic_response(
         "errors_or_issues": _safe_value(issues),
         "timestamps": _safe_value({key: record.get(key) for key in ("time_of_call", "call_date", "start_time", "end_time", "created_at", "create_date") if record.get(key) not in (None, "", False)}),
         "trace": _safe_value({key: record.get(key) for key in ("p50_latency", "p99_latency", "metric_score_latency", "prompt_tokens", "completion_tokens", "total_tokens", "llm_prompt", "model_name", "model_type", "asr_service", "tts_service", "has_issue", "interaction_count_total") if key in record}),
+        "provider_latency": _safe_value(provider_latency) if provider_latency else {"source": "omnidimension_call_logs", "measurement_type": "provider_reported", "status": "unavailable"},
         "detail_lookup": {"performed": detail_available, "summary_keys": sorted(summary.keys()), "detail_keys": sorted(record.keys())},
     }
 

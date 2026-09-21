@@ -35,11 +35,16 @@ from app.services.voice_catalog import voice_catalog
 from app.services.voice_recommendations import recommend_voices
 from app.services.employee_templates import template_library, render_template, get_template
 from app.services.employee_prompt import compose_employee_configuration
+from app.services.script_language_validation import (
+    assert_customer_facing_script_language,
+    extract_call_script_from_prompt,
+    validation_summary,
+)
 
 
 MAX_KNOWLEDGE_FILE_SIZE = 4 * 1024 * 1024
 from app.services.employee_interview import RealLLMService
-from app.services.business_research import ensure_business_research
+from app.services.business_research import ensure_business_research, validate_public_research_url
 
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -52,8 +57,11 @@ def employee_response(employee: AIEmployee) -> AIEmployeeRead:
     published = employee.published_version
     active = draft or published or max(employee.versions, key=lambda version: version.version_number, default=None)
     configuration = public_employee_configuration(active.configuration) if active else None
+    if configuration:
+        configuration = {**configuration, "script_language_validation": validation_summary(configuration)}
     fields = configuration or {}
     provider_version = published
+    provider_metadata = provider_version.provider_metadata if provider_version and isinstance(provider_version.provider_metadata, dict) else {}
     return AIEmployeeRead(
         id=employee.id,
         name=fields.get("name", employee.name),
@@ -69,8 +77,9 @@ def employee_response(employee: AIEmployee) -> AIEmployeeRead:
         draft_version=draft,
         published_version=published,
         provider_name=provider_version.provider_name if provider_version else None,
-        provider_agent_id=provider_version.provider_agent_id if provider_version else None,
+        provider_agent_id=None,
         provider_status=provider_version.provider_status if provider_version else None,
+        provider_verification=provider_metadata.get("provider_verification"),
     )
 
 
@@ -130,6 +139,44 @@ def _validate_publish(employee: AIEmployee, draft: AIEmployeeVersion | None) -> 
         missing.append("purpose, direct_prompt, or final_prompt")
     if missing:
         raise HTTPException(status_code=422, detail=f"Missing required configuration: {', '.join(missing)}")
+    _validate_script_language_or_422(draft.configuration)
+
+
+def _validate_script_language_or_422(configuration: dict) -> None:
+    assert_customer_facing_script_language(
+        configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else {},
+        str(configuration.get("language") or "English"),
+    )
+    if configuration.get("final_prompt_overridden") and str(configuration.get("final_prompt") or "").strip():
+        prompt_script = extract_call_script_from_prompt(str(configuration.get("final_prompt") or ""))
+        if prompt_script:
+            assert_customer_facing_script_language(prompt_script, str(configuration.get("language") or "English"))
+
+
+def _apply_final_prompt_override_to_call_script(configuration: dict) -> dict:
+    if not configuration.get("final_prompt_overridden") or not str(configuration.get("final_prompt") or "").strip():
+        return configuration
+    prompt_script = extract_call_script_from_prompt(str(configuration.get("final_prompt") or ""))
+    if not prompt_script:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Final prompt must contain the six call-script sections before it can be saved.",
+                "validation": {
+                    "valid": False,
+                    "language": str(configuration.get("language") or "English"),
+                    "issues": [
+                        {
+                            "section": title,
+                            "type": "missing_section",
+                            "message": f"Final prompt must include {title}.",
+                        }
+                        for title in ("Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
+                    ],
+                },
+            },
+        )
+    return {**configuration, "call_script": prompt_script}
 
 
 @router.get("/options", response_model=EmployeeOptionsRead)
@@ -204,17 +251,25 @@ async def upload_knowledge_file(employee_id: UUID, file: UploadFile = File(...),
             # automatically when the employee is first published.
             row.status = "pending"
         row.error_message = None; db.commit(); db.refresh(row)
-        version.configuration = compose_employee_configuration({
-            **(version.configuration or {}),
-            "knowledge_base_configured": True,
-            "knowledge_files": [
-                {"filename": item.filename, "text": item.knowledge_text or ""}
-                for item in db.scalars(select(EmployeeKnowledgeFile).where(EmployeeKnowledgeFile.employee_id == employee_id, EmployeeKnowledgeFile.tenant_id == current_user.tenant.id, EmployeeKnowledgeFile.status == "ready")).all()
-            ],
-        })
+        if version is not None:
+            version.configuration = compose_employee_configuration({
+                **(version.configuration or {}),
+                "knowledge_base_configured": True,
+                "knowledge_files": [
+                    {"filename": item.filename, "status": item.status}
+                    for item in db.scalars(select(EmployeeKnowledgeFile).where(EmployeeKnowledgeFile.employee_id == employee_id, EmployeeKnowledgeFile.tenant_id == current_user.tenant.id, EmployeeKnowledgeFile.status == "ready")).all()
+                ],
+            })
         db.commit()
         return _public_knowledge_file(row)
     except Exception as exc:
+        if row.provider_file_id:
+            try:
+                if agent_id:
+                    provider.detach_knowledge_file(row.provider_file_id, agent_id)
+                provider.delete_knowledge_file(row.provider_file_id)
+            except Exception:
+                logger.warning("Knowledge provider cleanup failed file_id=%s", row.id)
         row.status = "failed"; row.error_message = "Knowledge file processing failed. Please retry."; db.commit()
         logger.warning("Knowledge file processing failed employee_id=%s file_id=%s exception_class=%s", employee_id, row.id, type(exc).__name__)
         raise HTTPException(status_code=502, detail=row.error_message) from exc
@@ -389,19 +444,25 @@ def update_employee(
     configuration = changes.pop("configuration", None)
     draft = _ensure_draft(employee, current_user)
     normalized = {field: value.strip() if isinstance(value, str) else value for field, value in changes.items()}
-    if "call_type" in normalized and normalized["call_type"] != "outbound":
-        raise HTTPException(status_code=422, detail="Only outbound employees are supported")
+    if "call_type" in normalized and normalized["call_type"] not in {"inbound", "outbound"}:
+        raise HTTPException(status_code=422, detail="Only inbound or outbound employees are supported")
     draft.configuration = {**(draft.configuration or {}), **normalized}
     if configuration is not None:
         if not isinstance(configuration, dict):
             raise HTTPException(status_code=422, detail="Configuration must be an object")
-        if configuration.get("call_type") not in (None, "outbound"):
-            raise HTTPException(status_code=422, detail="Only outbound employees are supported")
+        if configuration.get("call_type") not in (None, "inbound", "outbound"):
+            raise HTTPException(status_code=422, detail="Only inbound or outbound employees are supported")
+        if "website_url" in configuration:
+            try:
+                configuration = {**configuration, "website_url": validate_public_research_url(configuration.get("website_url"))}
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         draft.configuration = {
             **(draft.configuration or {}),
             **strip_customer_internal_configuration(configuration),
         }
-    draft.configuration = compose_employee_configuration(draft.configuration)
+    draft.configuration = compose_employee_configuration(_apply_final_prompt_override_to_call_script(draft.configuration))
+    _validate_script_language_or_422(draft.configuration)
     normalize_employee_llm_configuration(employee, draft)
     for field in ("name", "purpose", "call_type", "language", "creation_mode"):
         if field in draft.configuration:
@@ -450,6 +511,7 @@ def generate_employee_script(
     configuration = {**(draft.configuration or {}), "knowledge_files": [{"filename": item.filename, "status": item.status} for item in knowledge]}
     script = RealLLMService().generate_call_script(employee, configuration)
     draft.configuration = compose_employee_configuration({**configuration, "call_script": script})
+    _validate_script_language_or_422(draft.configuration)
     draft.reviewed_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(draft)
@@ -488,10 +550,10 @@ def publish_employee(
             "creation_mode": employee.creation_mode,
             **(version.configuration or {}),
         }
-        version.configuration = compose_employee_configuration(version.configuration or {})
+        version.configuration = compose_employee_configuration(_apply_final_prompt_override_to_call_script(version.configuration or {}))
         normalize_employee_llm_configuration(employee, version)
         version.configuration = ensure_business_research(version.configuration)
-        version.configuration = compose_employee_configuration(version.configuration)
+        version.configuration = compose_employee_configuration(_apply_final_prompt_override_to_call_script(version.configuration))
     _validate_publish(employee, version)
     assert version is not None
     try:

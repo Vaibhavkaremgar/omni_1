@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -36,6 +37,8 @@ class OmniDimensionAgentService:
 
     def synchronize(self, employee: AIEmployee, version: AIEmployeeVersion) -> AgentSyncResult:
         payload = map_employee_configuration(employee, version.configuration or {})
+        intended_configuration = _intended_configuration(employee, version.configuration or {})
+        sent_configuration = _sent_configuration(payload)
         logger.info(
             "Omni agent payload employee_id=%s employee_name=%s language=%s sections=%d prompt_chars=%d "
             "welcome_chars=%d languages=%s dynamic_welcome=%s voice_configured=%s",
@@ -89,6 +92,8 @@ class OmniDimensionAgentService:
             payload.get("silence_timeout", "provider_default"),
             bool(payload.get("end_call_condition")),
         )
+        readback: dict[str, Any] | None = None
+        readback_error: Exception | None = None
         try:
             readback = self.provider.get_agent(provider_agent.provider_id)
             sections = readback.get("context_breakdown") if isinstance(readback, dict) else None
@@ -141,11 +146,31 @@ class OmniDimensionAgentService:
                 if model_value and model_value != payload["model"]["model"]:
                     logger.warning("Omni agent configuration mismatch agent_id=%s requested_model=%s stored_model=%s", provider_agent.provider_id, payload["model"]["model"], model_value)
                 stored_languages = readback.get("languages")
-                if stored_languages and lang not in stored_languages:
-                    logger.warning("Omni agent configuration mismatch agent_id=%s requested_language=%s stored_languages=%s", provider_agent.provider_id, lang, stored_languages)
+                requested_language = (payload.get("languages") or [None])[0] if isinstance(payload.get("languages"), list) else None
+                if stored_languages and requested_language not in stored_languages:
+                    logger.warning("Omni agent configuration mismatch agent_id=%s requested_language=%s stored_languages=%s", provider_agent.provider_id, requested_language, stored_languages)
         except Exception as exc:
+            readback_error = exc
             logger.warning("Omni agent readback unavailable agent_id=%s exception_class=%s", provider_agent.provider_id, type(exc).__name__)
-        return _result(provider_agent)
+        verification = _provider_verification(
+            intended_configuration,
+            sent_configuration,
+            _returned_configuration(readback),
+            provider_agent.provider_id,
+            readback_error=readback_error,
+        )
+        for field in verification.get("mismatches", []):
+            logger.warning(
+                "Omni agent verification mismatch agent_id=%s field=%s intended=%s sent=%s returned=%s",
+                provider_agent.provider_id,
+                field.get("field"),
+                _log_value(field.get("intended")),
+                _log_value(field.get("sent")),
+                _log_value(field.get("returned")),
+            )
+        for field in verification.get("unverified_fields", []):
+            logger.warning("Omni agent verification unverified agent_id=%s field=%s", provider_agent.provider_id, field.get("field"))
+        return _result(provider_agent, verification=verification)
 
 
 def map_employee_configuration(employee: AIEmployee, configuration: dict[str, Any]) -> dict[str, Any]:
@@ -408,7 +433,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     # A persisted final_prompt already contains the complete employee script.
     # Sending it again alongside the structured sections increases latency and
     # can make stale instructions compete with the current flow sections.
-    if canonical_prompt and not configured_final_prompt:
+    if canonical_prompt and (not configured_final_prompt or configuration.get("final_prompt_overridden")):
         context.append({
             "title": "Complete Employee Instructions",
             "body": canonical_prompt,
@@ -543,6 +568,154 @@ def _format_call_script(script: dict[str, str]) -> str:
     )
 
 
+def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any]) -> dict[str, Any]:
+    configuration = normalize_business_identity(configuration)
+    language = _language_name(_text(configuration.get("language"), employee.language))
+    call_type = _text(configuration.get("call_type", employee.call_type)).casefold()
+    voice = configuration.get("voice") if isinstance(configuration.get("voice"), dict) else {}
+    selected_voice = voice_definition(str(voice.get("id", ""))) if voice else None
+    end_call = configuration.get("end_call") if isinstance(configuration.get("end_call"), dict) else {}
+    script = _canonical_call_script(configuration)
+    voice_provider = voice.get("provider") or (selected_voice or {}).get("provider") if voice else None
+    voice_id = voice.get("provider_voice_id") or voice.get("voice_id") or (selected_voice or {}).get("provider_voice_id") if voice else None
+    return {
+        "call_type": "Incoming" if call_type == "inbound" else "Outgoing" if call_type == "outbound" else None,
+        "language": language,
+        "model": "gemini-2.5-flash-lite",
+        "transcriber_provider": "soniox",
+        "transcriber_language": _soniox_language_code(language),
+        "voice_provider": str(voice_provider) if voice_provider else None,
+        "voice_id": str(voice_id) if voice_id else None,
+        "welcome_message": _welcome_message(employee, configuration, language),
+        "six_section_prompt": _format_call_script(script) if script else "",
+        "six_section_titles": list(SCRIPT_SECTION_NAMES) if script else [],
+        "interruption_enabled": True,
+        "interruption_min_words": 1,
+        "idle_threshold_sec": 5,
+        "end_call_enabled": bool(end_call and _text(end_call.get("condition"))),
+        "end_call_condition": _text(end_call.get("condition")) if end_call else None,
+        "webhook_enabled": True,
+        "webhook_url": _automatic_post_call_actions()["webhook"]["url"],
+        "webhook_statuses": _automatic_post_call_actions()["webhook"]["trigger_call_statuses"],
+    }
+
+
+def _sent_configuration(payload: dict[str, Any]) -> dict[str, Any]:
+    transcriber = payload.get("transcriber") if isinstance(payload.get("transcriber"), dict) else {}
+    voice = payload.get("voice") if isinstance(payload.get("voice"), dict) else {}
+    model = payload.get("model")
+    webhook = (payload.get("post_call_actions") or {}).get("webhook") if isinstance(payload.get("post_call_actions"), dict) else {}
+    end_call = payload.get("end_call") if isinstance(payload.get("end_call"), dict) else {}
+    return {
+        "call_type": payload.get("call_type"),
+        "language": _first(payload.get("languages")),
+        "model": model.get("model") if isinstance(model, dict) else model,
+        "transcriber_provider": transcriber.get("provider"),
+        "transcriber_language": transcriber.get("language"),
+        "voice_provider": voice.get("provider"),
+        "voice_id": voice.get("voice_id"),
+        "welcome_message": payload.get("welcome_message"),
+        "six_section_prompt": _extract_six_section_prompt(payload.get("context_breakdown")),
+        "six_section_titles": _extract_six_section_titles(_extract_six_section_prompt(payload.get("context_breakdown"))),
+        "interruption_enabled": payload.get("is_interruption_allowed"),
+        "interruption_min_words": payload.get("interruption_min_words"),
+        "idle_threshold_sec": payload.get("user_idle_threshold_sec"),
+        "end_call_enabled": payload.get("is_end_call_enabled"),
+        "end_call_condition": end_call.get("condition"),
+        "webhook_enabled": bool(webhook),
+        "webhook_url": webhook.get("url") if isinstance(webhook, dict) else None,
+        "webhook_statuses": webhook.get("trigger_call_statuses") if isinstance(webhook, dict) else None,
+    }
+
+
+def _returned_configuration(readback: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(readback, dict):
+        return None
+    transcriber = readback.get("transcriber") or readback.get("asr_service")
+    transcriber_dict = transcriber if isinstance(transcriber, dict) else {}
+    voice = readback.get("voice") if isinstance(readback.get("voice"), dict) else {}
+    model = readback.get("model")
+    webhook = (readback.get("post_call_actions") or {}).get("webhook") if isinstance(readback.get("post_call_actions"), dict) else {}
+    end_call = readback.get("end_call") if isinstance(readback.get("end_call"), dict) else {}
+    prompt = _extract_six_section_prompt(readback.get("context_breakdown")) or _extract_six_section_prompt(readback.get("context"))
+    return {
+        "call_type": readback.get("bot_call_type") or readback.get("call_type"),
+        "language": _first(readback.get("languages")),
+        "model": model.get("model") if isinstance(model, dict) else model,
+        "transcriber_provider": transcriber_dict.get("provider") or (transcriber if isinstance(transcriber, str) else None),
+        "transcriber_language": transcriber_dict.get("language") or readback.get("transcriber_language"),
+        "voice_provider": voice.get("provider") or readback.get("voice_provider"),
+        "voice_id": voice.get("voice_id") or readback.get("voice_external_id") or readback.get("provider_voice_id"),
+        "welcome_message": readback.get("welcome_message"),
+        "six_section_prompt": prompt,
+        "six_section_titles": _extract_six_section_titles(prompt),
+        "interruption_enabled": readback.get("is_interruption_allowed"),
+        "interruption_min_words": readback.get("interruption_min_words"),
+        "idle_threshold_sec": readback.get("user_idle_threshold_sec"),
+        "end_call_enabled": readback.get("is_end_call_enabled"),
+        "end_call_condition": end_call.get("condition") or readback.get("end_call_condition"),
+        "webhook_enabled": bool(webhook) if "post_call_actions" in readback else None,
+        "webhook_url": webhook.get("url") if isinstance(webhook, dict) else readback.get("webhook_url"),
+        "webhook_statuses": webhook.get("trigger_call_statuses") if isinstance(webhook, dict) else readback.get("trigger_call_statuses"),
+    }
+
+
+def _provider_verification(
+    intended: dict[str, Any],
+    sent: dict[str, Any],
+    returned: dict[str, Any] | None,
+    agent_id: str,
+    *,
+    readback_error: Exception | None = None,
+) -> dict[str, Any]:
+    fields = [
+        "call_type", "language", "model", "transcriber_provider", "transcriber_language",
+        "voice_provider", "voice_id", "welcome_message", "six_section_prompt",
+        "six_section_titles", "interruption_enabled", "interruption_min_words",
+        "idle_threshold_sec", "end_call_enabled", "end_call_condition",
+        "webhook_enabled", "webhook_url", "webhook_statuses",
+    ]
+    checks: list[dict[str, Any]] = []
+    mismatches: list[dict[str, Any]] = []
+    unverified: list[dict[str, Any]] = []
+    for field in fields:
+        item = {"field": field, "intended": intended.get(field), "sent": sent.get(field), "returned": returned.get(field) if returned else None}
+        if not _values_match(field, intended.get(field), sent.get(field)):
+            item["status"] = "mismatch"
+            mismatches.append(item)
+        elif _is_missing(intended.get(field)) and _is_missing(sent.get(field)) and (returned is None or _is_missing(returned.get(field))):
+            item["status"] = "match"
+        elif readback_error is not None or returned is None or _is_missing(returned.get(field)):
+            item["status"] = "unverified"
+            unverified.append(item)
+        elif not _values_match(field, intended.get(field), returned.get(field)):
+            item["status"] = "mismatch"
+            mismatches.append(item)
+        else:
+            item["status"] = "match"
+        checks.append(item)
+    if readback_error is not None:
+        status = "provider_readback_failed"
+    elif mismatches:
+        status = "mismatch"
+    elif unverified:
+        status = "partially_verified"
+    else:
+        status = "verified"
+    return {
+        "status": status,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "provider_agent_id": agent_id,
+        "intended_configuration": intended,
+        "sent_configuration": sent,
+        "returned_configuration": returned,
+        "fields": checks,
+        "mismatches": mismatches,
+        "unverified_fields": unverified,
+        **({"readback_error_class": type(readback_error).__name__} if readback_error is not None else {}),
+    }
+
+
 def _transcriber_configuration(configuration: dict[str, Any], language: str) -> dict[str, Any]:
     """Return explicit speech handoff settings while preserving per-agent overrides."""
     configured = configuration.get("transcriber")
@@ -601,7 +774,7 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     # The reviewed second script section is the caller-facing source of truth.
     # Omni plays welcome_message before the LLM gets a turn, so it must receive
     # that exact opening rather than a separately reconstructed version.
-    if _is_spoken_welcome(script_greeting):
+    if script_greeting:
         return script_greeting
     # A saved generic greeting can otherwise undo the outbound offer-first
     # contract. Generate this opening from the verified employee configuration.
@@ -799,8 +972,117 @@ def _contains_language_script(value: str, language: str) -> bool:
     return bool(bounds and any(bounds[0] <= ord(char) <= bounds[1] for char in value))
 
 
-def _result(agent: ProviderAgent) -> AgentSyncResult:
-    return AgentSyncResult(agent.provider_id, agent.status, agent.metadata)
+def _first(value: Any) -> Any:
+    return value[0] if isinstance(value, list) and value else value
+
+
+def _extract_six_section_prompt(value: Any) -> str:
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("context_title") or item.get("title")
+            if title == "Published Call Script Source of Truth":
+                return _script_body(item.get("body") or item.get("context") or item.get("content"))
+        return ""
+    return _script_body(value)
+
+
+def _script_body(value: Any) -> str:
+    text = _text(value)
+    marker = "1. Identity & Purpose"
+    index = text.find(marker)
+    return text[index:] if index >= 0 else text
+
+
+def _extract_six_section_titles(prompt: str) -> list[str]:
+    titles: list[str] = []
+    for title in SCRIPT_SECTION_NAMES:
+        pattern = rf"(?:^|\n)\s*\d+\.\s*{re.escape(title)}(?:\n|$)"
+        if re.search(pattern, prompt):
+            titles.append(title)
+    return titles
+
+
+def _is_missing(value: Any) -> bool:
+    return value is None or value == "" or value == []
+
+
+def _normalize_for_compare(value: Any) -> Any:
+    if isinstance(value, str):
+        return re.sub(r"\s+", " ", value).strip()
+    if isinstance(value, list):
+        return [_normalize_for_compare(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_for_compare(item) for key, item in value.items()}
+    return value
+
+
+def _values_match(field: str, expected: Any, actual: Any) -> bool:
+    if field == "transcriber_provider" and isinstance(actual, str):
+        return str(expected).casefold() in actual.casefold()
+    return _normalize_for_compare(expected) == _normalize_for_compare(actual)
+
+
+def _log_value(value: Any) -> str:
+    text = str(value)
+    return text if len(text) <= 240 else text[:237] + "..."
+
+
+def _safe_payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    voice = payload.get("voice") if isinstance(payload.get("voice"), dict) else {}
+    transcriber = payload.get("transcriber") if isinstance(payload.get("transcriber"), dict) else payload.get("transcriber")
+    sections = payload.get("context_breakdown") if isinstance(payload.get("context_breakdown"), list) else []
+    return {
+        "payload_keys": sorted(payload),
+        "call_type": payload.get("call_type"),
+        "languages": payload.get("languages"),
+        "model": payload.get("model"),
+        "voice_provider": voice.get("provider"),
+        "voice_id_present": bool(voice.get("voice_id")),
+        "transcriber": transcriber,
+        "welcome_message": payload.get("welcome_message"),
+        "context_titles": [item.get("title") for item in sections if isinstance(item, dict)],
+        "context_chars": sum(len(str(item.get("body", ""))) for item in sections if isinstance(item, dict)),
+        "is_interruption_allowed": payload.get("is_interruption_allowed"),
+        "interruption_min_words": payload.get("interruption_min_words"),
+        "is_end_call_enabled": payload.get("is_end_call_enabled"),
+        "user_idle_threshold_sec": payload.get("user_idle_threshold_sec"),
+    }
+
+
+def _safe_readback_summary(readback: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(readback, dict):
+        return None
+    voice = readback.get("voice") if isinstance(readback.get("voice"), dict) else {}
+    sections = readback.get("context_breakdown") if isinstance(readback.get("context_breakdown"), list) else []
+    model = readback.get("model")
+    return {
+        "call_type": readback.get("bot_call_type") or readback.get("call_type"),
+        "languages": readback.get("languages"),
+        "model": model.get("model") if isinstance(model, dict) else model,
+        "voice_provider": voice.get("provider") or readback.get("voice_provider"),
+        "voice_id_present": bool(voice.get("voice_id") or readback.get("voice_external_id")),
+        "transcriber": readback.get("asr_service") or readback.get("transcriber"),
+        "welcome_message": readback.get("welcome_message"),
+        "context_titles": [item.get("context_title") or item.get("title") for item in sections if isinstance(item, dict)],
+        "is_interruption_allowed": readback.get("is_interruption_allowed"),
+        "interruption_min_words": readback.get("interruption_min_words"),
+        "is_end_call_enabled": readback.get("is_end_call_enabled"),
+        "user_idle_threshold_sec": readback.get("user_idle_threshold_sec"),
+    }
+
+
+def _result(agent: ProviderAgent, *, verification: dict[str, Any] | None = None) -> AgentSyncResult:
+    metadata = dict(agent.metadata or {})
+    if verification is not None:
+        metadata["provider_verification"] = verification
+        metadata["intended_configuration"] = verification.get("intended_configuration")
+        metadata["sent_configuration"] = verification.get("sent_configuration")
+        metadata["returned_configuration"] = verification.get("returned_configuration")
+        metadata["verification_mismatches"] = verification.get("mismatches", [])
+        metadata["verification_status"] = verification.get("status")
+    return AgentSyncResult(agent.provider_id, agent.status, metadata)
 
 
 def _text(value: Any, fallback: str = "") -> str:

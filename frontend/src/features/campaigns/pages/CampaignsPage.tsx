@@ -24,13 +24,18 @@ interface Campaign {
   contact_count: number;
   created_at: string;
   updated_at: string;
+  scheduled_at?: string | null;
+  progress: { total: number; completed: number; in_progress: number; pending: number; failed: number; retry_pending?: number; cancelled?: number };
 }
 
 const statusConfig: Record<string, { color: string; label: string }> = {
   draft: { color: 'bg-gray-100 text-gray-600', label: 'Draft' },
   running: { color: 'bg-emerald-100 text-emerald-700', label: 'Running' },
   paused: { color: 'bg-amber-100 text-amber-700', label: 'Paused' },
+  paused_credits: { color: 'bg-orange-100 text-orange-700', label: 'Paused · Credits' },
+  scheduled: { color: 'bg-indigo-100 text-indigo-700', label: 'Scheduled' },
   completed: { color: 'bg-blue-100 text-blue-700', label: 'Completed' },
+  cancelled: { color: 'bg-slate-100 text-slate-600', label: 'Cancelled' },
   stopped: { color: 'bg-rose-100 text-rose-700', label: 'Stopped' },
   failed: { color: 'bg-rose-100 text-rose-700', label: 'Failed' },
 };
@@ -118,7 +123,7 @@ export default function CampaignsPage() {
                         {camp.description && (
                           <p className="text-xs text-gray-500 mt-1 truncate max-w-md">{camp.description}</p>
                         )}
-                        <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
+                        <div className="flex items-center gap-3 mt-2 text-xs text-gray-500 flex-wrap">
                           <span>Created {formatTime(camp.created_at)}</span>
                           {camp.employee && (
                             <>
@@ -129,10 +134,17 @@ export default function CampaignsPage() {
                                 : <span className="text-amber-600">● Not published</span>}
                             </>
                           )}
+                          <span>{camp.progress.completed}/{camp.progress.total} completed</span>
+                          <span>{camp.progress.pending} pending</span>
+                          <span>{camp.progress.in_progress} calling</span>
+                          <span>{camp.progress.retry_pending || 0} retry</span>
+                          <span>{camp.progress.failed} failed</span>
+                          {camp.scheduled_at && <span>Scheduled {new Date(camp.scheduled_at).toLocaleString()}</span>}
                         </div>
                       </div>
-                      <div className="text-xs text-gray-500 shrink-0">
-                        {camp.contact_count} contact{camp.contact_count === 1 ? '' : 's'}
+                      <div className="text-right text-xs text-gray-500 shrink-0">
+                        <div>{camp.contact_count} contact{camp.contact_count === 1 ? '' : 's'}</div>
+                        <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-gray-100"><div className="h-full bg-violet-500" style={{ width: `${camp.progress.total ? Math.round(((camp.progress.completed + (camp.progress.cancelled || 0)) / camp.progress.total) * 100) : 0}%` }} /></div>
                       </div>
                     </div>
                   </div>

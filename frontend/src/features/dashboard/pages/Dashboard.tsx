@@ -78,6 +78,13 @@ interface Notification {
   time: string;
   read: boolean;
 }
+interface DashboardSummary {
+  calls_today: number; connected_today: number; credits: number;
+  recent_calls: Array<{ id: string; customer_phone_number: string | null; status: string; duration_seconds: number | null; direction: string; started_at: string; employee_id: string | null; outcome: string | null }>;
+  employees: Array<{ id: string; name: string; purpose: string; language: string; status: string; is_ready: boolean }>;
+  campaigns: Array<{ id: string; name: string; status: string; scheduled_at: string | null; completed: number; total: number }>;
+  alerts: Array<{ type: string; title: string; message: string; severity: string }>;
+}
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -141,6 +148,18 @@ export default function Dashboard() {
     };
 
     fetchData();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    backendJson<DashboardSummary>('/dashboard/summary').then(summary => {
+      if (cancelled) return;
+      setCredits(summary.credits || 0);
+      setCampaigns((summary.campaigns || []).map(c => ({ ...c, total_contacts: c.total, connected: 0, no_answer: 0, failed: 0, minutes_used: '0' })) as Campaign[]);
+      setNotifications((summary.alerts || []).map((a, index) => ({ id: `${a.type}-${index}`, type: a.severity, title: a.title, message: a.message, time: new Date().toISOString(), read: false })));
+      setRecentCalls((summary.recent_calls || []).map(c => ({ id: c.id, phone: c.customer_phone_number || '—', status: c.status, duration: c.duration_seconds, is_inbound: c.direction === 'inbound', is_answered: c.status === 'completed', started_at: c.started_at, ended_at: null, employee_id: c.employee_id, lead_status: null, context: c.outcome })));
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
   }, []);
 
   // Compute metrics

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import threading
-import time
+from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,6 +13,7 @@ from app.db.base import utc_now
 from app.models.ai_employee import AIEmployee
 from app.models.campaign import Campaign
 from app.models.campaign_contact import CampaignContact
+from app.models.call import Call
 from app.models.enums import (
     CampaignStatus,
     ContactStatus,
@@ -38,12 +38,28 @@ class CampaignCreate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     employee_id: UUID
+    scheduled_at: datetime | None = None
+    timezone: str | None = None
+    calling_window_start: str | None = None
+    calling_window_end: str | None = None
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    concurrency: int = Field(default=1, ge=1, le=50)
+    retry_enabled: bool = True
+    retry_intervals: list[int] = Field(default_factory=lambda: [10, 30], min_length=0, max_length=9)
 
 
 class CampaignUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     employee_id: UUID | None = None
+    scheduled_at: datetime | None = None
+    timezone: str | None = None
+    calling_window_start: str | None = None
+    calling_window_end: str | None = None
+    max_attempts: int | None = Field(default=None, ge=1, le=10)
+    concurrency: int | None = Field(default=None, ge=1, le=50)
+    retry_enabled: bool | None = None
+    retry_intervals: list[int] | None = Field(default=None, min_length=0, max_length=9)
 
 
 class CampaignContactCreate(BaseModel):
@@ -92,6 +108,27 @@ class CampaignDetail(BaseModel):
     progress: CampaignProgress
     created_at: str
     updated_at: str
+    scheduled_at: str | None = None
+    timezone: str | None = None
+    calling_window_start: str | None = None
+    calling_window_end: str | None = None
+    max_attempts: int = 3
+    concurrency: int = 1
+    retry_enabled: bool = True
+    retry_intervals: list[int] = []
+
+
+class CampaignAttemptRead(BaseModel):
+    id: UUID
+    attempt_number: int
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    status: str
+    outcome: str | None = None
+    duration_seconds: int | None = None
+    callback_at: datetime | None = None
+    summary: str | None = None
+    recording_available: bool = False
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -174,6 +211,14 @@ def _campaign_detail(campaign: Campaign, db: Session) -> CampaignDetail:
         progress=progress,
         created_at=campaign.created_at.isoformat(),
         updated_at=campaign.updated_at.isoformat(),
+        scheduled_at=campaign.scheduled_at.isoformat() if campaign.scheduled_at else None,
+        timezone=campaign.timezone,
+        calling_window_start=campaign.calling_window_start,
+        calling_window_end=campaign.calling_window_end,
+        max_attempts=campaign.max_attempts,
+        concurrency=campaign.concurrency,
+        retry_enabled=campaign.retry_enabled is not False,
+        retry_intervals=list(campaign.retry_intervals or []),
     )
 
 
@@ -189,67 +234,6 @@ def _execution_error_to_http(exc: CampaignExecutionError) -> HTTPException:
 # Simple in-process loop: dispatches one contact at a time with a short sleep
 # between calls to respect provider rate limits. No Redis/Celery required for
 # the current SQLite/FastAPI development environment.
-
-_running_campaigns: set[str] = set()
-_lock = threading.Lock()
-
-
-def _run_campaign_loop(campaign_id: str, tenant_id: str) -> None:
-    """Background thread: dispatch contacts one by one until paused/stopped/done."""
-    from app.db.session import SessionLocal
-
-    with _lock:
-        if campaign_id in _running_campaigns:
-            return
-        _running_campaigns.add(campaign_id)
-
-    db = SessionLocal()
-    try:
-        cid = UUID(campaign_id)
-        tid = UUID(tenant_id)
-        while True:
-            try:
-                call = campaign_execution_service.dispatch_next_pending(db, cid, tid)
-            except CampaignExecutionError:
-                # Validation failure (e.g. employee unpublished mid-run) — pause
-                campaign = db.scalar(
-                    select(Campaign).where(Campaign.id == cid, Campaign.tenant_id == tid)
-                )
-                if campaign and campaign.status == CampaignStatus.running.value:
-                    campaign.status = CampaignStatus.failed.value
-                    db.commit()
-                break
-            except Exception:
-                break
-
-            if call is None:
-                # No more pending contacts or campaign paused/stopped
-                break
-
-            # Brief pause between dispatches — avoids hammering the provider
-            time.sleep(1)
-
-            # Re-check campaign status (may have been paused/stopped externally)
-            db.expire_all()
-            campaign = db.scalar(
-                select(Campaign).where(Campaign.id == cid, Campaign.tenant_id == tid)
-            )
-            if campaign is None or campaign.status != CampaignStatus.running.value:
-                break
-    finally:
-        db.close()
-        with _lock:
-            _running_campaigns.discard(campaign_id)
-
-
-def _start_execution_background(campaign_id: UUID, tenant_id: UUID) -> None:
-    t = threading.Thread(
-        target=_run_campaign_loop,
-        args=(str(campaign_id), str(tenant_id)),
-        daemon=True,
-    )
-    t.start()
-
 
 # ── CRUD routes ───────────────────────────────────────────────────────────────
 
@@ -282,6 +266,14 @@ def create_campaign(
         description=payload.description,
         employee_id=employee.id,
         status=CampaignStatus.draft.value,
+        scheduled_at=payload.scheduled_at,
+        timezone=payload.timezone,
+        calling_window_start=payload.calling_window_start,
+        calling_window_end=payload.calling_window_end,
+        max_attempts=payload.max_attempts,
+        concurrency=payload.concurrency,
+        retry_enabled=payload.retry_enabled,
+        retry_intervals=payload.retry_intervals,
     )
     db.add(campaign)
     db.commit()
@@ -316,6 +308,12 @@ def update_campaign(
     if payload.employee_id is not None:
         employee = _get_published_employee(payload.employee_id, current_user.tenant.id, db)
         campaign.employee_id = employee.id
+    for field in ("scheduled_at", "timezone", "calling_window_start", "calling_window_end", "max_attempts", "concurrency", "retry_enabled", "retry_intervals"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(campaign, field, value)
+    if campaign.scheduled_at and campaign.scheduled_at > utc_now():
+        campaign.status = CampaignStatus.scheduled.value
     db.commit()
     db.refresh(campaign)
     return _campaign_detail(campaign, db)
@@ -378,9 +376,59 @@ def list_contacts(
             "status": c.status,
             "attempt_count": c.attempt_count,
             "last_called_at": c.last_called_at.isoformat() if c.last_called_at else None,
+            "retry_at": c.retry_at.isoformat() if c.retry_at else None,
+            "callback_at": c.callback_at.isoformat() if c.callback_at else None,
+            "customer_data": c.customer_data or {},
         }
         for c in contacts
     ]
+
+
+@router.get("/{campaign_id}/contacts/{contact_id}/attempts", response_model=list[CampaignAttemptRead])
+def list_contact_attempts(
+    campaign_id: UUID,
+    contact_id: UUID,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[CampaignAttemptRead]:
+    """Return real call records for one tenant-owned campaign contact."""
+    _get_campaign(campaign_id, current_user.tenant.id, db)
+    contact = db.scalar(
+        select(CampaignContact).where(
+            CampaignContact.id == contact_id,
+            CampaignContact.campaign_id == campaign_id,
+            CampaignContact.tenant_id == current_user.tenant.id,
+        )
+    )
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    calls = db.scalars(
+        select(Call)
+        .where(
+            Call.campaign_id == campaign_id,
+            Call.campaign_contact_id == contact_id,
+            Call.tenant_id == current_user.tenant.id,
+        )
+        .order_by(Call.started_at.asc().nulls_last(), Call.created_at.asc(), Call.id.asc())
+    ).all()
+    # Numbering follows execution chronology; response is newest first for the UI.
+    attempts = [
+        CampaignAttemptRead(
+            id=call.id,
+            attempt_number=index,
+            started_at=call.started_at or call.created_at,
+            completed_at=call.completed_at or call.ended_at,
+            status=call.status,
+            outcome=call.outcome,
+            duration_seconds=call.duration_seconds,
+            callback_at=contact.callback_at if call.id == contact.last_call_id else None,
+            summary=call.summary,
+            recording_available=bool(call.recording_url),
+        )
+        for index, call in enumerate(calls, start=1)
+    ]
+    return list(reversed(attempts))
 
 
 # ── Lifecycle routes ──────────────────────────────────────────────────────────
@@ -389,7 +437,6 @@ def list_contacts(
 def start_campaign(
     campaign_id: UUID,
     payload: CampaignStartRequest,
-    background_tasks: BackgroundTasks,
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CampaignDetail:
@@ -400,9 +447,6 @@ def start_campaign(
         )
     except CampaignExecutionError as exc:
         raise _execution_error_to_http(exc) from exc
-    background_tasks.add_task(
-        _start_execution_background, campaign.id, current_user.tenant.id
-    )
     return _campaign_detail(campaign, db)
 
 
@@ -422,7 +466,6 @@ def pause_campaign(
 @router.post("/{campaign_id}/resume", response_model=CampaignDetail)
 def resume_campaign(
     campaign_id: UUID,
-    background_tasks: BackgroundTasks,
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CampaignDetail:
@@ -430,9 +473,6 @@ def resume_campaign(
         campaign = campaign_execution_service.resume(db, campaign_id, current_user.tenant.id)
     except CampaignExecutionError as exc:
         raise _execution_error_to_http(exc) from exc
-    background_tasks.add_task(
-        _start_execution_background, campaign.id, current_user.tenant.id
-    )
     return _campaign_detail(campaign, db)
 
 
@@ -455,18 +495,15 @@ def cancel_campaign(
     db: Session = Depends(get_db),
 ) -> CampaignDetail:
     try:
-        campaign = campaign_execution_service.stop(db, campaign_id, current_user.tenant.id)
+        campaign = campaign_execution_service.cancel(db, campaign_id, current_user.tenant.id)
     except CampaignExecutionError as exc:
         raise _execution_error_to_http(exc) from exc
-    campaign.status = CampaignStatus.cancelled.value
-    db.commit()
     return _campaign_detail(campaign, db)
 
 
 @router.post("/{campaign_id}/retry", response_model=CampaignDetail)
 def retry_campaign(
     campaign_id: UUID,
-    background_tasks: BackgroundTasks,
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CampaignDetail:
@@ -477,9 +514,6 @@ def retry_campaign(
         )
     except CampaignExecutionError as exc:
         raise _execution_error_to_http(exc) from exc
-    background_tasks.add_task(
-        _start_execution_background, campaign.id, current_user.tenant.id
-    )
     return _campaign_detail(campaign, db)
 
 

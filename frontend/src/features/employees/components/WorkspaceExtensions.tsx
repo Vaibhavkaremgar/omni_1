@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Plus, Trash2, Upload, X } from 'lucide-react';
 import { backendJson } from '../../../services/backend/api';
 import type { Config } from '../pages/EmployeeWorkspace';
@@ -13,8 +13,8 @@ export default function WorkspaceExtensions({ employeeId, config, onChange }: { 
   const [variableOpen, setVariableOpen] = useState(false); const [files, setFiles] = useState<KnowledgeFile[]>([]); const [error, setError] = useState('');
   const [variable, setVariable] = useState<Variable>({ key: '', label: '', description: '', type: 'text', required: false });
   const steps = config.custom_sections ?? []; const variables = config.conversation_variables ?? [];
-  const loadFiles = async () => { try { setFiles(await backendJson<KnowledgeFile[]>(`/employees/${employeeId}/knowledge-files`)); } catch { setError('Knowledge Base could not be loaded.'); } };
-  useEffect(() => { const timer = window.setTimeout(() => void loadFiles(), 0); return () => window.clearTimeout(timer); }, [employeeId]);
+  const loadFiles = useCallback(async () => { try { setFiles(await backendJson<KnowledgeFile[]>(`/employees/${employeeId}/knowledge-files`)); } catch { setError('Knowledge Base could not be loaded.'); } }, [employeeId]);
+  useEffect(() => { const timer = window.setTimeout(() => void loadFiles(), 0); return () => window.clearTimeout(timer); }, [loadFiles]);
   const addStep = () => { const title = stepTitle.trim(), content = stepContent.trim(); if (!title || !content || steps.some(s => s.title.toLowerCase() === title.toLowerCase())) return; onChange({ ...config, custom_sections: [...steps, { key: `custom_${Date.now()}`, title, content }] }); setStepTitle(''); setStepContent(''); };
   const saveVariable = () => { const key = variable.key.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); if (!variable.label.trim() || !key || variables.some(v => v.key === key)) { setError('Variable label and a unique snake_case key are required.'); return; } onChange({ ...config, conversation_variables: [...variables, { ...variable, key, label: variable.label.trim() }] }); setVariable({ key: '', label: '', description: '', type: 'text', required: false }); setVariableOpen(false); };
   const upload = async (file: File) => { setError(''); if (file.size >= MAX_KNOWLEDGE_FILE_SIZE) { setError('Knowledge files must be smaller than 4 MB.'); return; } const body = new FormData(); body.append('file', file); try { const added = await backendJson<KnowledgeFile>(`/employees/${employeeId}/knowledge-files`, { method: 'POST', body }); setFiles(current => [...current, added]); } catch (e) { setError(e instanceof Error ? e.message : 'Knowledge Base upload failed.'); } };

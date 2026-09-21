@@ -63,7 +63,8 @@ class CampaignStatus(str, Enum):
     running = "running"
     paused = "paused"
     completed = "completed"
-    stopped = "stopped"
+    paused_credits = "paused_credits"
+    stopped = "stopped"  # legacy API compatibility; new flows use cancelled
     failed = "failed"
     archived = "archived"
     cancelled = "cancelled"
@@ -72,15 +73,20 @@ class CampaignStatus(str, Enum):
 class ContactStatus(str, Enum):
     pending = "pending"
     queued = "queued"
-    dispatching = "dispatching"
-    retry_pending = "retry_pending"
-    in_progress = "in_progress"
-    called = "called"
+    claimed = "claimed"
+    calling = "calling"
+    retry_scheduled = "retry_scheduled"
+    no_answer = "no_answer"
+    busy = "busy"
+    dispatching = "dispatching"  # legacy persisted value
+    retry_pending = "retry_pending"  # legacy persisted value
+    in_progress = "in_progress"  # legacy persisted value
+    called = "called"  # legacy persisted value
     failed = "failed"
     completed = "completed"
     do_not_call = "do_not_call"
-    skipped = "skipped"
     cancelled = "cancelled"
+    skipped = "skipped"  # legacy persisted value
 
 
 class LeadStatus(str, Enum):
@@ -122,6 +128,7 @@ class CreditTransactionType(str, Enum):
     consumption = "consumption"
     refund = "refund"
     adjustment = "adjustment"
+    promotional_grant = "promotional_grant"
 
 
 class CreditTransactionStatus(str, Enum):

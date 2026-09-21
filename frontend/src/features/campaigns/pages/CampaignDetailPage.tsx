@@ -4,6 +4,7 @@ import {
   Megaphone, Users, CheckCircle, XCircle, Clock, PhoneCall,
   Upload, X, AlertTriangle, ChevronLeft, Play, Pause, Square,
   RotateCcw, Phone,
+  History,
 } from 'lucide-react';
 import { backendJson, backendFetch } from '../../../services/backend/api';
 
@@ -11,7 +12,7 @@ interface EmployeeSummary {
   id: string; name: string; purpose: string; language: string; status: string; is_ready: boolean;
 }
 interface CampaignProgress {
-  total: number; pending: number; in_progress: number; completed: number; failed: number; skipped: number;
+  total: number; pending: number; in_progress: number; completed: number; failed: number; skipped: number; retry_pending?: number; cancelled?: number;
 }
 interface CampaignDetail {
   id: string; name: string; description: string | null; status: string;
@@ -19,11 +20,18 @@ interface CampaignDetail {
   phone_number_id: string | null;
   contact_count: number; progress: CampaignProgress;
   created_at: string; updated_at: string;
+  scheduled_at?: string | null; timezone?: string | null; calling_window_start?: string | null; calling_window_end?: string | null;
+  max_attempts?: number; retry_enabled?: boolean; retry_intervals?: number[];
 }
 interface Contact {
   id: string; first_name: string | null; last_name: string | null;
   phone_number: string; status: string; attempt_count: number;
-  last_called_at: string | null;
+  last_called_at: string | null; retry_at?: string | null; callback_at?: string | null; customer_data?: Record<string, string> | null;
+}
+interface Attempt {
+  id: string; attempt_number: number; started_at: string | null; completed_at: string | null;
+  status: string; outcome: string | null; duration_seconds: number | null;
+  callback_at: string | null; summary: string | null; recording_available: boolean;
 }
 interface UploadPreview {
   total_rows: number; valid_count: number; invalid_count: number; duplicate_count: number;
@@ -39,6 +47,7 @@ const STATUS_COLORS: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-600',
   running: 'bg-emerald-100 text-emerald-700',
   paused: 'bg-amber-100 text-amber-700',
+  paused_credits: 'bg-orange-100 text-orange-700', scheduled: 'bg-indigo-100 text-indigo-700', cancelled: 'bg-slate-100 text-slate-600',
   completed: 'bg-blue-100 text-blue-700',
   stopped: 'bg-rose-100 text-rose-700',
   failed: 'bg-rose-100 text-rose-700',
@@ -52,6 +61,7 @@ const CONTACT_STATUS_COLORS: Record<string, string> = {
   failed: 'bg-rose-100 text-rose-700',
   skipped: 'bg-gray-100 text-gray-400',
   do_not_call: 'bg-gray-100 text-gray-400',
+  retry_scheduled: 'bg-violet-100 text-violet-700', no_answer: 'bg-amber-100 text-amber-700', busy: 'bg-amber-100 text-amber-700',
 };
 
 function fmtDate(iso: string) {
@@ -280,6 +290,12 @@ export default function CampaignDetailPage() {
   const [showUpload, setShowUpload] = useState(false);
   const [showStart, setShowStart] = useState(false);
   const [acting, setActing] = useState(false);
+  const [contactFilter, setContactFilter] = useState('all');
+  const [contactSearch, setContactSearch] = useState('');
+  const [historyContact, setHistoryContact] = useState<Contact | null>(null);
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadCampaign = useCallback(async () => {
@@ -316,7 +332,7 @@ export default function CampaignDetailPage() {
 
   // Poll for progress while running
   useEffect(() => {
-    if (campaign?.status === 'running') {
+    if (campaign?.status === 'running' || campaign?.status === 'scheduled' || campaign?.status === 'paused_credits') {
       pollRef.current = setInterval(() => {
         void loadCampaign();
         void loadContacts();
@@ -337,6 +353,15 @@ export default function CampaignDetailPage() {
     } catch (err) {
       setActionError(err instanceof Error ? err.message : `Failed to ${action} campaign.`);
     } finally { setActing(false); }
+  };
+
+  const openHistory = async (contact: Contact) => {
+    if (!id) return;
+    setHistoryContact(contact); setAttempts([]); setHistoryError(''); setHistoryLoading(true);
+    try {
+      setAttempts(await backendJson<Attempt[]>(`/campaigns/${id}/contacts/${contact.id}/attempts`));
+    } catch (err) { setHistoryError(err instanceof Error ? err.message : 'Failed to load attempt history.'); }
+    finally { setHistoryLoading(false); }
   };
 
   if (loading) {
@@ -365,14 +390,18 @@ export default function CampaignDetailPage() {
   const cfg = STATUS_COLORS[campaign.status] || STATUS_COLORS.draft;
   const isDraft = campaign.status === 'draft';
   const isRunning = campaign.status === 'running';
-  const isPaused = campaign.status === 'paused';
+  const isPaused = campaign.status === 'paused' || campaign.status === 'paused_credits';
   const isStopped = campaign.status === 'stopped' || campaign.status === 'failed';
   const isCompleted = campaign.status === 'completed';
   const canStart = isDraft && campaign.contact_count > 0 && campaign.employee?.is_ready;
   const canPause = isRunning;
   const canResume = isPaused;
-  const canStop = isRunning || isPaused;
+  const canStop = ['scheduled', 'running', 'paused', 'paused_credits'].includes(campaign.status);
   const canRetry = (isStopped || isCompleted) && campaign.progress.failed > 0;
+  const visibleContacts = contacts.filter(c => {
+    const text = `${c.first_name || ''} ${c.last_name || ''} ${c.phone_number}`.toLowerCase();
+    return (!contactSearch || text.includes(contactSearch.toLowerCase())) && (contactFilter === 'all' || c.status === contactFilter || (contactFilter === 'calling' && c.status === 'in_progress'));
+  });
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -386,6 +415,7 @@ export default function CampaignDetailPage() {
           </div>
           <div>
             <h1 className="text-lg font-bold text-gray-900">{campaign.name}</h1>
+            <p className="text-xs text-gray-500">{campaign.scheduled_at ? `Scheduled ${new Date(campaign.scheduled_at).toLocaleString()}` : 'Starts now'} · {campaign.timezone || 'UTC'} · Calling {campaign.calling_window_start || 'any time'}–{campaign.calling_window_end || 'any time'}</p>
             <p className="text-xs text-gray-500">{campaign.employee?.name || 'No employee'} · Created {fmtDate(campaign.created_at)}</p>
           </div>
         </div>
@@ -436,12 +466,12 @@ export default function CampaignDetailPage() {
           )}
           {canStop && (
             <button
-              onClick={() => void doAction('stop')}
+              onClick={() => { if (window.confirm('Cancel pending calls? Active calls may finish.')) void doAction('cancel'); }}
               disabled={acting}
               className="flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition"
             >
               {acting ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Square className="w-3.5 h-3.5" />}
-              Stop
+              Cancel
             </button>
           )}
           {canRetry && (
@@ -470,12 +500,14 @@ export default function CampaignDetailPage() {
         {campaign.contact_count > 0 && <ProgressBar progress={campaign.progress} />}
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
           {[
             { label: 'Total contacts', value: campaign.contact_count, icon: Users, color: 'text-gray-600 bg-gray-50' },
             { label: 'Completed', value: campaign.progress.completed, icon: CheckCircle, color: 'text-emerald-600 bg-emerald-50' },
             { label: 'Pending', value: campaign.progress.pending, icon: Clock, color: 'text-amber-600 bg-amber-50' },
             { label: 'Failed', value: campaign.progress.failed, icon: XCircle, color: 'text-rose-600 bg-rose-50' },
+            { label: 'Calling', value: campaign.progress.in_progress, icon: PhoneCall, color: 'text-blue-600 bg-blue-50' },
+            { label: 'Retry scheduled', value: campaign.progress.retry_pending || 0, icon: RotateCcw, color: 'text-violet-600 bg-violet-50' },
           ].map(stat => (
             <div key={stat.label} className="bg-white border border-gray-200 rounded-xl p-4 flex items-center gap-3">
               <div className={`w-9 h-9 ${stat.color} rounded-lg flex items-center justify-center flex-shrink-0`}>
@@ -502,6 +534,7 @@ export default function CampaignDetailPage() {
               </button>
             )}
           </div>
+          {contacts.length > 0 && <div className="mb-3 flex flex-wrap gap-2"><input value={contactSearch} onChange={e => setContactSearch(e.target.value)} placeholder="Search name or phone" className="rounded-lg border border-gray-200 px-3 py-2 text-sm" /><select value={contactFilter} onChange={e => setContactFilter(e.target.value)} className="rounded-lg border border-gray-200 px-3 py-2 text-sm"><option value="all">All statuses</option><option value="pending">Pending</option><option value="calling">Calling</option><option value="completed">Completed</option><option value="retry_scheduled">Retry scheduled</option><option value="no_answer">No answer</option><option value="busy">Busy</option><option value="failed">Failed</option><option value="do_not_call">Do not call</option><option value="cancelled">Cancelled</option></select></div>}
           {contacts.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
               <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
@@ -524,17 +557,23 @@ export default function CampaignDetailPage() {
                     <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Phone</th>
                     <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Status</th>
                     <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3 hidden sm:table-cell">Attempts</th>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3 hidden lg:table-cell">Next / Last</th>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3 hidden xl:table-cell">Uploaded fields</th>
+                    <th className="px-4 py-3" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {contacts.map(c => {
+                  {visibleContacts.map(c => {
                     const sc = CONTACT_STATUS_COLORS[c.status] || 'bg-gray-100 text-gray-500';
                     return (
                       <tr key={c.id} className="hover:bg-gray-50 transition">
                         <td className="px-4 py-3 text-sm font-medium text-gray-900">{[c.first_name, c.last_name].filter(Boolean).join(' ') || '—'}</td>
                         <td className="px-4 py-3 font-mono text-xs text-gray-600">{c.phone_number}</td>
                         <td className="px-4 py-3"><span className={`text-xs px-2 py-0.5 rounded-full ${sc}`}>{c.status.replace(/_/g, ' ')}</span></td>
-                        <td className="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">{c.attempt_count}</td>
+                        <td className="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">{c.attempt_count}{campaign.max_attempts ? ` / ${campaign.max_attempts}` : ''}</td>
+                        <td className="px-4 py-3 text-xs text-gray-500 hidden lg:table-cell">{c.callback_at ? `Callback ${new Date(c.callback_at).toLocaleString()}` : c.retry_at ? `Retry ${new Date(c.retry_at).toLocaleString()}` : c.last_called_at ? fmtDate(c.last_called_at) : '—'}</td>
+                        <td className="px-4 py-3 text-xs text-gray-500 hidden xl:table-cell max-w-xs">{Object.entries(c.customer_data || {}).map(([key, value]) => `${key}: ${value}`).join(' · ') || '—'}</td>
+                        <td className="px-4 py-3 text-right"><button onClick={() => void openHistory(c)} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"><History className="w-3.5 h-3.5" /> View History</button></td>
                       </tr>
                     );
                   })}
@@ -577,6 +616,27 @@ export default function CampaignDetailPage() {
           onClose={() => setShowStart(false)}
           onStarted={c => { setCampaign(c); setShowStart(false); void loadContacts(); }}
         />
+      )}
+      {historyContact && (
+        <div className="fixed inset-0 z-50 bg-gray-900/30 flex justify-end" onClick={() => setHistoryContact(null)}>
+          <aside className="w-full max-w-xl bg-[#fafafa] h-full overflow-y-auto shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-gray-200 bg-white flex items-start justify-between">
+              <div><h2 className="text-lg font-bold text-gray-900">Attempt history</h2><p className="text-sm text-gray-500 mt-1">{[historyContact.first_name, historyContact.last_name].filter(Boolean).join(' ') || 'Unnamed contact'} · {historyContact.phone_number}</p></div>
+              <button onClick={() => setHistoryContact(null)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-5">
+              <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4 flex justify-between text-sm"><span>Current status <strong className="ml-1 text-gray-900">{historyContact.status.replace(/_/g, ' ')}</strong></span><span>Attempts <strong className="ml-1 text-gray-900">{historyContact.attempt_count}</strong></span></div>
+              {historyLoading && <div className="text-sm text-gray-500 py-8 text-center">Loading attempt history…</div>}
+              {historyError && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-3">{historyError}</div>}
+              {!historyLoading && !historyError && attempts.length === 0 && <div className="text-sm text-gray-500 bg-white border border-gray-200 rounded-xl p-8 text-center">No call attempts yet.</div>}
+              <div className="space-y-3">{attempts.map((a, index) => <div key={a.id} className={`bg-white border rounded-xl p-4 ${index === 0 ? 'border-blue-300 ring-1 ring-blue-100' : 'border-gray-200'}`}>
+                <div className="flex justify-between gap-3"><div className="font-semibold text-gray-900">Attempt {a.attempt_number} {index === 0 && <span className="ml-2 text-xs font-medium text-blue-700">Latest</span>}</div><span className={`text-xs px-2 py-1 rounded-full ${CONTACT_STATUS_COLORS[a.status] || 'bg-gray-100 text-gray-600'}`}>{a.status.replace(/_/g, ' ')}</span></div>
+                <div className="text-xs text-gray-500 mt-2">{a.started_at ? new Date(a.started_at).toLocaleString() : 'Date unavailable'} · {a.duration_seconds != null ? `${a.duration_seconds}s` : 'Duration unavailable'}</div>
+                {a.outcome && <div className="text-sm text-gray-700 mt-2">Outcome: {a.outcome}</div>}{a.callback_at && <div className="text-xs text-amber-700 mt-1">Callback: {new Date(a.callback_at).toLocaleString()}</div>}{a.summary && <p className="text-sm text-gray-600 mt-2">{a.summary}</p>}{a.recording_available && <div className="text-xs text-gray-500 mt-2">Recording available through the existing secure recording flow.</div>}
+              </div>)}</div>
+            </div>
+          </aside>
+        </div>
       )}
     </div>
   );

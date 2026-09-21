@@ -36,6 +36,7 @@ def charge_completed_call(db: Session, call: Call) -> UsageRecord | None:
         raise InsufficientBalanceError("Wallet balance is too low for this call charge.")
     after = before - amount
     wallet.balance_credits = after
+    wallet.promotional_minutes = max(Decimal("0"), Decimal(wallet.promotional_minutes or 0) - minutes)
     usage = UsageRecord(
         tenant_id=call.tenant_id,
         wallet_id=wallet.id,

@@ -213,6 +213,9 @@ def _ensure_billing_columns() -> None:
             if column not in usage_columns:
                 connection.execute(text(f"ALTER TABLE usage_records ADD COLUMN {column} {column_type}"))
         transaction_columns = {column["name"] for column in inspect(engine).get_columns("credit_transactions")}
+        wallet_columns = {column["name"] for column in inspect(engine).get_columns("credit_wallets")}
+        if "promotional_minutes" not in wallet_columns:
+            connection.execute(text("ALTER TABLE credit_wallets ADD COLUMN promotional_minutes NUMERIC(18, 4) NOT NULL DEFAULT 0"))
         if "balance_before" not in transaction_columns:
             connection.execute(text("ALTER TABLE credit_transactions ADD COLUMN balance_before NUMERIC(18, 4)"))
         connection.execute(text(
@@ -365,6 +368,10 @@ def _ensure_campaign_execution_columns() -> None:
     with engine.begin() as connection:
         if "phone_number_id" not in existing:
             connection.execute(text("ALTER TABLE campaigns ADD COLUMN phone_number_id CHAR(32)"))
+        additions = {"timezone": "VARCHAR(64)", "scheduled_at": "TIMESTAMP", "calling_window_start": "VARCHAR(8)", "calling_window_end": "VARCHAR(8)", "max_attempts": "INTEGER NOT NULL DEFAULT 3", "concurrency": "INTEGER NOT NULL DEFAULT 1", "retry_enabled": "BOOLEAN NOT NULL DEFAULT 1", "retry_intervals": "JSON"}
+        for column, kind in additions.items():
+            if column not in existing:
+                connection.execute(text(f"ALTER TABLE campaigns ADD COLUMN {column} {kind}"))
 
 def _ensure_campaign_contact_columns() -> None:
     if engine.dialect.name not in {"sqlite", "postgresql"}:
@@ -376,6 +383,12 @@ def _ensure_campaign_contact_columns() -> None:
         "provider_request_id": "VARCHAR(255)",
         "provider_call_id": "VARCHAR(255)",
         "error_message": "VARCHAR(1024)",
+        "claimed_at": "TIMESTAMP",
+        "attempt_started_at": "TIMESTAMP",
+        "completed_at": "TIMESTAMP",
+        "retry_at": "TIMESTAMP",
+        "callback_at": "TIMESTAMP",
+        "lease_token": "VARCHAR(64)",
     }
     with engine.begin() as connection:
         for column, kind in additions.items():

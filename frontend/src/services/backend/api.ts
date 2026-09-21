@@ -16,6 +16,11 @@ export async function backendJson<T>(path: string, init: RequestInit = {}): Prom
   const response = await backendFetch(path, init);
   const body = await response.json().catch(() => null);
   if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem('pontis_access_token');
+      window.dispatchEvent(new Event('pontis:unauthorized'));
+      if (window.location.pathname !== '/login') window.location.assign('/login');
+    }
     const detail = body?.detail;
     const error = new Error(
       typeof detail === 'string' ? detail : detail?.message ?? 'Backend request failed',

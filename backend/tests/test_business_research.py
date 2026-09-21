@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import httpx
 
-from app.services.business_research import ensure_business_research, research_fingerprint
+from app.services.business_research import ensure_business_research, research_fingerprint, validate_public_research_url
 from app.services.employee_configuration import public_employee_configuration
 
 
@@ -38,3 +38,36 @@ def test_research_failure_is_explicit_and_public_config_has_no_source_metadata(m
     public = public_employee_configuration({"business_research": {"status": "success", "sources": [{"uri": "https://secret.example"}], "research_query": "private", "facts": ["x"]}})
     assert "sources" not in public["business_research"]
     assert "research_query" not in public["business_research"]
+
+
+def test_research_fingerprint_changes_when_business_context_changes():
+    base = {"business_name": "Acme", "business_description": "Tools", "purpose": "Support buyers"}
+    assert research_fingerprint(base) != research_fingerprint({**base, "purpose": "Sell tools"})
+    assert research_fingerprint(base) != research_fingerprint({**base, "website_url": "https://acme.example"})
+
+
+def test_research_url_rejects_private_targets():
+    for value in ("http://127.0.0.1:8000", "http://10.0.0.1", "file:///etc/passwd", "https://user:pass@example.com"):
+        try:
+            validate_public_research_url(value)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"unsafe URL accepted: {value}")
+
+
+def test_research_snapshot_keeps_context_and_website_in_grounded_query(monkeypatch):
+    monkeypatch.setattr("app.services.business_research.get_settings", lambda: SimpleNamespace(
+        gemini_api_key="test-key", gemini_model="gemini-test", gemini_base_url="https://generativelanguage.googleapis.com/v1beta", gemini_research_timeout_seconds=5.0,
+    ))
+    class Client:
+        def post(self, url, **kwargs):
+            assert "https://acme.example" in kwargs["json"]["contents"][0]["parts"][0]["text"]
+            class Response:
+                def raise_for_status(self):
+                    return None
+                def json(self):
+                    return {"candidates": [{"content": {"parts": [{"text": '{"summary":"Official","facts":["Open"],"sources":[]}'}]}, "groundingMetadata": {"groundingChunks": [{"web": {"title": "Acme", "uri": "https://acme.example"}}]}}]}
+            return Response()
+    result = ensure_business_research({"business_name": "Acme", "business_description": "Tools", "purpose": "Support", "website_url": "https://acme.example"}, Client())
+    assert result["business_research"]["context"]["website_url"] == "https://acme.example"

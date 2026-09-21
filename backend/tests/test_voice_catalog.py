@@ -18,11 +18,11 @@ def test_public_voice_catalog_preserves_frontend_contract(monkeypatch):
 
     response = voice_catalog_service.public_voice_catalog()
 
-    assert len(response) == 6
+    assert len(response) == len(configured) + len(voice_catalog_service.BUILTIN_VOICES)
     charan = next(item for item in response if item["name"] == "Charan - Clear Concierge")
     assert charan["provider"] == "cartesia"
     assert "provider_voice_id" not in charan
-    assert [item["name"] for item in response] == ["Achird", "Aoede", "Charon", "Kore", "Charan - Clear Concierge", "Ramana"]
+    assert [item["name"] for item in response] == ["Achird", "Aoede", "Charon", "Kore"] + [item["name"] for item in voice_catalog_service.BUILTIN_VOICES]
     assert all("id" in item and "provider_voice_id" not in item for item in response)
     assert all({"name", "tier", "gender", "provider", "supports_cloning"} <= item.keys() for item in response)
 
@@ -40,8 +40,8 @@ def test_global_provider_catalog_is_not_treated_as_account_cloned_voices(monkeyp
     monkeypatch.setattr(voice_catalog_service, "OmniDimensionClient", MustNotBeCalled, raising=False)
 
     assert voice_catalog_service.public_voice_catalog() == [
-        {key: value for key, value in voice_catalog_service.BUILTIN_VOICES[0].items() if key != "provider_voice_id"},
-        {key: value for key, value in voice_catalog_service.BUILTIN_VOICES[1].items() if key != "provider_voice_id"},
+        {key: value for key, value in item.items() if key != "provider_voice_id"}
+        for item in voice_catalog_service.BUILTIN_VOICES
     ]
 
 

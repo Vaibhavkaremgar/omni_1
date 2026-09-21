@@ -21,11 +21,16 @@ class InsufficientBalanceError(WalletError):
     pass
 
 
+INITIAL_PROMOTIONAL_MINUTES = Decimal("30")
+INITIAL_PROMOTIONAL_VALUE = Decimal("240")
+LOW_BALANCE_THRESHOLD_MINUTES = Decimal("5")
+
+
 def ensure_wallet(db: Session, tenant_id: UUID) -> CreditWallet:
     wallet = db.scalar(select(CreditWallet).where(CreditWallet.tenant_id == tenant_id))
     if wallet is not None:
         return wallet
-    wallet = CreditWallet(tenant_id=tenant_id, balance_credits=Decimal("0"), reserved_credits=Decimal("0"), currency="INR")
+    wallet = CreditWallet(tenant_id=tenant_id, balance_credits=Decimal("0"), promotional_minutes=Decimal("0"), reserved_credits=Decimal("0"), currency="INR")
     db.add(wallet)
     try:
         db.flush()
@@ -34,6 +39,34 @@ def ensure_wallet(db: Session, tenant_id: UUID) -> CreditWallet:
         wallet = db.scalar(select(CreditWallet).where(CreditWallet.tenant_id == tenant_id))
         if wallet is None:
             raise
+    return wallet
+
+
+def grant_initial_promotional_credit(db: Session, tenant_id: UUID) -> CreditWallet:
+    """Grant one auditable 30-minute/₹240 allocation during account provisioning."""
+    wallet = db.scalar(select(CreditWallet).where(CreditWallet.tenant_id == tenant_id).with_for_update())
+    if wallet is None:
+        wallet = ensure_wallet(db, tenant_id)
+    existing = db.scalar(select(CreditTransaction).where(
+        CreditTransaction.tenant_id == tenant_id,
+        CreditTransaction.reference_type == "initial_signup_promotion",
+        CreditTransaction.reference_id == str(tenant_id),
+    ))
+    if existing is not None:
+        return wallet
+    before = Decimal(wallet.balance_credits)
+    wallet.balance_credits = before + INITIAL_PROMOTIONAL_VALUE
+    wallet.promotional_minutes = Decimal(wallet.promotional_minutes or 0) + INITIAL_PROMOTIONAL_MINUTES
+    db.add(CreditTransaction(
+        tenant_id=tenant_id, wallet_id=wallet.id,
+        transaction_type=CreditTransactionType.promotional_grant.value,
+        status=CreditTransactionStatus.posted.value,
+        amount_credits=INITIAL_PROMOTIONAL_VALUE, balance_before=before,
+        balance_after=wallet.balance_credits, currency="INR",
+        description="Initial customer promotion: 30 free calling minutes",
+        reference_type="initial_signup_promotion", reference_id=str(tenant_id),
+        extra_data={"source": "initial_signup", "grant_minutes": "30", "grant_value_inr": "240"},
+    ))
     return wallet
 
 

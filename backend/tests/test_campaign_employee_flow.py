@@ -133,7 +133,7 @@ def test_create_employee_produces_local_draft(campaign_db, monkeypatch):
             resp = client.post("/api/v1/employees", json=_employee_payload(), headers={"Authorization": "Bearer a"})
             assert resp.status_code == 201
             assert resp.json()["status"] == "draft"
-            assert resp.json()["provider_agent_id"] is None
+            assert "provider_agent_id" not in resp.json()
     finally:
         app.dependency_overrides.clear()
 
@@ -150,7 +150,7 @@ def test_publish_creates_exactly_one_omni_agent(campaign_db, monkeypatch):
             eid = client.post("/api/v1/employees", json=_employee_payload(), headers=h).json()["id"]
             resp = client.post(f"/api/v1/employees/{eid}/publish", headers=h)
             assert resp.status_code == 200
-            assert resp.json()["provider_agent_id"] == "1001"
+            assert "provider_agent_id" not in resp.json()
             assert len(calls) == 1
             assert calls[0]["method"] == "POST"
     finally:
@@ -414,7 +414,7 @@ def test_provider_failure_is_retryable_and_no_duplicate_agents(campaign_db, monk
             # Retry succeeds
             resp2 = client.post(f"/api/v1/employees/{eid}/publish", headers=h)
             assert resp2.status_code == 200
-            assert resp2.json()["provider_agent_id"] == "9001"
+            assert "provider_agent_id" not in resp2.json()
             # Only 2 provider calls total (1 failed + 1 success) — no duplicates
             assert call_count["n"] == 2
     finally:
@@ -485,7 +485,7 @@ def test_map_includes_all_context_sections():
 
 
 def test_map_tasks_formatted_as_bullet_list():
-    employee = SimpleNamespace(name="E", purpose="P", call_type="both", llm_model="m", language="English")
+    employee = SimpleNamespace(name="E", purpose="P", call_type="inbound", llm_model="m", language="English")
     config = {"name": "E", "purpose": "P", "tasks": ["Task A", "Task B"], "llm_model": "m", "language": "English"}
     payload = map_employee_configuration(employee, config)
     tasks_section = next(s for s in payload["context_breakdown"] if s["title"] == "Tasks")
@@ -494,7 +494,7 @@ def test_map_tasks_formatted_as_bullet_list():
 
 
 def test_map_welcome_message_uses_employee_name():
-    employee = SimpleNamespace(name="Ava", purpose="P", call_type="both", llm_model="m", language="English")
+    employee = SimpleNamespace(name="Ava", purpose="P", call_type="inbound", llm_model="m", language="English")
     config = {"name": "Ava", "purpose": "P", "llm_model": "m", "language": "English"}
     payload = map_employee_configuration(employee, config)
     assert "Ava" in payload["welcome_message"]
@@ -876,10 +876,13 @@ def test_publish_sends_exact_saved_call_script_as_omni_source_of_truth(campaign_
     monkeypatch.setattr(employee_endpoint, "agent_service", OmniDimensionAgentService(CapturingProvider()))
     client = _client(db, 0, monkeypatch)
     edited_script = {
-        title: f"EDITED {index}: {title} - KMG Insurance renewal exact instruction."
-        for index, title in enumerate(SCRIPT_SECTION_NAMES, 1)
+        "Identity & Purpose": "आप Mani हैं, KMG Insurance से customer को policy renewal reminder के लिए call कर रहे हैं.",
+        "Greeting & Intro": "\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 Mani, KMG Insurance \u0938\u0947 \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. \u0906\u092a\u0915\u0940 insurance renewal \u0915\u0947 \u092c\u093e\u0930\u0947 \u092e\u0947\u0902 call \u0915\u093f\u092f\u093e \u0939\u0948.",
+        "Qualification": "पहले renewal details explain करें, फिर पूछें कि customer को details सुननी हैं या team follow-up चाहिए.",
+        "Handling Objections": "अगर customer busy है, politely पूछें कि किस time पर callback convenient रहेगा.",
+        "Call to Action": "Interest clear होने पर policy renewal next step short में summarize करें और confirmation लें.",
+        "Closing": "अंत में पूछें कि और कुछ help चाहिए क्या, फिर thanks बोलकर politely call end करें.",
     }
-    edited_script["Greeting & Intro"] = "\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 Mani, KMG Insurance \u0938\u0947 \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. \u0906\u092a\u0915\u0940 insurance renewal \u0915\u0947 \u092c\u093e\u0930\u0947 \u092e\u0947\u0902 call \u0915\u093f\u092f\u093e \u0939\u0948."
     try:
         with client:
             h = {"Authorization": "Bearer a"}
@@ -909,6 +912,52 @@ def test_publish_sends_exact_saved_call_script_as_omni_source_of_truth(campaign_
             assert body in source["body"]
         assert payload["welcome_message"] == edited_script["Greeting & Intro"]
         assert payload["call_type"] == "Outgoing"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_final_prompt_override_becomes_published_call_script_source_of_truth(campaign_db, monkeypatch):
+    db, _, _ = campaign_db
+    seen_payloads: list[dict] = []
+
+    class CapturingProvider:
+        def create_agent(self, payload):
+            seen_payloads.append(payload)
+            return SimpleNamespace(provider_id="script-override", status="Completed", metadata={})
+
+    monkeypatch.setattr(employee_endpoint, "agent_service", OmniDimensionAgentService(CapturingProvider()))
+    client = _client(db, 0, monkeypatch)
+    edited_script = {
+        "Identity & Purpose": "You are Mira from Northstar Support. Help callers understand their account.",
+        "Greeting & Intro": "Hello, this is Mira from Northstar Support. How may I help you today?",
+        "Qualification": "Ask what the caller needs and collect the relevant account details.",
+        "Handling Objections": "Acknowledge concerns, answer clearly, and offer a practical next step.",
+        "Call to Action": "Confirm the agreed next step and explain what the caller should expect.",
+        "Closing": "Ask whether anything else is needed, thank the caller, and close politely.",
+    }
+    final_prompt = "\n\n".join(f"{index}. {section}\n{edited_script[section]}" for index, section in enumerate(SCRIPT_SECTION_NAMES, 1))
+    try:
+        with client:
+            headers = {"Authorization": "Bearer a"}
+            employee_id = client.post("/api/v1/employees", json=_employee_payload(name="Mira", purpose="Support callers."), headers=headers).json()["id"]
+            saved = client.patch(f"/api/v1/employees/{employee_id}", json={"configuration": {
+                "name": "Mira", "business_name": "Northstar Support", "purpose": "Support callers.",
+                "language": "English", "call_type": "inbound", "final_prompt": final_prompt,
+                "final_prompt_overridden": True,
+            }}, headers=headers)
+            assert saved.status_code == 200
+            assert saved.json()["configuration"]["call_script"] == edited_script
+
+            published = client.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
+            assert published.status_code == 200
+
+        payload = seen_payloads[0]
+        source = next(section for section in payload["context_breakdown"] if section["title"] == "Published Call Script Source of Truth")
+        for title, body in edited_script.items():
+            assert title in source["body"]
+            assert body in source["body"]
+        assert payload["welcome_message"] == edited_script["Greeting & Intro"]
+        assert payload["call_type"] == "Incoming"
     finally:
         app.dependency_overrides.clear()
 
@@ -986,10 +1035,10 @@ def test_canonical_prompt_includes_natural_memory_and_code_speech_rules():
     assert "Remember facts shared during the current call" in prompt
     assert "asking for the same information again" in prompt
     assert "two three zero" in prompt
-    assert "never as 'two hundred thirty'" in prompt
+    assert "five thousand rupees" in prompt
     assert "three four five zero" in prompt
-    assert "2 BHK" in prompt
-    assert "Speak every numeric string digit-by-digit in English" in prompt
+    assert "HP 230" in prompt
+    assert "Speak phone numbers, OTPs, model numbers, product codes" in prompt
     assert "repeat the same digits" in prompt
     assert "For unrelated questions" in prompt
 

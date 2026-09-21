@@ -242,6 +242,77 @@ def test_publish_preserves_valid_persisted_internal_configuration(employee_datab
         app.dependency_overrides.clear()
 
 
+def test_manual_telugu_roman_script_save_is_blocked(employee_database, monkeypatch):
+    db, _, _ = employee_database
+    monkeypatch.setattr(employee_endpoint, "get_settings", lambda: SimpleNamespace(effective_llm_provider="groq", effective_llm_model="openai/gpt-oss-20b"))
+    client = client_for(db, "employee-user-a", monkeypatch)
+    roman_script = {section: "Nenu KMG Insurance nundi maatladutunnanu. Mee policy renewal gurinchi call chesanu." for section in (
+        "Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing"
+    )}
+    try:
+        with client:
+            created = client.post("/api/v1/employees", json={**payload(), "language": "Telugu"}, headers={"Authorization": "Bearer a"})
+            employee_id = created.json()["id"]
+            response = client.patch(
+                f"/api/v1/employees/{employee_id}",
+                json={"configuration": {"language": "Telugu", "call_script": roman_script}},
+                headers={"Authorization": "Bearer a"},
+            )
+            assert response.status_code == 422
+            detail = response.json()["detail"]
+            assert detail["message"] == "Telugu script validation failed"
+            assert detail["validation"]["valid"] is False
+            assert any(issue["type"] == "romanized_language" for issue in detail["validation"]["issues"])
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_publish_blocks_invalid_hindi_script_before_provider_sync(employee_database, monkeypatch):
+    db, tenant_a, _ = employee_database
+    employee = AIEmployee(
+        tenant_id=tenant_a.id,
+        name="Hindi employee",
+        purpose="Renew policies",
+        call_type="outbound",
+        llm_provider="internal",
+        llm_model="default",
+        language="Hindi",
+        creation_mode="chat",
+    )
+    db.add(employee)
+    db.flush()
+    roman_script = {section: "Namaste ji, main KMG Insurance se bol raha hoon. Aapki renewal ke baare mein call kiya hai." for section in (
+        "Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing"
+    )}
+    db.add(AIEmployeeVersion(
+        tenant_id=tenant_a.id,
+        employee_id=employee.id,
+        version_number=1,
+        status="draft",
+        configuration={
+            "name": employee.name,
+            "purpose": employee.purpose,
+            "language": "Hindi",
+            "call_type": "outbound",
+            "llm_provider": "internal",
+            "llm_model": "default",
+            "call_script": roman_script,
+        },
+    ))
+    db.commit()
+    called = {"provider": False}
+    monkeypatch.setattr(employee_endpoint, "agent_service", SimpleNamespace(synchronize=lambda *_: called.__setitem__("provider", True)))
+    client = client_for(db, "employee-user-a", monkeypatch)
+    try:
+        with client:
+            response = client.post(f"/api/v1/employees/{employee.id}/publish", headers={"Authorization": "Bearer a"})
+            assert response.status_code == 422
+            assert response.json()["detail"]["message"] == "Hindi script validation failed"
+            assert called["provider"] is False
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_employee_delete_is_tenant_scoped(employee_database, monkeypatch):
     db, _, _ = employee_database
     client_a = client_for(db, "employee-user-a", monkeypatch)
@@ -327,9 +398,21 @@ def test_employee_draft_can_publish_and_published_version_is_archived_on_new_pub
         app.dependency_overrides.clear()
 
 
-def test_incomplete_employee_cannot_publish(employee_database, monkeypatch):
+def test_employee_with_tone_only_patch_still_publishes_from_existing_required_fields(employee_database, monkeypatch):
     db, _, _ = employee_database
     client = client_for(db, "employee-user-a", monkeypatch)
+    class Provider:
+        def create_agent(self, payload):
+            from types import SimpleNamespace
+            return SimpleNamespace(provider_id="provider-1", status="ready", metadata={})
+        def update_agent(self, provider_id, payload):
+            from types import SimpleNamespace
+            return SimpleNamespace(provider_id=provider_id, status="ready", metadata={})
+        def get_agent(self, provider_id):
+            return {}
+    from app.api.v1.endpoints import employees as employee_endpoint
+    from app.services.omnidimension_agents import OmniDimensionAgentService
+    monkeypatch.setattr(employee_endpoint, "agent_service", OmniDimensionAgentService(Provider()))
     try:
         with client:
             headers = {"Authorization": "Bearer a"}
@@ -341,7 +424,12 @@ def test_incomplete_employee_cannot_publish(employee_database, monkeypatch):
                 headers=headers,
             )
             assert response.status_code == 200
-            assert client.post(f"/api/v1/employees/{employee_id}/publish", headers=headers).status_code == 422
+            from uuid import UUID
+            from app.models.ai_employee import AIEmployee
+            employee = db.get(AIEmployee, UUID(employee_id))
+            employee.versions[0].configuration = {"tone": "warm"}
+            db.commit()
+            assert client.post(f"/api/v1/employees/{employee_id}/publish", headers=headers).status_code == 200
     finally:
         app.dependency_overrides.clear()
 

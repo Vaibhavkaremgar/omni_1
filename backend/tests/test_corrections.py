@@ -75,19 +75,20 @@ def test_create_schema_inbound_accepted():
     assert schema.call_type == "inbound"
 
 
-def test_create_schema_both_accepted():
-    schema = AIEmployeeCreate(call_type="both", language="English")
-    assert schema.call_type == "both"
+def test_create_schema_both_rejected():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        AIEmployeeCreate(call_type="both", language="English")
 
 
-def test_create_schema_outbound_rejected():
-    with pytest.raises(Exception):
-        AIEmployeeCreate(call_type="outbound", language="English")
+def test_create_schema_outbound_accepted():
+    schema = AIEmployeeCreate(call_type="outbound", language="English")
+    assert schema.call_type == "outbound"
 
 
-def test_update_schema_outbound_rejected():
-    with pytest.raises(Exception):
-        AIEmployeeUpdate(call_type="outbound")
+def test_update_schema_outbound_accepted():
+    schema = AIEmployeeUpdate(call_type="outbound")
+    assert schema.call_type == "outbound"
 
 
 def test_update_schema_inbound_accepted():
@@ -119,7 +120,7 @@ def test_api_create_employee_defaults_to_inbound(db_session, monkeypatch):
         app.dependency_overrides.clear()
 
 
-def test_api_create_employee_outbound_rejected(db_session, monkeypatch):
+def test_api_create_employee_outbound_accepted(db_session, monkeypatch):
     db, tenant, user = db_session
     client = _client(db, tenant, user, monkeypatch)
     try:
@@ -129,13 +130,13 @@ def test_api_create_employee_outbound_rejected(db_session, monkeypatch):
                 json={"language": "English", "call_type": "outbound"},
                 headers={"Authorization": "Bearer t"},
             )
-            assert r.status_code == 422
-            assert "outbound" in r.text.lower() or "request" in r.text.lower()
+            assert r.status_code == 201
+            assert r.json()["call_type"] == "outbound"
     finally:
         app.dependency_overrides.clear()
 
 
-def test_api_update_employee_outbound_rejected(db_session, monkeypatch):
+def test_api_update_employee_outbound_accepted(db_session, monkeypatch):
     db, tenant, user = db_session
     client = _client(db, tenant, user, monkeypatch)
     try:
@@ -147,12 +148,13 @@ def test_api_update_employee_outbound_rejected(db_session, monkeypatch):
                 json={"call_type": "outbound"},
                 headers={"Authorization": "Bearer t"},
             )
-            assert r.status_code == 422
+            assert r.status_code == 200
+            assert r.json()["call_type"] == "outbound"
     finally:
         app.dependency_overrides.clear()
 
 
-def test_api_update_employee_configuration_outbound_rejected(db_session, monkeypatch):
+def test_api_update_employee_configuration_outbound_accepted(db_session, monkeypatch):
     db, tenant, user = db_session
     client = _client(db, tenant, user, monkeypatch)
     try:
@@ -164,7 +166,8 @@ def test_api_update_employee_configuration_outbound_rejected(db_session, monkeyp
                 json={"configuration": {"call_type": "outbound", "name": "X", "purpose": "Y", "language": "en"}},
                 headers={"Authorization": "Bearer t"},
             )
-            assert r.status_code == 422
+            assert r.status_code == 200
+            assert r.json()["call_type"] == "outbound"
     finally:
         app.dependency_overrides.clear()
 

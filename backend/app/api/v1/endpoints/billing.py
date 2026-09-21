@@ -18,7 +18,7 @@ from app.models.enums import BillingTransactionStatus, BillingTransactionType
 from app.integrations.razorpay import RazorpayClient, RazorpayError
 from app.services.top_ups import confirm_provider_payment, paise
 from app.services.auth import AuthenticatedUser
-from app.services.wallets import credit_verified_top_up, ensure_wallet
+from app.services.wallets import LOW_BALANCE_THRESHOLD_MINUTES, credit_verified_top_up, ensure_wallet
 from app.core.config import get_settings
 
 
@@ -37,9 +37,17 @@ razorpay_client = RazorpayClient()
 def read_wallet(current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)) -> WalletRead:
     wallet = ensure_wallet(db, current_user.tenant.id)
     db.commit()
+    available_value = max(Decimal("0"), Decimal(wallet.balance_credits)).quantize(MONEY_QUANTUM)
+    available_minutes = (available_value / get_settings().call_price_inr).quantize(Decimal("0.0001"))
+    balance_status = "EXHAUSTED" if available_minutes <= 0 else "LOW_BALANCE" if available_minutes <= LOW_BALANCE_THRESHOLD_MINUTES else "AVAILABLE"
     return WalletRead(
         id=wallet.id,
         balance=Decimal(wallet.balance_credits).quantize(MONEY_QUANTUM),
+        available_minutes=available_minutes,
+        available_value=available_value,
+        available_value_inr=available_value,
+        balance_status=balance_status,
+        low_balance_threshold_minutes=LOW_BALANCE_THRESHOLD_MINUTES,
         currency=wallet.currency,
         status=wallet.status,
         call_price_per_minute=get_settings().call_price_inr.quantize(MONEY_QUANTUM),

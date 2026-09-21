@@ -34,6 +34,12 @@ class CampaignContact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     provider_request_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     provider_call_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    attempt_started_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    retry_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    callback_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     tenant = relationship("Tenant")
     campaign = relationship("Campaign", back_populates="contacts")

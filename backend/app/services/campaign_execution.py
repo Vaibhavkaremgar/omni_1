@@ -14,9 +14,12 @@ Lifecycle:
 """
 from __future__ import annotations
 
-from uuid import UUID
+from datetime import datetime, time as dt_time, timedelta
+from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.base import utc_now
@@ -26,6 +29,7 @@ from app.models.ai_employee import AIEmployee
 from app.models.call import Call
 from app.models.campaign import Campaign
 from app.models.campaign_contact import CampaignContact
+from app.models.campaign_execution_slot import CampaignExecutionSlot
 from app.models.enums import (
     CallDirection,
     CallStatus,
@@ -114,6 +118,8 @@ def _parse_provider_ids(employee: AIEmployee, phone: PhoneNumber) -> tuple[int, 
 TERMINAL_CONTACT_STATUSES = {
     ContactStatus.called.value,
     ContactStatus.completed.value,
+    ContactStatus.no_answer.value,
+    ContactStatus.busy.value,
     ContactStatus.failed.value,
     ContactStatus.do_not_call.value,
     ContactStatus.skipped.value,
@@ -122,7 +128,7 @@ TERMINAL_CONTACT_STATUSES = {
 
 def _update_campaign_progress(db: Session, campaign: Campaign) -> None:
     """Transition campaign to completed if all contacts are terminal."""
-    if campaign.status not in {CampaignStatus.running.value, CampaignStatus.paused.value}:
+    if campaign.status not in {CampaignStatus.running.value, CampaignStatus.paused.value, CampaignStatus.paused_credits.value}:
         return
     contacts = db.scalars(
         select(CampaignContact).where(CampaignContact.campaign_id == campaign.id)
@@ -132,6 +138,116 @@ def _update_campaign_progress(db: Session, campaign: Campaign) -> None:
     if all(c.status in TERMINAL_CONTACT_STATUSES for c in contacts):
         campaign.status = CampaignStatus.completed.value
         campaign.ends_at = utc_now()
+
+
+def _within_calling_window(campaign: Campaign) -> bool:
+    """Return whether new calls may start right now in the campaign timezone."""
+    if not campaign.calling_window_start or not campaign.calling_window_end:
+        return True
+    try:
+        zone = ZoneInfo(campaign.timezone or "UTC")
+        now = datetime.now(zone).time()
+        start = dt_time.fromisoformat(campaign.calling_window_start)
+        end = dt_time.fromisoformat(campaign.calling_window_end)
+        return start <= now <= end if start <= end else now >= start or now <= end
+    except (ValueError, KeyError):
+        return False
+
+
+def next_calling_window_time(campaign: Campaign, requested_at: datetime) -> datetime:
+    """Return the first instant at/after requested_at inside the campaign window."""
+    if not campaign.calling_window_start or not campaign.calling_window_end:
+        return requested_at
+    zone = ZoneInfo(campaign.timezone or "UTC")
+    local = requested_at.astimezone(zone)
+    start = dt_time.fromisoformat(campaign.calling_window_start)
+    end = dt_time.fromisoformat(campaign.calling_window_end)
+    if start <= end:
+        if start <= local.time() <= end:
+            return requested_at
+        day = local.date() if local.time() < start else local.date() + timedelta(days=1)
+        return datetime.combine(day, start, tzinfo=zone).astimezone(requested_at.tzinfo)
+    # Overnight windows: only shift values in the closed daytime gap.
+    if local.time() >= start or local.time() <= end:
+        return requested_at
+    return datetime.combine(local.date() + timedelta(days=1), start, tzinfo=zone).astimezone(requested_at.tzinfo)
+
+
+def recover_stale_contacts(db: Session, *, lease_seconds: int = 900) -> int:
+    """Return abandoned claims to the queue after a worker/process crash."""
+    cutoff = utc_now() - timedelta(seconds=lease_seconds)
+    rows = db.scalars(select(CampaignContact).where(
+        CampaignContact.status.in_([ContactStatus.dispatching.value, ContactStatus.in_progress.value, ContactStatus.calling.value]),
+        CampaignContact.claimed_at < cutoff,
+    )).all()
+    for contact in rows:
+        contact.status = ContactStatus.retry_scheduled.value if contact.attempt_count < (contact.campaign.max_attempts if contact.campaign else 3) else ContactStatus.failed.value
+        contact.retry_at = utc_now() if contact.status == ContactStatus.retry_scheduled.value else None
+        contact.lease_token = None
+        contact.error_message = "Recovered after an abandoned worker lease."
+    if rows:
+        db.commit()
+    return len(rows)
+
+
+def recover_stale_slots(db: Session, *, lease_seconds: int = 900) -> int:
+    cutoff = utc_now() - timedelta(seconds=lease_seconds)
+    rows = db.scalars(select(CampaignExecutionSlot).where(
+        CampaignExecutionSlot.released_at.is_(None),
+        CampaignExecutionSlot.reserved_at < cutoff,
+    )).all()
+    for slot in rows:
+        slot.released_at = utc_now()
+    if rows:
+        db.commit()
+    return len(rows)
+
+
+def reserve_campaign_slot(db: Session, campaign: Campaign, contact: CampaignContact) -> CampaignExecutionSlot | None:
+    recover_stale_slots(db)
+    for number in range(max(1, int(campaign.concurrency or 1))):
+        token = uuid4().hex
+        changed = db.execute(update(CampaignExecutionSlot).where(
+            CampaignExecutionSlot.campaign_id == campaign.id,
+            CampaignExecutionSlot.slot_number == number,
+            CampaignExecutionSlot.released_at.is_not(None),
+        ).values(
+            campaign_contact_id=contact.id,
+            call_id=None,
+            lease_token=token,
+            reserved_at=utc_now(),
+            released_at=None,
+        )).rowcount
+        if changed == 1:
+            db.commit()
+            return db.scalar(select(CampaignExecutionSlot).where(CampaignExecutionSlot.lease_token == token))
+        slot = CampaignExecutionSlot(
+            tenant_id=campaign.tenant_id,
+            campaign_id=campaign.id,
+            campaign_contact_id=contact.id,
+            slot_number=number,
+            lease_token=uuid4().hex,
+            reserved_at=utc_now(),
+        )
+        try:
+            with db.begin_nested():
+                db.add(slot)
+                db.flush()
+            return slot
+        except IntegrityError:
+            continue
+    return None
+
+
+def release_campaign_slot(db: Session, *, call_id: UUID | None = None, contact_id: UUID | None = None) -> int:
+    query = select(CampaignExecutionSlot).where(CampaignExecutionSlot.released_at.is_(None))
+    query = query.where(CampaignExecutionSlot.call_id == call_id) if call_id is not None else query.where(CampaignExecutionSlot.campaign_contact_id == contact_id)
+    rows = db.scalars(query).all()
+    for slot in rows:
+        slot.released_at = utc_now()
+    if rows:
+        db.commit()
+    return len(rows)
 
 
 # ── Core dispatch (shared with InstantCallService boundary) ───────────────────
@@ -144,6 +260,7 @@ def dispatch_single_contact(
     phone: PhoneNumber,
     agent_id: int,
     from_number_id: int,
+    slot: CampaignExecutionSlot | None = None,
 ) -> Call:
     """
     Create a Call record and dispatch it to OmniDimension.
@@ -152,10 +269,11 @@ def dispatch_single_contact(
     """
     # Claim is a single conditional UPDATE. This is the cross-worker idempotency
     # boundary; a worker which loses the race must never reach the provider.
+    lease_token = uuid4().hex
     claimed = db.execute(
         update(CampaignContact)
-        .where(CampaignContact.id == contact.id, CampaignContact.status == ContactStatus.pending.value)
-        .values(status=ContactStatus.dispatching.value, attempt_count=(CampaignContact.attempt_count + 1), last_called_at=utc_now())
+        .where(CampaignContact.id == contact.id, CampaignContact.status.in_([ContactStatus.pending.value, ContactStatus.retry_scheduled.value]))
+        .values(status=ContactStatus.dispatching.value, attempt_count=(CampaignContact.attempt_count + 1), last_called_at=utc_now(), claimed_at=utc_now(), attempt_started_at=utc_now(), retry_at=None, lease_token=lease_token)
     ).rowcount
     db.commit()
     if claimed != 1:
@@ -196,6 +314,9 @@ def dispatch_single_contact(
         },
     )
     db.add(call)
+    db.flush()
+    if slot is not None:
+        slot.call_id = call.id
     contact.status = ContactStatus.in_progress.value
     db.commit()
     db.refresh(call)
@@ -223,6 +344,8 @@ def dispatch_single_contact(
     except OmniDimensionError:
         call.status = CallStatus.failed.value
         contact.status = ContactStatus.failed.value
+        if slot is not None:
+            slot.released_at = utc_now()
         db.commit()
         raise
 
@@ -278,15 +401,18 @@ class CampaignExecutionService:
         pending = db.scalar(
             select(CampaignContact).where(
                 CampaignContact.campaign_id == campaign.id,
-                CampaignContact.status == ContactStatus.pending.value,
+                CampaignContact.status.in_([ContactStatus.pending.value, ContactStatus.retry_scheduled.value]),
             )
         )
         if pending is None:
             raise CampaignExecutionError("No pending contacts in this campaign.")
 
         campaign.phone_number_id = phone.id
-        campaign.status = CampaignStatus.running.value
-        campaign.starts_at = campaign.starts_at or utc_now()
+        if campaign.scheduled_at and campaign.scheduled_at > utc_now():
+            campaign.status = CampaignStatus.scheduled.value
+        else:
+            campaign.status = CampaignStatus.running.value
+            campaign.starts_at = campaign.starts_at or utc_now()
         db.commit()
         return campaign
 
@@ -300,7 +426,7 @@ class CampaignExecutionService:
 
     def resume(self, db: Session, campaign_id: UUID, tenant_id: UUID) -> Campaign:
         campaign = _require_campaign(db, campaign_id, tenant_id)
-        if campaign.status != CampaignStatus.paused.value:
+        if campaign.status not in {CampaignStatus.paused.value, CampaignStatus.paused_credits.value}:
             raise CampaignStateError("Only a paused campaign can be resumed.")
         if campaign.phone_number_id is None:
             raise CampaignExecutionError("Campaign has no phone number recorded; cannot resume.")
@@ -339,6 +465,32 @@ class CampaignExecutionService:
         for c in contacts:
             c.status = ContactStatus.skipped.value
         campaign.status = CampaignStatus.stopped.value
+        campaign.ends_at = utc_now()
+        db.commit()
+        return campaign
+
+    def cancel(self, db: Session, campaign_id: UUID, tenant_id: UUID) -> Campaign:
+        """Cancel queued work while allowing already active provider calls to finish."""
+        campaign = _require_campaign(db, campaign_id, tenant_id)
+        if campaign.status not in {
+            CampaignStatus.running.value, CampaignStatus.paused.value,
+            CampaignStatus.paused_credits.value, CampaignStatus.draft.value,
+            CampaignStatus.scheduled.value,
+        }:
+            raise CampaignStateError(f"Cannot cancel a campaign in '{campaign.status}' status.")
+        contacts = db.scalars(select(CampaignContact).where(
+            CampaignContact.campaign_id == campaign.id,
+            CampaignContact.status.in_([
+                ContactStatus.pending.value, ContactStatus.retry_scheduled.value,
+                ContactStatus.retry_pending.value, ContactStatus.queued.value,
+            ]),
+        )).all()
+        for contact in contacts:
+            contact.status = ContactStatus.cancelled.value
+            contact.retry_at = None
+            contact.callback_at = None
+            contact.lease_token = None
+        campaign.status = CampaignStatus.cancelled.value
         campaign.ends_at = utc_now()
         db.commit()
         return campaign
@@ -404,10 +556,14 @@ class CampaignExecutionService:
         phone = _require_usable_phone(db, campaign.phone_number_id, tenant_id)
         agent_id, from_number_id = _parse_provider_ids(employee, phone)
 
+        recover_stale_contacts(db)
+        if not _within_calling_window(campaign):
+            return None
         contact = db.scalar(
             select(CampaignContact).where(
                 CampaignContact.campaign_id == campaign.id,
-                CampaignContact.status == ContactStatus.pending.value,
+                CampaignContact.status.in_([ContactStatus.pending.value, ContactStatus.retry_scheduled.value]),
+                (CampaignContact.retry_at.is_(None) | (CampaignContact.retry_at <= utc_now())),
             ).order_by(CampaignContact.created_at)
         )
         if contact is None:
@@ -418,12 +574,15 @@ class CampaignExecutionService:
         try:
             require_minimum_balance(db, tenant_id, get_settings().minimum_call_balance_inr)
         except InsufficientBalanceError:
-            campaign.status = CampaignStatus.paused.value
+            campaign.status = CampaignStatus.paused_credits.value
             db.commit()
             return None
 
+        slot = reserve_campaign_slot(db, campaign, contact)
+        if slot is None:
+            return None
         return dispatch_single_contact(
-            db, campaign, contact, employee, phone, agent_id, from_number_id
+            db, campaign, contact, employee, phone, agent_id, from_number_id, slot
         )
 
 

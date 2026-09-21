@@ -21,6 +21,7 @@ from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.models.employee_interview_session import EmployeeInterviewSession
 from app.services.employee_prompt import compose_employee_configuration
+from app.services.script_language_validation import validate_customer_facing_script
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,14 @@ class InterviewGeneration:
     is_complete: bool
     suggestions: list[dict[str, str]] = field(default_factory=list)
     ready_to_build: bool = False
+
+
+@dataclass(frozen=True)
+class LLMAttempt:
+    provider: str
+    model: str
+    api_key: str
+    base_url: str | None = None
 
 
 class LLMService(ABC):
@@ -268,9 +277,10 @@ class RealLLMService(LLMService):
         """
         provider = (self.settings.effective_llm_provider or "").strip()
         model = (self.settings.effective_llm_model or "").strip()
+        attempts = self._configured_llm_attempts()
         request_id = uuid4()
         logger.info("LLM script generation started request_id=%s provider=%s model=%s base_url=%s employee_id=%s", request_id, provider or "<unset>", model or "<unset>", self.settings.effective_llm_base_url or "<default>", getattr(employee, "id", "<unknown>"))
-        if not provider or not model or not self.settings.effective_llm_api_key:
+        if not attempts:
             logger.error("LLM script generation configuration failure request_id=%s provider_configured=%s model_configured=%s api_key_configured=%s", request_id, bool(provider), bool(model), bool(self.settings.effective_llm_api_key))
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM script generation is not configured.")
         context = {
@@ -313,7 +323,8 @@ class RealLLMService(LLMService):
             "Write only customer-facing spoken examples, opening phrases, questions, objection "
             "responses, CTA phrases, and closing phrases in the selected language. Do not translate "
             "the whole internal prompt. Spoken language must sound natural for a real phone call, "
-            "not like word-for-word translation; keep sentences short and avoid repetitive filler.\n\n"
+            "not like word-for-word translation; write like a real person on a phone call, not a textbook, government document, translator, or formal speech. Keep sentences short and avoid repetitive filler. "
+            "Style examples only (never copy their business facts): English: 'Hi, I am calling to share a quick update. Would you like to hear more?' Telugu: 'నమస్కారం అండి, ఒక quick update కోసం call చేశాను. మీకు details కావాలా?' Hindi: 'नमस्ते जी, एक quick update के लिए call किया है। आपको details चाहिए?'\n\n"
             "SECTION DESIGN:\n"
             "1. Identity & Purpose: identify company, employee, role, caller, reason, exact business objective, success, relevant information, and boundaries.\n"
             "2. Greeting & Intro: create a context-specific inbound or outbound opening with name, company, concise reason, permission when appropriate, and a transition to one question.\n"
@@ -336,11 +347,11 @@ class RealLLMService(LLMService):
         )
         if str(context["language"]).casefold() in {"hindi", "hi", "hi-in", "hindi (india)"}:
             system += (
-                "\n\nHINDI HINGLISH CONTRACT (NON-NEGOTIABLE): Keep internal instructions in English, but every customer-facing spoken example must use natural Indian Hindi-English mixing. Hindi words MUST be written in Devanagari Unicode; English business and conversational words MUST remain in Latin script. Never output Roman Hindi, pure formal/literary/textbook Hindi, or English transliterated into Devanagari. Do not infer output script from Roman Hindi input. Every spoken example must visibly combine Devanagari Hindi grammar with natural English terms such as requirement, budget, location, details, appointment, booking, service, product, offer, price, call, team, confirm, available, follow-up, WhatsApp, or support where appropriate. Do not force English into every sentence, but do not translate all English business terms into Hindi. Before returning JSON, validate every spoken example for Devanagari plus natural Latin-script English mixing."
+                "\n\nHINDI HINGLISH CONTRACT (NON-NEGOTIABLE): Use natural contemporary Hindi-English mixing. Hindi words MUST use Devanagari; common business terms such as policy, renewal, service, offer, price, call, details, appointment, confirm, and support may remain English. Never use Roman Hindi, Sanskrit-heavy, literary, textbook, overly formal, or regional wording unless requested."
             )
         if str(context["language"]).casefold() in {"telugu", "te", "te-in", "telugu (india)"}:
             system += (
-                "\n\nTELUGU TELUGISH CONTRACT (NON-NEGOTIABLE): Keep internal instructions in English, but every customer-facing spoken example must use natural urban Telugu-English mixing. Telugu words MUST be written in Telugu Unicode script; English business and conversational words MUST remain in Latin script. Never output Roman Telugu, Tinglish, pure formal/literary/textbook Telugu, or English transliterated into Telugu script. Do not infer output script from Roman Telugu input. Every spoken example must visibly combine Telugu-script grammar with natural English terms such as requirement, budget, location, details, appointment, booking, service, product, offer, price, call, team, confirm, available, follow-up, WhatsApp, or support where appropriate. Do not force English into every sentence, but do not translate all English business terms into Telugu. Before returning JSON, validate every spoken example for Telugu Unicode plus natural Latin-script English mixing."
+                "\n\nTELUGU TELUGISH CONTRACT (NON-NEGOTIABLE): Use natural contemporary Telugu-English mixing. Telugu words MUST use Telugu Unicode; common business terms such as policy, renewal, service, offer, price, call, details, appointment, confirm, and support may remain English. Never use Roman/Tinglish Telugu, Sanskrit-heavy, literary, textbook, overly formal, or regional wording unless requested."
             )
         if str(context["call_type"]).casefold() == "outbound":
             system += (
@@ -359,33 +370,45 @@ class RealLLMService(LLMService):
                 "\n\nTELUGU NATURAL SENTENCE PATTERNS: Use correct modern Telugu grammar around English terms. Prefer exactly this style: 'నమస్కారం అండి, నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను. మీ insurance premium గురించి ఒక quick update ఇవ్వడానికి call చేశాను. మీకు ఈ offer గురించి details కావాలా?' Do not write 'నేను Akshay మాట్లాడుతున్నాను' when the company is being introduced; use 'నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను'. Keep 'insurance', 'premium', 'quick update', 'call', 'offer', and 'details' in English. Use Telugu postpositions and verbs in Telugu script, for example 'మీ budget ఎంత range లో ఉంది?', 'మీకు details WhatsApp లో share చేయనా?', and 'నేను team తో confirm చేస్తాను'."
             )
         user = json.dumps(context, ensure_ascii=False, indent=2)
-        payload = self._build_request(provider, model, system, user)
-        for attempt in range(2):
-            try:
-                response = self._perform_json_request(provider, payload)
-                break
-            except HTTPException as exc:
-                retryable_schema_error = (
-                    attempt == 0 and provider.casefold() in {"openai", "open-ai", "groq"}
-                    and "HTTP 400" in str(exc.detail)
-                )
-                if not retryable_schema_error:
-                    logger.error("LLM script generation failed request_id=%s status=%s detail=%s", request_id, exc.status_code, exc.detail, exc_info=True)
-                    raise HTTPException(status_code=exc.status_code, detail=f"{exc.detail} [request_id={request_id}]") from exc
-                logger.warning(
-                    "LLM script schema retry request_id=%s provider=%s model=%s attempt=2 correction=required_six_nonempty_sections",
-                    request_id, provider, model,
-                )
-                correction = (
-                    "\n\nCORRECTION: Your previous response was rejected because sections did not contain six items. "
-                    "Output exactly six objects now, one for each required key/title pair, with non-empty "
-                    "meaningful content in every content field. Do not reason aloud. Output JSON only."
-                )
-                payload = self._build_request(provider, model, system + correction, user)
-        else:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned no call script. [request_id={request_id}]")
+        response = self._perform_json_request_with_fallbacks(request_id, attempts, system, user)
         expected = ("Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
         expected_keys = ("identity_purpose", "greeting_intro", "qualification", "handling_objections", "call_to_action", "closing")
+        result = self._call_script_from_response(response, expected, expected_keys, request_id)
+        validation = validate_customer_facing_script(result, str(context["language"]))
+        if not validation.valid:
+            logger.warning(
+                "LLM script language validation retry request_id=%s language=%s issues=%s",
+                request_id, context["language"], validation.as_dict()["issues"],
+            )
+            correction = (
+                "\n\nCORRECTION: Your previous script failed deterministic language validation. "
+                "Rewrite the same six sections only. For Telugu, customer-facing Telugu words must use Telugu Unicode, while natural English business terms stay in Latin script; never use Roman/Tinglish Telugu. "
+                "For Hindi, customer-facing Hindi words must use Devanagari, while natural English business terms stay in Latin script; never use Roman Hindi. "
+                f"Validation issues: {json.dumps(validation.as_dict()['issues'], ensure_ascii=False)}"
+            )
+            response = self._perform_json_request_with_fallbacks(request_id, attempts, system + correction, user)
+            result = self._call_script_from_response(response, expected, expected_keys, request_id)
+            validation = validate_customer_facing_script(result, str(context["language"]))
+            if not validation.valid:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={
+                        "message": "The LLM returned a call script that failed language validation.",
+                        "request_id": str(request_id),
+                        "validation": validation.as_dict(),
+                    },
+                )
+        if str(context["call_type"]).casefold() == "outbound":
+            _validate_outbound_script(result, request_id)
+        return result
+
+    def _call_script_from_response(
+        self,
+        response: dict[str, Any],
+        expected: tuple[str, ...],
+        expected_keys: tuple[str, ...],
+        request_id: UUID,
+    ) -> dict[str, str]:
         sections = response.get("sections") if isinstance(response, dict) else None
         # Some JSON-mode providers follow the field contract but omit the
         # wrapper and return {identity_purpose: "...", ...}. Normalize that
@@ -435,7 +458,12 @@ class RealLLMService(LLMService):
                 finish_reason = (body["choices"][0] or {}).get("finish_reason")
             logger.info("LLM script provider response provider=%s status=%s finish_reason=%s body_keys=%s", provider, response.status_code, finish_reason, list(body) if isinstance(body, dict) else type(body).__name__)
             try:
-                text = self._extract_anthropic_text(body) if provider.casefold() in {"anthropic", "claude"} else self._extract_openai_text(body)
+                if provider.casefold() in {"anthropic", "claude"}:
+                    text = self._extract_anthropic_text(body)
+                elif provider.casefold() in {"gemini", "google", "google-gemini"}:
+                    text = self._extract_gemini_text(body)
+                else:
+                    text = self._extract_openai_text(body)
             except HTTPException as exc:
                 logger.error("LLM script completion extraction failed provider=%s detail=%s response_body=%s", provider, exc.detail, re.sub(r"\s+", " ", response.text or "")[:1200], exc_info=True)
                 raise
@@ -466,6 +494,54 @@ class RealLLMService(LLMService):
             logger.exception("LLM script generation failed provider=%s", provider)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The LLM provider could not generate a valid call script.") from exc
 
+    def _perform_json_request_with_fallbacks(
+        self, request_id: UUID, attempts: list[LLMAttempt], system: str, user: str
+    ) -> dict[str, Any]:
+        last_error: HTTPException | None = None
+        for index, llm_attempt in enumerate(attempts):
+            payload = self._build_request(
+                llm_attempt.provider, llm_attempt.model, system, user,
+                api_key=llm_attempt.api_key, base_url=llm_attempt.base_url,
+            )
+            for schema_attempt in range(2):
+                try:
+                    return self._perform_json_request(llm_attempt.provider, payload)
+                except HTTPException as exc:
+                    last_error = exc
+                    retryable_schema_error = (
+                        schema_attempt == 0
+                        and llm_attempt.provider.casefold() in {"openai", "open-ai", "groq"}
+                        and "HTTP 400" in str(exc.detail)
+                    )
+                    if retryable_schema_error:
+                        logger.warning(
+                            "LLM script schema retry request_id=%s provider=%s model=%s attempt=2 correction=required_six_nonempty_sections",
+                            request_id, llm_attempt.provider, llm_attempt.model,
+                        )
+                        correction = (
+                            "\n\nCORRECTION: Your previous response was rejected because sections did not contain six items. "
+                            "Output exactly six objects now, one for each required key/title pair, with non-empty "
+                            "meaningful content in every content field. Do not reason aloud. Output JSON only."
+                        )
+                        payload = self._build_request(
+                            llm_attempt.provider, llm_attempt.model, system + correction, user,
+                            api_key=llm_attempt.api_key, base_url=llm_attempt.base_url,
+                        )
+                        continue
+                    if index >= len(attempts) - 1:
+                        logger.error("LLM script generation failed request_id=%s status=%s detail=%s", request_id, exc.status_code, exc.detail, exc_info=True)
+                        raise HTTPException(status_code=exc.status_code, detail=f"{exc.detail} [request_id={request_id}]") from exc
+                    logger.warning(
+                        "LLM script fallback request_id=%s provider=%s model=%s failure_category=%s next_provider=%s next_model=%s",
+                        request_id, llm_attempt.provider, llm_attempt.model, _failure_category(exc),
+                        attempts[index + 1].provider, attempts[index + 1].model,
+                    )
+                    break
+        raise last_error or HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"The LLM returned no call script. [request_id={request_id}]",
+        )
+
     def _to_generation(self, response: InterviewLLMResponse) -> InterviewGeneration:
         return InterviewGeneration(
             assistant_message=response.assistant_message.strip(),
@@ -478,6 +554,38 @@ class RealLLMService(LLMService):
             ready_to_build=response.ready_to_build or response.is_complete,
         )
 
+    def _configured_llm_attempts(self) -> list[LLMAttempt]:
+        attempts: list[LLMAttempt] = []
+
+        def add(provider: str | None, model: str | None, api_key: str | None, base_url: str | None = None) -> None:
+            provider = (provider or "").strip()
+            model = (model or "").strip()
+            api_key = (api_key or "").strip()
+            base_url = (base_url or "").strip() or None
+            if not provider or not model or not api_key:
+                return
+            fingerprint = (provider.casefold(), model, api_key, base_url or "")
+            if any((item.provider.casefold(), item.model, item.api_key, item.base_url or "") == fingerprint for item in attempts):
+                return
+            attempts.append(LLMAttempt(provider=provider, model=model, api_key=api_key, base_url=base_url))
+
+        add(
+            self.settings.effective_llm_provider,
+            self.settings.effective_llm_model,
+            self.settings.effective_llm_api_key,
+            self.settings.effective_llm_base_url,
+        )
+        groq_model = getattr(self.settings, "groq_model", None) or getattr(self.settings, "effective_llm_model", None)
+        groq_base_url = getattr(self.settings, "groq_base_url", None) or "https://api.groq.com/openai/v1"
+        add("groq", groq_model, getattr(self.settings, "groq_api_key", None), groq_base_url)
+        add(
+            "groq",
+            getattr(self.settings, "groq_model_2", None) or groq_model,
+            getattr(self.settings, "groq_api_key_2", None),
+            getattr(self.settings, "groq_base_url_2", None) or groq_base_url,
+        )
+        return attempts
+
     def _generate_turn(
         self,
         employee: AIEmployee,
@@ -488,11 +596,12 @@ class RealLLMService(LLMService):
     ) -> InterviewLLMResponse:
         provider = (self.settings.effective_llm_provider or "").strip()
         model = (self.settings.effective_llm_model or "").strip()
-        if not provider:
+        attempts = self._configured_llm_attempts()
+        if not attempts and not provider:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM provider is not configured")
-        if not model:
+        if not attempts and not model:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM model is not configured")
-        if not self.settings.effective_llm_api_key:
+        if not attempts:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="LLM API credentials are not configured on the backend.",
@@ -502,39 +611,34 @@ class RealLLMService(LLMService):
         user_prompt = self._build_user_prompt(employee, questions, answers, configuration, initial_turn)
         request_id = uuid4()
         started = time.perf_counter()
-        payload = self._build_request(provider, model, system_prompt, user_prompt)
-        try:
-            raw_response = self._perform_request(provider, payload)
-        except HTTPException as first_error:
-            fallback_key = getattr(self.settings, "groq_api_key_2", None)
-            if not fallback_key or provider.casefold() not in {"openai", "open-ai", "groq"}:
-                logger.warning(
-                    "[INTERVIEW_ANSWER_ERROR] request_id=%s provider=%s model=%s stage=llm_generation "
-                    "failure_category=%s exception_class=%s elapsed_ms=%d retry_attempted=false",
-                    request_id, provider, model, _failure_category(first_error), type(first_error).__name__,
-                    (time.perf_counter() - started) * 1000,
-                )
-                raise
-            fallback_model = getattr(self.settings, "groq_model_2", None) or model
-            fallback_base_url = getattr(self.settings, "groq_base_url_2", None) or self.settings.effective_llm_base_url
-            logger.info(
-                "[INTERVIEW_ANSWER_RETRY] request_id=%s provider=%s model=%s failure_category=%s",
-                request_id, provider, model, _failure_category(first_error),
-            )
-            fallback_payload = self._build_request(
-                provider, fallback_model, system_prompt, user_prompt,
-                api_key=fallback_key, base_url=fallback_base_url,
+        last_error: HTTPException | None = None
+        for index, attempt in enumerate(attempts):
+            payload = self._build_request(
+                attempt.provider, attempt.model, system_prompt, user_prompt,
+                api_key=attempt.api_key, base_url=attempt.base_url,
             )
             try:
-                raw_response = self._perform_request(provider, fallback_payload)
-            except HTTPException as second_error:
+                raw_response = self._perform_request(attempt.provider, payload)
+                provider = attempt.provider
+                model = attempt.model
+                break
+            except HTTPException as error:
+                last_error = error
+                if index >= len(attempts) - 1:
+                    logger.warning(
+                        "[INTERVIEW_ANSWER_ERROR] request_id=%s provider=%s model=%s stage=llm_generation "
+                        "failure_category=%s exception_class=%s elapsed_ms=%d retry_attempted=%s",
+                        request_id, attempt.provider, attempt.model, _failure_category(error), type(error).__name__,
+                        (time.perf_counter() - started) * 1000, index > 0,
+                    )
+                    raise
                 logger.warning(
-                    "[INTERVIEW_ANSWER_ERROR] request_id=%s provider=%s model=%s stage=llm_generation "
-                    "failure_category=%s exception_class=%s elapsed_ms=%d retry_attempted=true",
-                    request_id, provider, fallback_model, _failure_category(second_error), type(second_error).__name__,
-                    (time.perf_counter() - started) * 1000,
+                    "[INTERVIEW_ANSWER_RETRY] request_id=%s provider=%s model=%s failure_category=%s next_provider=%s next_model=%s",
+                    request_id, attempt.provider, attempt.model, _failure_category(error),
+                    attempts[index + 1].provider, attempts[index + 1].model,
                 )
-                raise
+        else:
+            raise last_error or HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM provider is not configured")
         try:
             return self._parse_response(raw_response)
         except HTTPException as error:
@@ -542,7 +646,7 @@ class RealLLMService(LLMService):
                 "[INTERVIEW_ANSWER_ERROR] request_id=%s provider=%s model=%s stage=llm_json_parse "
                 "failure_category=%s exception_class=%s elapsed_ms=%d retry_attempted=%s",
                 request_id, provider, model, _failure_category(error), type(error).__name__,
-                (time.perf_counter() - started) * 1000, bool(getattr(self.settings, "groq_api_key_2", None)),
+                (time.perf_counter() - started) * 1000, len(attempts) > 1,
             )
             raise
 
@@ -662,7 +766,7 @@ class RealLLMService(LLMService):
                 "method": "POST",
                 "url": f"{base_url}/chat/completions",
                 "headers": {
-                    "Authorization": f"Bearer {self.settings.effective_llm_api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 "json": {
@@ -679,13 +783,34 @@ class RealLLMService(LLMService):
                     "response_format": response_format,
                 },
             }
+        if normalized in {"gemini", "google", "google-gemini"}:
+            api_key = api_key or self.settings.effective_llm_api_key
+            base_url = (base_url or self.settings.effective_llm_base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+            return {
+                "method": "POST",
+                "url": f"{base_url}/models/{model}:generateContent",
+                "headers": {
+                    "x-goog-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                "json": {
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "maxOutputTokens": 5000,
+                        "responseMimeType": "application/json",
+                    },
+                },
+            }
         if normalized in {"anthropic", "claude"}:
-            base_url = (self.settings.effective_llm_base_url or "https://api.anthropic.com/v1").rstrip("/")
+            api_key = api_key or self.settings.effective_llm_api_key
+            base_url = (base_url or self.settings.effective_llm_base_url or "https://api.anthropic.com/v1").rstrip("/")
             return {
                 "method": "POST",
                 "url": f"{base_url}/messages",
                 "headers": {
-                    "x-api-key": self.settings.effective_llm_api_key,
+                    "x-api-key": api_key,
                     "anthropic-version": "2023-06-01",
                     "Content-Type": "application/json",
                 },
@@ -747,6 +872,8 @@ class RealLLMService(LLMService):
 
         if provider.casefold() in {"anthropic", "claude"}:
             text = self._extract_anthropic_text(body)
+        elif provider.casefold() in {"gemini", "google", "google-gemini"}:
+            text = self._extract_gemini_text(body)
         else:
             text = self._extract_openai_text(body)
 
@@ -790,6 +917,23 @@ class RealLLMService(LLMService):
             )
         return "\n".join(text_parts)
 
+    def _extract_gemini_text(self, body: dict[str, Any]) -> str:
+        candidates = body.get("candidates") or []
+        if not candidates:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="The LLM provider returned no completion candidates.",
+            )
+        content = candidates[0].get("content") or {}
+        parts = content.get("parts") or []
+        text = "".join(part.get("text", "") for part in parts if isinstance(part, dict))
+        if not text:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="The LLM provider returned no text content.",
+            )
+        return text
+
     def _recover_json(self, text: str) -> dict[str, Any]:
         cleaned = text.strip()
         if cleaned.startswith("```"):
@@ -819,6 +963,37 @@ class RealLLMService(LLMService):
                 detail="The LLM provider response must be a JSON object.",
             )
         return parsed
+
+
+def _has_script_chars(value: str, start: int, end: int) -> bool:
+    return any(start <= ord(char) <= end for char in value)
+
+
+def _customer_facing_text(script: dict[str, str]) -> str:
+    return "\n".join(
+        script.get(title, "")
+        for title in ("Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
+    )
+
+
+def _validate_generated_script_language(script: dict[str, str], language: str, request_id) -> None:
+    normalized = str(language or "").casefold()
+    text = _customer_facing_text(script)
+    if normalized in {"telugu", "te", "te-in", "telugu (india)"} and not _has_script_chars(text, 0x0C00, 0x0C7F):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned Telugu script without Telugu Unicode. [request_id={request_id}]")
+    if normalized in {"hindi", "hi", "hi-in", "hindi (india)"} and not _has_script_chars(text, 0x0900, 0x097F):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned Hindi script without Devanagari Unicode. [request_id={request_id}]")
+
+
+def _validate_outbound_script(script: dict[str, str], request_id) -> None:
+    early = "\n".join(script.get(title, "") for title in ("Greeting & Intro", "Qualification")).casefold()
+    forbidden = (
+        "may i know your name", "can i know your name", "can you tell me your details",
+        "what is your requirement", "what product do you currently use", "what is your budget",
+        "do you know about our product", "have you heard about our product",
+    )
+    if any(phrase in early for phrase in forbidden):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned an outbound script that opens with customer interrogation. [request_id={request_id}]")
 
 
 def build_default_llm_service() -> LLMService:

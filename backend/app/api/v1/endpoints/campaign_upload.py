@@ -3,6 +3,10 @@ from __future__ import annotations
 import csv
 import io
 import re
+import hashlib
+import jwt
+from datetime import datetime, timedelta, timezone
+from cryptography.fernet import Fernet
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +20,7 @@ from app.models.campaign import Campaign
 from app.models.campaign_contact import CampaignContact
 from app.models.enums import CampaignStatus, ContactStatus
 from app.services.auth import AuthenticatedUser
+from app.core.config import get_settings
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -42,6 +47,18 @@ def _normalize_phone(raw: str) -> str:
 
 def _is_valid_e164(phone: str) -> bool:
     return bool(E164_RE.match(phone))
+
+
+def _upload_cipher() -> Fernet:
+    key = hashlib.sha256(get_settings().auth_secret_key.encode()).digest()
+    import base64
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
+def _make_import_token(campaign_id: UUID, tenant_id: UUID, rows: list[dict]) -> str:
+    import json, base64
+    encrypted_rows = _upload_cipher().encrypt(json.dumps(rows, separators=(",", ":")).encode()).decode()
+    return jwt.encode({"purpose": "campaign_import", "campaign_id": str(campaign_id), "tenant_id": str(tenant_id), "rows": encrypted_rows, "exp": datetime.now(timezone.utc) + timedelta(minutes=15)}, get_settings().auth_secret_key, algorithm="HS256")
 
 
 def _parse_csv(content: bytes) -> list[dict[str, str]]:
@@ -166,7 +183,7 @@ async def upload_contacts_preview(
     is_csv = filename.endswith(".csv") or content_type in {"text/csv", "application/csv"}
 
     if not is_csv and not is_xlsx and not is_xls:
-        raise HTTPException(status_code=422, detail="Only CSV and XLSX files are supported.")
+        raise HTTPException(status_code=422, detail="Only CSV, XLS, and XLSX files are supported.")
 
     raw_content = await file.read()
     if len(raw_content) > MAX_UPLOAD_BYTES:
@@ -185,13 +202,9 @@ async def upload_contacts_preview(
     result = _process_rows(raw_rows)
 
     # Encode valid rows as a simple JSON token for the confirm step
-    import json, base64
     token_data = {
-        "campaign_id": str(campaign_id),
-        "tenant_id": str(current_user.tenant.id),
-        "rows": result["valid"],
+        "token": _make_import_token(campaign_id, current_user.tenant.id, result["valid"]),
     }
-    import_token = base64.b64encode(json.dumps(token_data).encode()).decode()
 
     return UploadPreview(
         total_rows=result["total_rows"],
@@ -200,7 +213,7 @@ async def upload_contacts_preview(
         duplicate_count=result["duplicate_count"],
         valid_sample=result["valid"][:10],
         invalid_rows=result["invalid_rows"][:20],
-        import_token=import_token,
+        import_token=token_data["token"],
     )
 
 
@@ -216,9 +229,12 @@ def upload_contacts_confirm(
     db: Session = Depends(get_db),
 ) -> ImportResult:
     """Commit a previously previewed upload. Validates token tenant/campaign match."""
-    import json, base64
     try:
-        token_data = json.loads(base64.b64decode(payload.import_token).decode())
+        token_data = jwt.decode(payload.import_token, get_settings().auth_secret_key, algorithms=["HS256"])
+        if token_data.get("purpose") != "campaign_import":
+            raise ValueError("wrong token purpose")
+        import json
+        rows = json.loads(_upload_cipher().decrypt(token_data["rows"].encode()).decode())
     except Exception as exc:
         raise HTTPException(status_code=422, detail="Invalid import token.") from exc
 
@@ -230,7 +246,7 @@ def upload_contacts_confirm(
 
     campaign = _get_campaign(campaign_id, current_user.tenant.id, db)
 
-    rows: list[dict] = token_data.get("rows", [])
+    rows: list[dict] = rows if isinstance(rows, list) else []
     if not rows:
         raise HTTPException(status_code=422, detail="No valid contacts in import token.")
 
@@ -264,4 +280,6 @@ def upload_contacts_confirm(
         imported += 1
 
     db.commit()
+    if imported == 0:
+        raise HTTPException(status_code=409, detail="This import has already been applied or contains no new contacts.")
     return ImportResult(imported=imported, skipped_duplicates=skipped)

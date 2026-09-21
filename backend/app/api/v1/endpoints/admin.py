@@ -8,6 +8,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.admin import ClientCreate, ClientRead, ClientCreated, ClientStatusUpdate
 from app.services.auth import AuthenticatedUser, hash_password, require_admin
+from app.services.wallets import grant_initial_promotional_credit
 
 router = APIRouter(prefix="/admin/clients", tags=["admin"])
 
@@ -29,7 +30,9 @@ def create_client(payload: ClientCreate, _: AuthenticatedUser = Depends(_admin),
     temporary_password = token_urlsafe(16)
     tenant = Tenant(name=payload.tenant_name, slug=f"{token_urlsafe(8).lower()}", status="active")
     user = User(tenant=tenant, email=email, full_name=payload.full_name, password_hash=hash_password(temporary_password), role="member", status="active", must_change_password=True)
-    db.add(user); db.commit(); db.refresh(user)
+    db.add(user); db.flush()
+    grant_initial_promotional_credit(db, tenant.id)
+    db.commit(); db.refresh(user)
     return ClientCreated(**_read(user).model_dump(), temporary_password=temporary_password)
 
 @router.patch("/{client_id}", response_model=ClientRead)

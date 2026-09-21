@@ -10,6 +10,11 @@ class WalletRead(BaseModel):
 
     id: UUID
     balance: Decimal
+    available_minutes: Decimal
+    available_value: Decimal
+    available_value_inr: Decimal
+    balance_status: str
+    low_balance_threshold_minutes: Decimal
     currency: str
     status: str
     call_price_per_minute: Decimal

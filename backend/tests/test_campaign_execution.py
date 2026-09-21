@@ -32,6 +32,7 @@ from app.main import app
 from app.models import AIEmployee, AIEmployeeVersion, Call, CreditWallet, PhoneNumber, Tenant, User
 from app.models.campaign import Campaign
 from app.models.campaign_contact import CampaignContact
+from app.models.campaign_execution_slot import CampaignExecutionSlot
 from app.models.enums import (
     CallDirection, CallStatus, CampaignStatus, ContactStatus,
     EmployeeStatus, NumberStatus,
@@ -41,6 +42,9 @@ from app.services.campaign_execution import (
     CampaignExecutionService,
     CampaignStateError,
     CampaignExecutionError,
+    reserve_campaign_slot,
+    release_campaign_slot,
+    recover_stale_slots,
 )
 
 
@@ -127,6 +131,40 @@ def _make_contact(db, tenant, campaign, *, phone="+919876543210", status=Contact
     db.commit()
     db.refresh(cc)
     return cc
+
+
+def test_durable_campaign_slot_limits_and_releases(exec_db):
+    db, tenant_a, _ = exec_db
+    emp = _make_employee(db, tenant_a)
+    camp = _make_campaign(db, tenant_a, emp)
+    camp.concurrency = 1
+    c1 = _make_contact(db, tenant_a, camp, phone="+919876543210")
+    c2 = _make_contact(db, tenant_a, camp, phone="+919876543211")
+
+    first = reserve_campaign_slot(db, camp, c1)
+    second = reserve_campaign_slot(db, camp, c2)
+    assert first is not None
+    assert second is None
+
+    assert release_campaign_slot(db, contact_id=c1.id) == 1
+    assert reserve_campaign_slot(db, camp, c2) is not None
+
+
+def test_stale_campaign_slot_is_recoverable(exec_db):
+    from datetime import timedelta
+    from app.db.base import utc_now
+
+    db, tenant_a, _ = exec_db
+    emp = _make_employee(db, tenant_a)
+    camp = _make_campaign(db, tenant_a, emp)
+    contact = _make_contact(db, tenant_a, camp)
+    slot = reserve_campaign_slot(db, camp, contact)
+    slot.reserved_at = utc_now() - timedelta(hours=1)
+    db.commit()
+
+    assert recover_stale_slots(db, lease_seconds=60) == 1
+    db.refresh(slot)
+    assert slot.released_at is not None
 
 
 def _api_client(db, user_index, monkeypatch):
@@ -553,7 +591,8 @@ def test_failed_call_marks_contact_failed(exec_db):
         app.dependency_overrides.clear()
 
     db.refresh(contact)
-    assert contact.status == ContactStatus.failed.value
+    assert contact.status == ContactStatus.retry_scheduled.value
+    assert contact.retry_at is not None
 
 
 # ── 13. Retry resets failed contacts ─────────────────────────────────────────

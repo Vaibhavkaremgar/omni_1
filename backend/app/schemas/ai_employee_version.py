@@ -21,7 +21,6 @@ class AIEmployeeVersionRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     provider_name: str | None = None
-    provider_agent_id: str | None = None
     provider_status: str | None = None
 
     @field_serializer("configuration")

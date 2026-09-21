@@ -15,16 +15,17 @@ const NAV_ITEMS = [
 
 interface SidebarProps {
   collapsed: boolean;
+  mobileOpen?: boolean;
   onToggle: () => void;
 }
 
-export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
+export default function Sidebar({ collapsed, mobileOpen = false, onToggle }: SidebarProps) {
   const location = useLocation();
   const { user } = useAuth();
 
   return (
     <aside
-      className={`h-screen sticky top-0 flex flex-col bg-white border-r border-gray-200 transition-all duration-300 ${
+      className={`${mobileOpen ? 'fixed inset-y-0 left-0 z-40' : 'hidden lg:flex'} h-screen sticky top-0 flex-col bg-white border-r border-gray-200 transition-all duration-300 ${
         collapsed ? 'w-[68px]' : 'w-60'
       }`}
     >

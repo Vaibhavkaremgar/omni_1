@@ -10,7 +10,7 @@ from app.models.enums import CallDirection, CallStatus
 from app.services.call_results import CallResultService
 from app.services.instant_calls import InstantCallService
 from app.services.pricing import calculate_call_charge
-from app.services.wallets import InsufficientBalanceError, ensure_wallet, internal_top_up, require_minimum_balance
+from app.services.wallets import InsufficientBalanceError, ensure_wallet, grant_initial_promotional_credit, internal_top_up, require_minimum_balance
 
 from test_instant_calls import authenticated_client, call_database, create_employee, create_number, request
 
@@ -40,6 +40,43 @@ def completed_payload(call, duration="4:30"):
 def test_pricing_uses_decimal_and_rounds_half_up():
     assert calculate_call_charge(270) == (Decimal("4.5000"), Decimal("36.00"))
     assert calculate_call_charge(272) == (Decimal("4.5333"), Decimal("36.27"))
+
+
+def test_initial_promotion_is_exact_and_idempotent(call_database):
+    db, tenant_a, _ = call_database
+    wallet = grant_initial_promotional_credit(db, tenant_a.id)
+    grant_initial_promotional_credit(db, tenant_a.id)
+    db.commit(); db.refresh(wallet)
+    assert wallet.balance_credits == Decimal("340.0000")
+    assert wallet.promotional_minutes == Decimal("30.0000")
+    grants = db.scalars(select(CreditTransaction).where(CreditTransaction.reference_type == "initial_signup_promotion")).all()
+    assert len(grants) == 1 and grants[0].extra_data["grant_value_inr"] == "240"
+
+
+def test_promotional_minutes_and_value_track_one_and_two_minute_calls(call_database):
+    db, tenant_a, _ = call_database
+    wallet = db.scalar(select(CreditWallet).where(CreditWallet.tenant_id == tenant_a.id))
+    wallet.balance_credits = Decimal("240"); wallet.promotional_minutes = Decimal("30"); db.commit()
+    employee = create_employee(db, tenant_a); phone = create_number(db, tenant_a)
+    first = local_call(db, tenant_a, employee, phone, "promo-one"); second = local_call(db, tenant_a, employee, phone, "promo-two")
+    service = CallResultService(); service.process_post_call(db, completed_payload(first, "1:00")); service.process_post_call(db, completed_payload(second, "2:00"))
+    db.refresh(wallet)
+    assert wallet.balance_credits == Decimal("216.00")
+    assert wallet.promotional_minutes == Decimal("27.0000")
+    assert wallet.balance_credits == wallet.promotional_minutes * Decimal("8")
+
+
+def test_wrong_number_and_dnc_do_not_charge(call_database):
+    db, tenant_a, _ = call_database
+    wallet = db.scalar(select(CreditWallet).where(CreditWallet.tenant_id == tenant_a.id)); wallet.balance_credits = Decimal("240"); wallet.promotional_minutes = Decimal("30"); db.commit()
+    employee = create_employee(db, tenant_a); phone = create_number(db, tenant_a)
+    wrong = local_call(db, tenant_a, employee, phone, "wrong-number"); dnc = local_call(db, tenant_a, employee, phone, "dnc-call")
+    service = CallResultService()
+    service.process_post_call(db, {**completed_payload(wrong, "1:00"), "outcome": "wrong_number"})
+    service.process_post_call(db, {**completed_payload(dnc, "1:00"), "outcome": "do_not_call"})
+    db.refresh(wallet)
+    assert wallet.balance_credits == Decimal("240.0000") and wallet.promotional_minutes == Decimal("30.0000")
+    assert db.scalars(select(UsageRecord).where(UsageRecord.tenant_id == tenant_a.id)).all() == []
 
 
 def test_completed_call_creates_one_usage_record_and_debit(call_database):
@@ -144,6 +181,22 @@ def test_billing_endpoints_are_authenticated_and_tenant_scoped(call_database, mo
         app.dependency_overrides.clear()
     with TestClient(app) as unauthenticated:
         assert unauthenticated.get("/api/v1/billing/wallet").status_code == 401
+
+
+def test_wallet_api_reports_backend_authoritative_balance_status(call_database, monkeypatch):
+    db, tenant_a, _ = call_database
+    wallet = db.scalar(select(CreditWallet).where(CreditWallet.tenant_id == tenant_a.id))
+    api = authenticated_client(db, "wallet-status-a", monkeypatch)
+    try:
+        with api:
+            for amount, status_name in ((Decimal("48.01"), "AVAILABLE"), (Decimal("40.00"), "LOW_BALANCE"), (Decimal("0"), "EXHAUSTED"), (Decimal("-1"), "EXHAUSTED")):
+                wallet.balance_credits = amount; db.commit()
+                data = api.get("/api/v1/billing/wallet", headers={"Authorization": "Bearer a"}).json()
+                assert data["balance_status"] == status_name
+                assert Decimal(str(data["available_value_inr"])) == max(Decimal("0"), amount).quantize(Decimal("0.01"))
+                assert Decimal(str(data["low_balance_threshold_minutes"])) == Decimal("5")
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_internal_top_up_is_not_a_tenant_api_operation(call_database):

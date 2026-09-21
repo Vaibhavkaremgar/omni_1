@@ -8,6 +8,8 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
+import ipaddress
 
 import httpx
 
@@ -16,9 +18,30 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+RESEARCH_CONTEXT_KEYS = ("business_name", "business_description", "purpose", "original_requirement", "website_url", "products", "products_services")
+
+
 def research_fingerprint(configuration: dict[str, Any]) -> str:
-    source = "\n".join(str(configuration.get(key) or "").strip() for key in ("business_name", "business_description"))
-    return hashlib.sha256(source.casefold().encode("utf-8")).hexdigest()
+    context = {key: str(configuration.get(key) or "").strip() for key in RESEARCH_CONTEXT_KEYS}
+    return hashlib.sha256(json.dumps(context, sort_keys=True, ensure_ascii=True).casefold().encode("utf-8")).hexdigest()
+
+
+def validate_public_research_url(value: str | None) -> str | None:
+    """Allow only public HTTP(S) origins; research must never target private services."""
+    value = str(value or "").strip()
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("Website URL must be a public HTTP or HTTPS URL.")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+            raise ValueError("Private or local website URLs are not allowed.")
+    except ValueError as exc:
+        if str(exc).startswith("Private or local"):
+            raise
+    return value
 
 
 def ensure_business_research(configuration: dict[str, Any], client: httpx.Client | None = None) -> dict[str, Any]:
@@ -31,6 +54,7 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
 
     business_name = str(config.get("business_name") or "").strip()
     description = str(config.get("business_description") or "").strip()
+    website_url = validate_public_research_url(config.get("website_url"))
     if not business_name:
         config["business_research"] = {"status": "unavailable", "reason": "business_name_missing", "fingerprint": fingerprint}
         return config
@@ -48,6 +72,7 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
         f"Company name: {business_name}\nBusiness description: {description}\n"
         f"Original requirement: {config.get('original_requirement') or ''}\n"
         f"Employee role/purpose: {config.get('role') or config.get('job_role') or config.get('purpose') or ''}\n"
+        f"Official website to prioritize when relevant: {website_url or 'None provided'}\n"
         f"Language: {config.get('language') or ''}\nCall type: {config.get('call_type') or ''}"
     )
     payload = {
@@ -85,6 +110,7 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
             "sources": [{"title": str(item.get("title") or ""), "uri": str(item.get("uri") or "")} for item in sources if isinstance(item, dict) and item.get("uri")],
             "researched_at": datetime.now(timezone.utc).isoformat(), "fingerprint": fingerprint,
             "research_query": prompt,
+            "context": {key: config.get(key) for key in RESEARCH_CONTEXT_KEYS if config.get(key)},
         }
         if not snapshot["sources"]:
             snapshot["status"] = "unavailable"

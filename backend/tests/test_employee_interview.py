@@ -61,7 +61,7 @@ def employee_payload():
     return {
         "name": "Interview Assistant",
         "purpose": "Help customers choose products.",
-        "call_type": "both",
+        "call_type": "outbound",
         "llm_provider": "OpenAI",
         "llm_model": "gpt-4o-mini",
         "language": "English",
@@ -158,6 +158,24 @@ def test_groq_env_vars_map_to_real_llm_service(monkeypatch):
     assert isinstance(svc, RealLLMService)
 
 
+def test_gemini_env_vars_take_priority_over_groq(monkeypatch):
+    from app.core.config import Settings
+    import app.services.employee_interview as svc_module
+    settings = Settings(
+        GEMINI_API_KEY="gemini-test",
+        GEMINI_MODEL="gemini-2.5-flash-lite",
+        GROQ_API_KEY="gsk_test",
+        GROQ_MODEL="llama-3.3-70b-versatile",
+        GROQ_BASE_URL="https://api.groq.com/openai/v1",
+    )
+    monkeypatch.setattr(svc_module, "get_settings", lambda: settings)
+    svc = build_default_llm_service()
+    assert isinstance(svc, RealLLMService)
+    assert settings.effective_llm_provider == "gemini"
+    assert settings.effective_llm_api_key == "gemini-test"
+    assert settings.effective_llm_model == "gemini-2.5-flash-lite"
+
+
 def test_missing_llm_credentials_use_development_service(monkeypatch):
     import app.services.employee_interview as svc_module
     # Provide a settings object with no LLM credentials at all
@@ -191,9 +209,37 @@ def test_real_llm_uses_groq_base_url_in_request():
         })}}]})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
-    employee = SimpleNamespace(name="Demo", purpose="Book appointments", call_type="both", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
+    employee = SimpleNamespace(name="Demo", purpose="Book appointments", call_type="outbound", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
     service.initial_question(employee)
     assert "groq.com" in seen_urls[0]
+
+
+def test_real_llm_uses_gemini_generate_content_request():
+    settings = SimpleNamespace(
+        effective_llm_provider="gemini",
+        effective_llm_api_key="gemini-test",
+        effective_llm_model="gemini-2.5-flash-lite",
+        effective_llm_base_url="https://generativelanguage.googleapis.com/v1beta",
+        llm_timeout_seconds=5.0,
+    )
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request):
+        seen["url"] = str(request.url)
+        seen["key"] = request.headers.get("x-goog-api-key")
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": json.dumps({
+            "assistant_message": "Hi", "next_question": "What is the goal?",
+            "configuration_updates": {}, "missing_topics": ["goals"],
+            "progress": 0, "is_complete": False, "ready_to_build": False, "suggestions": [],
+        })}]}}]})
+
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    employee = SimpleNamespace(name="Demo", purpose="Book appointments", call_type="outbound", language="en-US", llm_provider="Gemini", llm_model="gemini-2.5-flash-lite")
+    service.initial_question(employee)
+    assert "generateContent" in seen["url"]
+    assert seen["key"] == "gemini-test"
+    assert seen["body"]["generationConfig"]["responseMimeType"] == "application/json"
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +261,7 @@ def test_real_llm_service_error_propagates_without_fallback():
 
     real_svc = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
     interview_svc = EmployeeInterviewService(real_svc)
-    employee = SimpleNamespace(name="X", purpose="Y", call_type="both", language="en-US", llm_provider="OpenAI", llm_model="m")
+    employee = SimpleNamespace(name="X", purpose="Y", call_type="outbound", language="en-US", llm_provider="OpenAI", llm_model="m")
     with pytest.raises(HTTPException) as exc_info:
         interview_svc._next_generation(employee, ["q"], [{"answer": "a"}], {})
     assert exc_info.value.status_code == 503
@@ -255,7 +301,7 @@ def test_real_llm_receives_accumulated_context_and_returns_structured_suggestion
         })}}]})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
-    employee = SimpleNamespace(name="Demo", purpose="Book appointments", call_type="both", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
+    employee = SimpleNamespace(name="Demo", purpose="Book appointments", call_type="outbound", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
 
     # Dental brief
     gen = service.next_question(employee, ["What is this employee for?"], [{"answer": "Call dental leads and book appointments."}], {})
@@ -330,7 +376,7 @@ def test_different_briefs_produce_different_suggestions():
         })}}]})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
-    employee = SimpleNamespace(name="E", purpose="p", call_type="both", language="en-US", llm_provider="OpenAI", llm_model="m")
+    employee = SimpleNamespace(name="E", purpose="p", call_type="outbound", language="en-US", llm_provider="OpenAI", llm_model="m")
 
     dental = service.next_question(employee, ["q"], [{"answer": "Book dental appointments."}], {})
     realestate = service.next_question(employee, ["q"], [{"answer": "Qualify real-estate leads."}], {})
@@ -515,7 +561,7 @@ def test_ready_to_build_returns_no_suggestions_and_correct_message(interview_dat
 def test_llm_service_abstraction_works():
     service = DevelopmentLLMService()
     employee = SimpleNamespace(
-        name="Demo", purpose="Qualify leads for demos", call_type="both",
+        name="Demo", purpose="Qualify leads for demos", call_type="outbound",
         language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini",
     )
     initial = service.initial_question(employee)
@@ -601,7 +647,7 @@ def test_structured_response_validation_and_recovery():
         }}]})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
-    employee = SimpleNamespace(name="Demo", purpose="Qualify leads", call_type="both", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
+    employee = SimpleNamespace(name="Demo", purpose="Qualify leads", call_type="outbound", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
     generation = service.initial_question(employee)
     assert generation.suggested_next_question == "What is this employee for?"
     assert generation.missing_topics == ["goals"]
@@ -618,7 +664,7 @@ def test_malformed_llm_response_is_handled():
         return httpx.Response(200, json={"choices": [{"message": {"content": "this is not json"}}]})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
-    employee = SimpleNamespace(name="Demo", purpose="Qualify leads", call_type="both", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
+    employee = SimpleNamespace(name="Demo", purpose="Qualify leads", call_type="outbound", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
     with pytest.raises(HTTPException) as excinfo:
         service.initial_question(employee)
     assert excinfo.value.status_code == 502
@@ -635,7 +681,7 @@ def test_provider_api_failure_is_handled():
         return httpx.Response(500, json={"error": {"message": "boom"}})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
-    employee = SimpleNamespace(name="Demo", purpose="Qualify leads", call_type="both", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
+    employee = SimpleNamespace(name="Demo", purpose="Qualify leads", call_type="outbound", language="en-US", llm_provider="OpenAI", llm_model="gpt-4o-mini")
     with pytest.raises(HTTPException) as excinfo:
         service.initial_question(employee)
     assert excinfo.value.status_code == 503
@@ -652,7 +698,7 @@ def test_call_script_generation_uses_structured_context_and_returns_six_sections
 
     def handler(request: httpx.Request):
         seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": f"Insurance renewal guidance for {title}."} for title in titles]})}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": f"నమస్కారం అండి, renewal details గురించి మాట్లాడండి. ఈ section లో customer కి clear గా explain చేయండి."} for title in titles]})}}]})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
     employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
@@ -685,7 +731,7 @@ def test_groq_schema_failure_retries_once_and_accepts_valid_script():
         calls.append(json.loads(request.content))
         if len(calls) == 1:
             return httpx.Response(400, json={"error": {"message": "Generated JSON does not match the expected schema", "jsonschema": "/sections/minItems"}})
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": f"Specific guidance for {title}."} for title in titles]})}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": f"నమస్కారం అండి, renewal details గురించి మాట్లాడండి. ఈ section లో customer కి clear గా explain చేయండి."} for title in titles]})}}]})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
     employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
@@ -711,3 +757,32 @@ def test_groq_schema_failure_retry_is_bounded():
         service.generate_call_script(employee, {})
     assert excinfo.value.status_code == 502
     assert len(calls) == 2
+
+
+def test_call_script_language_failure_retries_once_and_accepts_corrected_telugu():
+    settings = SimpleNamespace(
+        effective_llm_provider="openai", effective_llm_api_key="test-key",
+        effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1",
+        llm_timeout_seconds=5.0,
+    )
+    titles = ["Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing"]
+    calls = []
+
+    def response_for(content: str):
+        return {"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": content} for title in titles]}
+
+    def handler(request: httpx.Request):
+        calls.append(json.loads(request.content))
+        content = (
+            "Nenu KMG Insurance nundi maatladutunnanu. Mee policy renewal gurinchi call chesanu."
+            if len(calls) == 1 else
+            "నమస్కారం అండి, నేను KMG Insurance నుంచి మాట్లాడుతున్నాను. మీ policy renewal గురించి call చేశాను."
+        )
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(response_for(content))}}]})
+
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
+    result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "original_requirement": "Renew policies", "language": "Telugu"})
+    assert tuple(result) == tuple(titles)
+    assert len(calls) == 2
+    assert "failed deterministic language validation" in calls[1]["messages"][0]["content"]
