@@ -1,4 +1,4 @@
-import json
+﻿import json
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -24,6 +24,7 @@ from app.services.employee_interview import (
     RealLLMService,
     build_default_llm_service,
 )
+from design_fixtures import design_response
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +143,7 @@ def install_interview_service(monkeypatch, service: LLMService):
 
 
 # ---------------------------------------------------------------------------
-# Part A — Groq env variable mapping
+# Part A â€” Groq env variable mapping
 # ---------------------------------------------------------------------------
 
 def test_groq_env_vars_map_to_real_llm_service(monkeypatch):
@@ -158,10 +159,11 @@ def test_groq_env_vars_map_to_real_llm_service(monkeypatch):
     assert isinstance(svc, RealLLMService)
 
 
-def test_gemini_env_vars_take_priority_over_groq(monkeypatch):
+def test_explicit_llm_provider_can_select_groq_over_gemini(monkeypatch):
     from app.core.config import Settings
     import app.services.employee_interview as svc_module
     settings = Settings(
+        LLM_PROVIDER="groq",
         GEMINI_API_KEY="gemini-test",
         GEMINI_MODEL="gemini-2.5-flash-lite",
         GROQ_API_KEY="gsk_test",
@@ -171,9 +173,30 @@ def test_gemini_env_vars_take_priority_over_groq(monkeypatch):
     monkeypatch.setattr(svc_module, "get_settings", lambda: settings)
     svc = build_default_llm_service()
     assert isinstance(svc, RealLLMService)
-    assert settings.effective_llm_provider == "gemini"
-    assert settings.effective_llm_api_key == "gemini-test"
-    assert settings.effective_llm_model == "gemini-2.5-flash-lite"
+    assert settings.effective_llm_provider == "groq"
+    assert settings.effective_llm_api_key == "gsk_test"
+    assert settings.effective_llm_model == "llama-3.3-70b-versatile"
+
+
+def test_prompt_first_generation_sends_minimal_groq_schema():
+    settings = SimpleNamespace(
+        effective_llm_provider="groq", effective_llm_api_key="test-key",
+        effective_llm_model="openai/gpt-oss-20b", effective_llm_base_url="https://api.groq.com/openai/v1",
+        llm_timeout_seconds=5.0,
+    )
+    seen = {}
+
+    def handler(request: httpx.Request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"prompt": "Be a helpful appointment coordinator."})}}]})
+
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    employee = SimpleNamespace(name="Anjali", purpose="Confirm appointments", call_type="outbound", language="Telugu")
+    result = service.generate_employee_prompt(employee, {"business_name": "Life Hospitals", "purpose": employee.purpose, "language": "Telugu", "call_type": "outbound"})
+    assert result == "Be a helpful appointment coordinator."
+    response_format = seen["response_format"]["json_schema"]
+    assert response_format["name"] == "employee_prompt"
+    assert response_format["schema"] == {"type": "object", "properties": {"prompt": {"type": "string", "minLength": 1, "maxLength": 30000}}, "required": ["prompt"], "additionalProperties": False}
 
 
 def test_missing_llm_credentials_use_development_service(monkeypatch):
@@ -243,7 +266,7 @@ def test_real_llm_uses_gemini_generate_content_request():
 
 
 # ---------------------------------------------------------------------------
-# Part A — No silent fallback
+# Part A â€” No silent fallback
 # ---------------------------------------------------------------------------
 
 def test_real_llm_service_error_propagates_without_fallback():
@@ -268,7 +291,7 @@ def test_real_llm_service_error_propagates_without_fallback():
 
 
 # ---------------------------------------------------------------------------
-# Part A — Accumulated brief sent to LLM
+# Part A â€” Accumulated brief sent to LLM
 # ---------------------------------------------------------------------------
 
 def test_real_llm_receives_accumulated_context_and_returns_structured_suggestions():
@@ -308,14 +331,14 @@ def test_real_llm_receives_accumulated_context_and_returns_structured_suggestion
     assert "Call dental leads and book appointments." in seen_prompts[0]
     assert gen.suggestions[0]["question"] == "What treatment details should the employee collect before booking?"
 
-    # Real-estate brief — different suggestions
+    # Real-estate brief â€” different suggestions
     gen2 = service.next_question(employee, ["What is this employee for?"], [{"answer": "Qualify real-estate leads for demos."}], {})
     assert "Qualify real-estate leads for demos." in seen_prompts[1]
     assert gen2.suggestions[0]["question"] != gen.suggestions[0]["question"]
 
 
 # ---------------------------------------------------------------------------
-# Part A — llm_used flag
+# Part A â€” llm_used flag
 # ---------------------------------------------------------------------------
 
 def test_llm_used_true_when_real_service(interview_database, monkeypatch):
@@ -339,7 +362,7 @@ def test_llm_used_false_when_dev_service():
 
 
 # ---------------------------------------------------------------------------
-# Part B — Contextual suggestions differ by brief
+# Part B â€” Contextual suggestions differ by brief
 # ---------------------------------------------------------------------------
 
 def test_different_briefs_produce_different_suggestions():
@@ -387,7 +410,7 @@ def test_different_briefs_produce_different_suggestions():
 
 
 # ---------------------------------------------------------------------------
-# Part C — Consumed questions
+# Part C â€” Consumed questions
 # ---------------------------------------------------------------------------
 
 def test_consume_suggestion_removes_from_visible_list(interview_database, monkeypatch):
@@ -443,7 +466,7 @@ def test_consumed_questions_do_not_return_after_next_answer(interview_database, 
                 headers=headers,
             )
 
-            # Submit an answer — fake service returns suggestions including "Who are the target customers?"
+            # Submit an answer â€” fake service returns suggestions including "Who are the target customers?"
             # but it must be filtered out because it is consumed
             answered = client.post(
                 f"/api/v1/employees/{eid}/interview/answer",
@@ -501,7 +524,7 @@ def test_question_already_in_brief_is_filtered(interview_database, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Part C — Deduplication normalization
+# Part C â€” Deduplication normalization
 # ---------------------------------------------------------------------------
 
 def test_normalize_strips_punctuation_and_case():
@@ -522,7 +545,7 @@ def test_filter_suggestions_removes_consumed():
 
 
 # ---------------------------------------------------------------------------
-# Part K — Completion behavior
+# Part K â€” Completion behavior
 # ---------------------------------------------------------------------------
 
 def test_ready_to_build_returns_no_suggestions_and_correct_message(interview_database, monkeypatch):
@@ -693,12 +716,17 @@ def test_call_script_generation_uses_structured_context_and_returns_six_sections
         effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1",
         llm_timeout_seconds=5.0,
     )
-    titles = ["Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing"]
+    titles = ["Renewal Context", "Policy Status", "Due Date Reminder", "Customer Questions", "Allowed Follow Up", "Completion Check"]
+    fixture = design_response(
+        titles,
+        speech="\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, renewal details \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f quick update \u0c07\u0c35\u0c4d\u0c35\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41.",
+        job="Call customers whose renewal date is within 7 days",
+    )
     seen = {}
 
     def handler(request: httpx.Request):
         seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": f"నమస్కారం అండి, renewal details గురించి మాట్లాడండి. ఈ section లో customer కి clear గా explain చేయండి."} for title in titles]})}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(fixture)}}]})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
     employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
@@ -707,8 +735,6 @@ def test_call_script_generation_uses_structured_context_and_returns_six_sections
     prompt = seen["body"]["messages"][1]["content"]
     assert "KMG Insurance" in prompt and "Telugu" in prompt and "renewal_status" in prompt
     assert "Escalation" in prompt
-
-
 def test_call_script_generation_failure_is_surfaced():
     settings = SimpleNamespace(effective_llm_provider="openai", effective_llm_api_key="test-key", effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1", llm_timeout_seconds=5.0)
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"choices": [{"message": {"content": "not json"}}]}))))
@@ -718,29 +744,74 @@ def test_call_script_generation_failure_is_surfaced():
     assert excinfo.value.status_code == 502
 
 
+def test_question_relevance_retry_contains_targeted_repair_feedback():
+    settings = SimpleNamespace(
+        effective_llm_provider="openai", effective_llm_api_key="test-key",
+        effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1",
+        llm_timeout_seconds=5.0,
+    )
+    titles = ["Customer Identification", "Reason for Call", "KYC Guidance", "Document Submission", "Further Assistance", "Call Conclusion"]
+    bad = design_response(titles, job="KYC update guidance")
+    bad["sections"][1]["questions"] = [{
+        "text": "Which location are you currently in?",
+        "reason": "Collect location before helping",
+        "source": "KYC documents need updating",
+    }]
+    good = design_response(titles, job="KYC update guidance")
+    good["sections"][1]["questions"] = [{
+        "text": "Would you like help with the KYC document update process?",
+        "reason": "The stated requirement is to guide customers through the KYC update process.",
+        "source": "KYC documents need updating",
+    }]
+    calls = []
+
+    def handler(request: httpx.Request):
+        calls.append(json.loads(request.content))
+        fixture = bad if len(calls) == 1 else good
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(fixture)}}]})
+
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    employee = SimpleNamespace(name="KYC Assistant", purpose="KYC update", call_type="outbound", language="English")
+    result = service.generate_call_script(employee, {
+        "business_name": "HDFC", "original_requirement": "Call existing customers whose KYC documents need updating",
+        "purpose": "Call existing customers whose KYC documents need updating", "language": "English", "call_type": "outbound",
+    })
+    assert tuple(result) == tuple(titles)
+    assert len(calls) == 2
+    correction = calls[1]["messages"][0]["content"]
+    assert "question_relevance_validation" in correction
+    assert "Reason for Call" in correction
+    assert "question_index" in correction
+    assert "location/address" in correction
+    assert "Remove or replace" in correction
+
+
 def test_groq_schema_failure_retries_once_and_accepts_valid_script():
     settings = SimpleNamespace(
         effective_llm_provider="groq", effective_llm_api_key="test-key",
         effective_llm_model="openai/gpt-oss-20b", effective_llm_base_url="https://api.groq.com/openai/v1",
         llm_timeout_seconds=5.0,
     )
-    titles = ["Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing"]
+    titles = ["Renewal Context", "Policy Status", "Due Date Reminder", "Customer Questions", "Allowed Follow Up", "Completion Check"]
+    fixture = design_response(
+        titles,
+        speech="\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, renewal details \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f quick update \u0c07\u0c35\u0c4d\u0c35\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41.",
+        job="Renew policies",
+    )
     calls = []
 
     def handler(request: httpx.Request):
         calls.append(json.loads(request.content))
         if len(calls) == 1:
             return httpx.Response(400, json={"error": {"message": "Generated JSON does not match the expected schema", "jsonschema": "/sections/minItems"}})
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": f"నమస్కారం అండి, renewal details గురించి మాట్లాడండి. ఈ section లో customer కి clear గా explain చేయండి."} for title in titles]})}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(fixture)}}]})
 
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
     employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
-    result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "original_requirement": "Renew policies"})
+    result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "original_requirement": "Renew policies", "language": "Telugu"})
     assert tuple(result) == tuple(titles)
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert "CORRECTION" in calls[1]["messages"][0]["content"]
-
-
 def test_groq_schema_failure_retry_is_bounded():
     settings = SimpleNamespace(
         effective_llm_provider="groq", effective_llm_api_key="test-key",
@@ -765,18 +836,18 @@ def test_call_script_language_failure_retries_once_and_accepts_corrected_telugu(
         effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1",
         llm_timeout_seconds=5.0,
     )
-    titles = ["Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing"]
+    titles = ["Renewal Context", "Policy Status", "Due Date Reminder", "Customer Questions", "Allowed Follow Up", "Completion Check"]
     calls = []
 
     def response_for(content: str):
-        return {"sections": [{"key": title.lower().replace(" ", "_"), "title": title, "content": content} for title in titles]}
+        return design_response(titles, speech=content, job="Renew policies")
 
     def handler(request: httpx.Request):
         calls.append(json.loads(request.content))
         content = (
             "Nenu KMG Insurance nundi maatladutunnanu. Mee policy renewal gurinchi call chesanu."
             if len(calls) == 1 else
-            "నమస్కారం అండి, నేను KMG Insurance నుంచి మాట్లాడుతున్నాను. మీ policy renewal గురించి call చేశాను."
+            "\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, renewal details \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f quick update \u0c07\u0c35\u0c4d\u0c35\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
         )
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(response_for(content))}}]})
 
@@ -785,4 +856,5 @@ def test_call_script_language_failure_retries_once_and_accepts_corrected_telugu(
     result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "original_requirement": "Renew policies", "language": "Telugu"})
     assert tuple(result) == tuple(titles)
     assert len(calls) == 2
-    assert "failed deterministic language validation" in calls[1]["messages"][0]["content"]
+    assert "Realize the already-validated canonical employee conversation" in calls[1]["messages"][0]["content"]
+

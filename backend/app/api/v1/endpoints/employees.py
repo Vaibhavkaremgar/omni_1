@@ -139,10 +139,23 @@ def _validate_publish(employee: AIEmployee, draft: AIEmployeeVersion | None) -> 
         missing.append("purpose, direct_prompt, or final_prompt")
     if missing:
         raise HTTPException(status_code=422, detail=f"Missing required configuration: {', '.join(missing)}")
+    if draft.configuration.get("final_prompt_overridden") and str(draft.configuration.get("final_prompt") or "").strip():
+        return
+    script = draft.configuration.get("call_script") or {}
+    if len(script) != 6 or not all(isinstance(v, str) and v.strip() for v in script.values()):
+        raise HTTPException(422, "Generate an employee prompt before publishing")
     _validate_script_language_or_422(draft.configuration)
 
 
 def _validate_script_language_or_422(configuration: dict) -> None:
+    if configuration.get("conversation_design"):
+        script = configuration.get("call_script") or {}
+        if len(script) != 6 or not all(isinstance(v, str) and v.strip() for v in script.values()):
+            raise HTTPException(422, "Exactly six populated employee sections are required")
+        summary = validation_summary(configuration)
+        if not summary["valid"]:
+            raise HTTPException(422, detail={"message": "Spoken language validation failed", "validation": summary})
+        return
     # Configuration fields (business name, purpose, requirement, etc.) are
     # owner-authored context and may be written in any language. Only validate
     # when a customer-facing script has actually been supplied/generated.
@@ -158,6 +171,13 @@ def _validate_script_language_or_422(configuration: dict) -> None:
         prompt_script = extract_call_script_from_prompt(str(configuration.get("final_prompt") or ""))
         if prompt_script:
             assert_customer_facing_script_language(prompt_script, str(configuration.get("language") or "English"))
+
+
+def _has_customer_script(configuration: dict) -> bool:
+    script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else {}
+    return bool(script) or (
+        bool(configuration.get("final_prompt_overridden")) and bool(str(configuration.get("final_prompt") or "").strip())
+    )
 
 
 def _apply_final_prompt_override_to_call_script(configuration: dict) -> dict:
@@ -178,7 +198,7 @@ def _apply_final_prompt_override_to_call_script(configuration: dict) -> dict:
                             "type": "missing_section",
                             "message": f"Final prompt must include {title}.",
                         }
-                        for title in ("Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
+                        for title in ("six numbered, uniquely titled sections",)
                     ],
                 },
             },
@@ -468,8 +488,13 @@ def update_employee(
             **(draft.configuration or {}),
             **strip_customer_internal_configuration(configuration),
         }
+    # Composition creates a fallback six-section prompt from the owner's
+    # business brief. That fallback is not generated spoken content and must
+    # not be subjected to Telugu/Hindi script validation during a normal edit.
+    had_customer_script = _has_customer_script(draft.configuration)
     draft.configuration = compose_employee_configuration(_apply_final_prompt_override_to_call_script(draft.configuration))
-    _validate_script_language_or_422(draft.configuration)
+    if had_customer_script:
+        _validate_script_language_or_422(draft.configuration)
     normalize_employee_llm_configuration(employee, draft)
     for field in ("name", "purpose", "call_type", "language", "creation_mode"):
         if field in draft.configuration:
@@ -516,9 +541,18 @@ def generate_employee_script(
         raise HTTPException(status_code=404, detail="Employee draft not found")
     knowledge = db.scalars(select(EmployeeKnowledgeFile).where(EmployeeKnowledgeFile.employee_id == employee_id, EmployeeKnowledgeFile.tenant_id == current_user.tenant.id)).all()
     configuration = {**(draft.configuration or {}), "knowledge_files": [{"filename": item.filename, "status": item.status} for item in knowledge]}
-    script = RealLLMService().generate_call_script(employee, configuration)
-    draft.configuration = compose_employee_configuration({**configuration, "call_script": script})
-    _validate_script_language_or_422(draft.configuration)
+    if not str(configuration.get("business_name") or "").strip():
+        raise HTTPException(status_code=422, detail="Company name is required before generating an employee script")
+    if str(configuration.get("call_type") or employee.call_type) not in {"inbound", "outbound"}:
+        raise HTTPException(status_code=422, detail="Call type must be inbound or outbound")
+    if str(configuration.get("language") or employee.language).casefold() not in {"english", "hindi", "telugu", "en", "hi", "te", "en-us", "hi-in", "te-in"}:
+        raise HTTPException(status_code=422, detail="Selected language is not supported for employee script generation")
+    configuration = ensure_business_research(configuration)
+    generated_script = RealLLMService().generate_call_script(employee, configuration)
+    draft.configuration = compose_employee_configuration({
+        **configuration, "call_script": generated_script, "conversation_sections": configuration.get("conversation_sections"),
+        "spoken_script_generated": True, "conversation_design": None,
+    })
     draft.reviewed_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(draft)

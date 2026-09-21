@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from app.integrations.omnidimension import OmniDimensionAgentProvider, ProviderAgent
+from app.integrations.omnidimension.exceptions import OmniDimensionResponseError
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.services.employee_prompt import (
@@ -76,6 +77,14 @@ class OmniDimensionAgentService:
         existing_provider_id = version.provider_agent_id
         if not existing_provider_id and employee.published_version is not None and employee.published_version.id != version.id:
             existing_provider_id = employee.published_version.provider_agent_id
+        if existing_provider_id:
+            # Preserve provider-side post-call actions while enforcing exactly
+            # one Pontis webhook configuration during every republish.
+            existing = self.provider.get_agent(existing_provider_id)
+            existing_actions = existing.get("post_call_actions") if isinstance(existing, dict) else None
+            if isinstance(existing_actions, dict):
+                payload["post_call_actions"] = {**existing_actions, **payload["post_call_actions"]}
+                payload["post_call_actions"]["webhook"] = _automatic_post_call_actions()["webhook"]
         provider_agent = (
             self.provider.update_agent(existing_provider_id, payload)
             if existing_provider_id
@@ -159,6 +168,10 @@ class OmniDimensionAgentService:
             provider_agent.provider_id,
             readback_error=readback_error,
         )
+        webhook_mismatch = any(item.get("field") in {"webhook_enabled", "webhook_url", "webhook_statuses"} for item in verification.get("mismatches", []))
+        webhook_unverified = any(item.get("field") in {"webhook_enabled", "webhook_url", "webhook_statuses"} for item in verification.get("unverified_fields", []))
+        if webhook_mismatch or webhook_unverified:
+            raise OmniDimensionResponseError("OmniDimension post-call webhook verification failed.")
         for field in verification.get("mismatches", []):
             logger.warning(
                 "Omni agent verification mismatch agent_id=%s field=%s intended=%s sent=%s returned=%s",
@@ -179,272 +192,35 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     Each section maps to a distinct behavioral area so the Omni agent follows the
     employee's exact rules rather than behaving as a generic assistant.
     """
-    configuration = normalize_business_identity(configuration)
-    context: list[dict[str, Any]] = []
-
-    # ── Agent Identity & Purpose ──────────────────────────────────────────────
-    purpose = _text(configuration.get("purpose"), employee.purpose)
-    business_name = _text(configuration.get("business_name"))
-    business_description = _text(configuration.get("business_description"))
-    identity = f"Business: {business_name}\n" if business_name else ""
-    identity += f"Business description: {business_description}\n" if business_description else ""
-    identity += f"Employee role and purpose: {purpose}\nDo not volunteer these internal labels in spoken conversation; share relevant business information naturally only when asked or needed."
-    context.append({"title": "Agent Identity & Purpose", "body": identity, "is_enabled": True})
-    profile = business_conversation_profile(configuration)
-    context.append({
-        "title": "Business Type Conversation Profile",
-        "body": (
-            f"Business type: {profile['key']} ({profile['domain']}). "
-            f"Shape the conversation around {profile['focus']}. "
-            f"Qualification: {profile['qualification']} "
-            f"Objection handling: {profile['objection']} "
-            f"Next step: {profile['cta']} "
-            f"Telugu style when applicable: {profile['telugu']}"
-        ),
-        "is_enabled": True,
-    })
-
-    saved_script = _canonical_call_script(configuration)
-    if saved_script:
-        context.append({
-            "title": "Published Call Script Source of Truth",
-            "body": (
-                "Use these exact six Call Script sections as the authoritative spoken behavior. "
-                "Do not replace them with a regenerated script. Runtime instructions may constrain pacing, safety, and provider behavior, "
-                "but they must not modify or supersede the script below.\n\n"
-                + _format_call_script(saved_script)
-            ),
-            "is_enabled": True,
-        })
-
-    research = configuration.get("business_research")
-    if isinstance(research, dict):
-        facts = research.get("facts") if isinstance(research.get("facts"), list) else []
-        if research.get("status") == "success":
-            body = "Use these verified build-time business facts when relevant; never invent facts not listed here.\n"
-            body += "\n".join(f"- {item}" for item in facts if item) or "- No verified facts were returned."
-        else:
-            body = f"Business research status: {_text(research.get('status')) or 'unavailable'}. Do not claim research was completed or invent company facts."
-        context.append({"title": "Verified Business Research", "body": body, "is_enabled": True})
-
-    # ── Responsibilities / Goals ──────────────────────────────────────────────
-    goals = configuration.get("goals")
-    if goals:
-        context.append({"title": "Responsibilities", "body": _text(goals), "is_enabled": True})
-
-    # ── Tasks (collected from interview answers) ──────────────────────────────
-    tasks = configuration.get("tasks")
-    if tasks:
-        task_list = tasks if isinstance(tasks, list) else [tasks]
-        body = "\n".join(f"- {t}" for t in task_list if t)
-        if body:
-            context.append({"title": "Tasks", "body": body, "is_enabled": True})
-
-    # ── Products & Services ───────────────────────────────────────────────────
-    for key, title in (
-        ("products", "Products and Services"),
-        ("products_services", "Products and Services"),
-    ):
-        val = configuration.get(key)
-        if val:
-            context.append({"title": title, "body": _text(val), "is_enabled": True})
-            break
-
-    # ── Target Customers ──────────────────────────────────────────────────────
-    target = configuration.get("target_customers")
-    if target:
-        context.append({"title": "Target Customers", "body": _text(target), "is_enabled": True})
-
-    # ── Conversation Behavior & Tone ──────────────────────────────────────────
-    tone_parts: list[str] = []
-    for key in ("tone", "personality", "communication_style", "conversation_behavior"):
-        val = configuration.get(key)
-        if val:
-            tone_parts.append(_text(val))
-    if tone_parts:
-        context.append({"title": "Conversation Behavior", "body": "\n".join(tone_parts), "is_enabled": True})
-
-    # Keep saved flow and explicit instructions as distinct context sections.
-    # These come from the reviewed employee definition, never the campaign UI.
-    flow_parts: list[str] = []
-    for key in ("conversation_flow", "workflow", "call_flow"):
-        val = configuration.get(key)
-        if val:
-            flow_parts.append(_text(val))
-    if flow_parts:
-        context.append({"title": "Conversation Flow", "body": "\n".join(flow_parts), "is_enabled": True})
-
-    opening_body = (
-        "The welcome_message has already been spoken. Never reintroduce yourself, repeat the business name, repeat the reason for calling, "
-        "or deliver another generic greeting after the caller responds. Wait for the caller's first speech, answer that exact request first, "
-        "and then ask one relevant follow-up question. If they ask about available services, explain only configured services; if none are configured, "
-        "say that clearly and ask what help they need. Keep the conversation moving from the caller's first question. "
-        "Do not restart with name or mobile-number collection. Collect caller details only near the end, when needed for a confirmed business follow-up or next action."
-    )
-    if _text(configuration.get("call_type")).casefold() == "inbound":
-        opening_body += " This is an inbound call: the caller initiated it. Ask why they called or what help they need, understand the caller's request, and answer or assist before qualifying. Do not assume the reason for the call or ask for identity details unless they become relevant to the requested action."
-    else:
-        opening_body += " This is an outbound call with customer details already configured. Never ask for the customer's name, phone number, profession, or any other detail already supplied; use those details silently and focus on the call purpose."
-    context.append({
-        "title": "Opening State and First Caller Response",
-        "body": opening_body,
-        "is_enabled": True,
-    })
-
-    context.append({
-        "title": "Question Answering and No Repetition",
-        "body": (
-            "For every caller turn, first identify whether the caller is asking a question, correcting information, confirming interest, objecting, or changing topic. "
-            "Answer the caller's exact question from the employee context, published call script, configured business details, Knowledge Base, and verified business research before asking any follow-up. "
-            "If the answer is not available in context, say the detail is not configured and offer the configured callback, human follow-up, or next step. Never fabricate. "
-            "Do not continue a script while ignoring the caller's question. "
-            "Say each substantive sentence only once. Never repeat the same greeting, offer, explanation, question, or closing line back-to-back. "
-            "If the caller asks again or seems confused, rephrase once in simpler conversational wording instead of repeating the same sentence."
-        ),
-        "is_enabled": True,
-    })
-
-    call_type = _text(configuration.get("call_type", employee.call_type)).casefold()
-    selected_language = _language_name(_text(configuration.get("language"), employee.language))
-    context.append({
-        "title": "Authoritative Call Type Mode",
-        "body": (
-            "OUTBOUND MODE: The employee called the customer to promote the configured business. Identify the employee and company, explain what the business offers and the reason for calling, then ask only whether the customer is interested or wants more information. Answer doubts from configured facts. Never ask qualification, discovery, profile, budget, location, timeline, preference, contact, or personal-detail questions. Do not perform actions such as booking, purchase, transfer, or callback."
-            if call_type == "outbound" else
-            "INBOUND MODE: The customer initiated the call. Greet the caller, ask why they called or what help they need, understand the request, and answer or assist first. Do not use an outbound sales opening or assume the caller's purpose. Qualify only when relevant to resolving the request."
-        ),
-        "is_enabled": True,
-    })
-
-    context.append({
-        "title": "Multi-Turn Conversation Behavior",
-        "body": (
-            "Continue listening and responding after every caller turn. Ask the next relevant question when information is incomplete. "
-            "Do not treat the first answer as task completion and do not end the call after one response. "
-            "Completing the business objective is not permission to end the call. After the required task is complete, ask whether the caller needs anything else and wait. If they ask another question, continue helping. Treat a short answer such as 'yes', 'okay', 'sure', a product name, or a budget amount as an answer to the immediately preceding business question, not as permission to end. Treat hesitation or filler sounds such as 'ahh', 'umm', 'uh', 'hmm', 'haa', 'actually', 'one second', 'wait', and equivalent Telugu/Hindi fillers as thinking or continuation cues, not goodbye or hang-up intent. Only enter the end-call path after a clear caller statement that they are finished or a clear affirmative answer to an explicit end-of-call confirmation. Do not use silence, hesitation, or objective completion as confirmation."
-        ),
-        "is_enabled": True,
-    })
-
-    context.append({
-        "title": "Natural Conversation Behavior",
-        "body": natural_voice_conversation_behavior(),
-        "is_enabled": True,
-    })
-    context.append({
-        "title": "Language-Aware Natural Conversation Contract",
-        "body": language_conversation_guidance(selected_language),
-        "is_enabled": True,
-    })
-
-    context.append({
-        "title": "Live Voice Turn-Taking and Call Completion",
-        "body": (
-            "When the caller starts speaking while you are speaking, stop yielding audio immediately, do not finish or queue the interrupted sentence, and respond only to the caller's new utterance. An interruption is a normal barge-in, not a request to hang up. Keep the call active after an interruption. Use short spoken responses, one question at a time, and natural pauses. After completing the requested task, say a natural equivalent of 'ఇంకా ఏమైనా help కావాలా?' and wait. If the caller says they are done, acknowledge politely and end; otherwise continue the conversation."
-        ),
-        "is_enabled": True,
-    })
-    additional = configuration.get("additional_information") or configuration.get("other_information")
-    if additional:
-        context.append({"title": "Additional Context", "body": _text(additional), "is_enabled": True})
-
-    system_prompt = configuration.get("system_prompt")
-    if system_prompt and _text(system_prompt) != _text(configuration.get("direct_prompt")):
-        context.append({"title": "Additional Behavioral Instructions", "body": _text(system_prompt), "is_enabled": True})
-
-    # ── Qualification / Workflow Rules ────────────────────────────────────────
-    qual_parts: list[str] = []
-    for key in ("qualification_rules", "qualification_criteria"):
-        val = configuration.get(key)
-        if val:
-            qual_parts.append(_text(val))
-    if qual_parts:
-        context.append({"title": "Qualification & Workflow Rules", "body": "\n".join(qual_parts), "is_enabled": True})
-
-    # ── Objection Handling ────────────────────────────────────────────────────
-    objections = configuration.get("objection_handling") or configuration.get("common_objections")
-    if objections:
-        context.append({"title": "Objection Handling", "body": _text(objections), "is_enabled": True})
-
-    # ── Human Escalation / Handoff Rules ─────────────────────────────────────
-    transfer_parts: list[str] = []
-    for key in ("transfer_rules", "human_transfer_conditions"):
-        val = configuration.get(key)
-        if val:
-            transfer_parts.append(_text(val))
-    if transfer_parts:
-        context.append({"title": "Human Escalation & Handoff Rules", "body": "\n".join(transfer_parts), "is_enabled": True})
-
-    # ── Closing Behavior ──────────────────────────────────────────────────────
-    closing = configuration.get("closing_behavior")
-    if closing:
-        context.append({"title": "Closing Behavior", "body": _text(closing), "is_enabled": True})
-
-    # ── Post-Call Extraction ──────────────────────────────────────────────────
-    for key in ("post_call_extraction", "information_to_extract", "lead_outcome_fields"):
-        val = configuration.get(key)
-        if val:
-            context.append({"title": "Post-Call Information to Extract", "body": _text(val), "is_enabled": True})
-            break
-
-    # ── Constraints / Guardrails ──────────────────────────────────────────────
-    constraints = configuration.get("constraints") or configuration.get("guardrails")
-    if constraints:
-        context.append({"title": "Constraints & Guardrails", "body": _text(constraints), "is_enabled": True})
-
-    # ── Language / Communication Rules ───────────────────────────────────────
+    from app.services.conversation_design import runtime_rules
+    configuration = dict(configuration)
     lang = _language_name(_text(configuration.get("language"), employee.language))
-    idle_phrase = "Vinipisthunda andi?" if lang == "Telugu" else "Kya aap wahan hain ji?" if lang == "Hindi" else "Are you still there?"
-    context.append({"title": "Mandatory Idle and Repeated Hello Handling", "body": f"If the caller is silent or idle for 2–3 seconds, say exactly '{idle_phrase}', then stop speaking and wait silently for the caller's response. Never repeat the previous question or advance to the next question while waiting. If the caller repeats hello, use the same idle phrase and wait for the response.", "is_enabled": True})
-    language_rules = (
-        f"Speak in {lang}. Be clear, professional, and concise. "
-        "Sound like a warm, attentive human rather than a scripted or robotic system: "
-        "use natural contractions and brief acknowledgements, vary phrasing naturally, "
-        "pause briefly where a human would, and respond directly to what the caller just said. "
-        "Speak every numeric string digit-by-digit in English, regardless of the selected language. For example, 230 is 'two three zero', never 'two hundred thirty' or regional-language number words. This includes "
-        "product and property phrases such as 2 BHK, 3 BHK, and 150 square yards, plus "
-        "phone numbers, dates, times, prices, amounts, quantities, ages, counts, and IDs; "
-        "do not pronounce numbers using Telugu, Hindi, or other local-language number words."
-    )
-    if lang == "Telugu":
-        language_rules += " Converse naturally in Telugu throughout the call. Follow the universal Telugu speaking style below."
-    elif lang == "Hindi":
-        language_rules += (
-            " Speak in natural Indian conversational Hinglish, not pure or formal Hindi: use Hindi grammar as the base and mix frequent, natural English words throughout every response, especially okay, sure, actually, sorry, thank you, right, details, requirement, budget, price, location, features, offer, product, service, booking, appointment, confirm, available, support, team, and follow-up. Keep Hindi as the main language, but do not translate commonly used business terms into literary Hindi. Use varied Hindi fillers such as ji, haan ji, achha ji, theek hai ji, bilkul ji, and samajh gaya ji. Use English only for thanks, thank you, and sorry. Never use Telugu fillers. Every numeric string and code must be spoken digit-by-digit in English."
+    saved_script = _canonical_call_script(configuration)
+    # The editable generated prompt is the publishing source of truth.
+    sections = configuration.get("conversation_sections")
+    edited_script = configuration.get("call_script")
+    if isinstance(edited_script, dict) and len(edited_script) == 6:
+        canonical_prompt = "\n\n".join(
+            f"SECTION {index} — {title}\n{body}"
+            for index, (title, body) in enumerate(edited_script.items(), 1)
         )
-    context.append({
-        "title": "Language & Communication Rules",
-        "body": language_rules + ("\n\n" + UNIVERSAL_TELUGU_VOICE_GUIDANCE if lang == "Telugu" else ""),
-        "is_enabled": True,
-    })
-
-    # ── Desired Outcomes (legacy key support) ─────────────────────────────────
-    for key, title in (
-        ("desired_outcomes", "Desired Outcomes"),
-        ("information_to_extract", "Information to Extract"),
-    ):
-        val = configuration.get(key)
-        if val and not any(s["title"] == title for s in context):
-            context.append({"title": title, "body": _text(val), "is_enabled": True})
-
-    # ── Build the final payload ───────────────────────────────────────────────
-    configured_final_prompt = _text(configuration.get("final_prompt"))
-    canonical_prompt = configured_final_prompt or build_employee_prompt(configuration)
-    # A persisted final_prompt already contains the complete employee script.
-    # Sending it again alongside the structured sections increases latency and
-    # can make stale instructions compete with the current flow sections.
-    if canonical_prompt and (not configured_final_prompt or configuration.get("final_prompt_overridden")):
-        context.append({
-            "title": "Complete Employee Instructions",
-            "body": canonical_prompt,
-            "is_enabled": True,
-        })
-    logger.info(
-        "Canonical employee context employee_id=%s context_chars=%d context_words=%d language=%s model=%s welcome_chars=%d",
-        getattr(employee, "id", "unknown"), len(canonical_prompt), len(canonical_prompt.split()), lang,
-        _text(configuration.get("llm_model"), employee.llm_model),
-        len(_welcome_message(employee, configuration, lang)),
-    )
+        sections = None
+    if isinstance(sections, list) and len(sections) == 6:
+        canonical_prompt = "\n\n".join(
+            f"SECTION {index} — {item.get('title', '')}\nPurpose: {item.get('purpose', '')}\n"
+            f"Instructions: {item.get('instructions', item.get('flow', ''))}\n"
+            f"Questions: {'; '.join(item.get('questions', []))}\n"
+            f"Spoken examples: {'; '.join(item.get('examples', []))}\n"
+            f"Handling: {item.get('handling', '')}"
+            for index, item in enumerate(sections, 1) if isinstance(item, dict)
+        )
+    else:
+        canonical_prompt = str(configuration.get("final_prompt") or build_employee_prompt(configuration))
+    context = [
+        {"title": "Published Call Script Source of Truth", "body": _format_call_script(saved_script), "is_enabled": True},
+        {"title": "Employee Runtime Rules", "body": runtime_rules(configuration), "is_enabled": True},
+        {"title": "Complete Employee Instructions", "body": canonical_prompt, "is_enabled": True},
+    ]
     post_call_actions = _automatic_post_call_actions()
     extraction = configuration.get("conversation_variables")
     if not isinstance(extraction, list):
@@ -542,6 +318,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
 def _automatic_post_call_actions() -> dict[str, Any]:
     """Return the platform callback attached to every created/updated agent."""
     settings = get_settings()
+    if settings.environment.casefold() == "production" and not settings.backend_public_url.strip():
+        raise RuntimeError("BACKEND_PUBLIC_URL is required in production to configure the OmniDimension post-call webhook.")
     webhook_url = f"{settings.backend_public_url.rstrip('/')}/api/v1/webhooks/omnidimension/post-call"
     return {
         "webhook": {
@@ -555,14 +333,14 @@ def _canonical_call_script(configuration: dict[str, Any]) -> dict[str, str]:
     script = configuration.get("call_script")
     if not isinstance(script, dict):
         return {}
-    result = {title: _text(script.get(title)) for title in SCRIPT_SECTION_NAMES}
-    return result if all(result.values()) else {}
+    result = {title: _text(body) for title, body in script.items()}
+    return result if len(result) == 6 and all(result.values()) else {}
 
 
 def _format_call_script(script: dict[str, str]) -> str:
     return "\n\n".join(
         f"{index}. {title}\n{script[title]}"
-        for index, title in enumerate(SCRIPT_SECTION_NAMES, 1)
+        for index, title in enumerate(script, 1)
     )
 
 
@@ -586,7 +364,7 @@ def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any])
         "voice_id": str(voice_id) if voice_id else None,
         "welcome_message": _welcome_message(employee, configuration, language),
         "six_section_prompt": _format_call_script(script) if script else "",
-        "six_section_titles": list(SCRIPT_SECTION_NAMES) if script else [],
+        "six_section_titles": list(script) if script else [],
         "interruption_enabled": True,
         "interruption_min_words": 3,
         "idle_threshold_sec": 5,
@@ -762,6 +540,8 @@ def _language_code(language: str) -> str:
 
 
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
+    if configuration.get("conversation_design"):
+        return _text(configuration.get("opening"))
     configured = _text(configuration.get("greeting"))
     outbound = _text(configuration.get("call_type", employee.call_type)).casefold() == "outbound"
     call_script = configuration.get("call_script")
@@ -931,7 +711,7 @@ def _looks_like_internal_instruction(value: str) -> bool:
 
 def _default_end_call_message(language: str) -> str:
     if language == "Telugu":
-        return "thanks andi, have a nice day."
+        return "Thank you. Have a nice day."
     return "Thank you for your time."
 
 
@@ -988,18 +768,12 @@ def _extract_six_section_prompt(value: Any) -> str:
 
 def _script_body(value: Any) -> str:
     text = _text(value)
-    marker = "1. Identity & Purpose"
-    index = text.find(marker)
-    return text[index:] if index >= 0 else text
+    match = re.search(r"(?m)^1\. [^\n]+$", text)
+    return text[match.start():] if match else text
 
 
 def _extract_six_section_titles(prompt: str) -> list[str]:
-    titles: list[str] = []
-    for title in SCRIPT_SECTION_NAMES:
-        pattern = rf"(?:^|\n)\s*\d+\.\s*{re.escape(title)}(?:\n|$)"
-        if re.search(pattern, prompt):
-            titles.append(title)
-    return titles
+    return re.findall(r"(?m)^[1-6]\. ([^\n]+)$", prompt)
 
 
 def _is_missing(value: Any) -> bool:

@@ -117,8 +117,12 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
             snapshot["reason"] = "no_grounding_sources"
         return {**config, "business_research": snapshot}
     except Exception as exc:
-        logger.warning("Business research failed business_name=%s exception_class=%s", business_name[:120], type(exc).__name__)
-        return {**config, "business_research": {"status": "failed", "reason": "provider_error", "fingerprint": fingerprint}}
+        status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        logger.warning(
+            "Business research failed business_name=%s exception_class=%s status_code=%s",
+            business_name[:120], type(exc).__name__, status_code,
+        )
+        return {**config, "business_research": {"status": "failed", "reason": "provider_error", "fingerprint": fingerprint, **({"status_code": status_code} if status_code else {})}}
     finally:
         if client is None:
             http.close()

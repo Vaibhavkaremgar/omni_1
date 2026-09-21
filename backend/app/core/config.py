@@ -45,26 +45,38 @@ class Settings(BaseSettings):
 
     @property
     def effective_llm_provider(self) -> str | None:
-        if self.gemini_api_key:
-            return "gemini"
         if self.llm_provider:
             return self.llm_provider
+        if self.gemini_api_key:
+            return "gemini"
         if self.groq_api_key:
-            return "openai"  # Groq is OpenAI-compatible
+            return "groq"
         return None
 
     @property
     def effective_llm_api_key(self) -> str | None:
+        if self.llm_provider and self.llm_provider.casefold() == "groq":
+            return self.groq_api_key
+        if self.llm_provider and self.llm_provider.casefold() in {"gemini", "google", "google-gemini"}:
+            return self.gemini_api_key
         return self.gemini_api_key or self.llm_api_key or self.groq_api_key
 
     @property
     def effective_llm_model(self) -> str | None:
+        if self.llm_provider and self.llm_provider.casefold() == "groq":
+            return self.groq_model
+        if self.llm_provider and self.llm_provider.casefold() in {"gemini", "google", "google-gemini"}:
+            return self.gemini_model
         if self.gemini_api_key:
             return self.gemini_model
         return self.llm_model or self.groq_model
 
     @property
     def effective_llm_base_url(self) -> str | None:
+        if self.llm_provider and self.llm_provider.casefold() == "groq":
+            return self.groq_base_url
+        if self.llm_provider and self.llm_provider.casefold() in {"gemini", "google", "google-gemini"}:
+            return self.gemini_base_url
         if self.gemini_api_key:
             return self.gemini_base_url
         return self.llm_base_url or self.groq_base_url

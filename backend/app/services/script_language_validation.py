@@ -61,12 +61,14 @@ class ScriptLanguageValidation:
         }
 
 
-def validate_customer_facing_script(script: dict[str, Any], language: str) -> ScriptLanguageValidation:
+def validate_customer_facing_script(script: dict[str, Any], language: str, *, require_six: bool = True) -> ScriptLanguageValidation:
     normalized = _language_code(language)
     issues: list[ScriptLanguageIssue] = []
     if normalized not in {"te", "hi", "en"}:
         return ScriptLanguageValidation(True, normalized, [])
-    for section in CUSTOMER_FACING_SECTIONS:
+    if require_six and len(script) != 6:
+        issues.append(ScriptLanguageIssue("Sections", "missing_section", "Exactly six populated sections are required."))
+    for section in script:
         text = _text(script.get(section))
         if not text:
             issues.append(ScriptLanguageIssue(section, "missing_section", f"{section} must contain customer-facing script content."))
@@ -94,27 +96,30 @@ def assert_customer_facing_script_language(script: dict[str, Any], language: str
 
 
 def extract_call_script_from_prompt(prompt: str) -> dict[str, str]:
+    """Numbered dynamic headings; unnumbered legacy headings remain readable."""
     text = _text(prompt)
-    if not text:
+    matches = list(re.finditer(r"(?m)^\s*([1-6])\. ([^\n]+)\s*$", text))
+    if len(matches) == 6 and [m.group(1) for m in matches] == list("123456"):
+        titles = [m.group(2).strip() for m in matches]
+    else:
+        matches = list(re.finditer(r"(?m)^\s*(Identity & Purpose|Greeting & Intro|Qualification|Handling Objections|Call to Action|Closing)\s*$", text))
+        titles = [m.group(1) for m in matches]
+    if len(matches) != 6 or len(set(t.casefold() for t in titles)) != 6:
         return {}
-    result: dict[str, str] = {}
-    matches = list(re.finditer(r"(?m)^\s*(?:\d+\.\s*)?(Identity & Purpose|Greeting & Intro|Qualification|Handling Objections|Call to Action|Closing)\s*$", text))
+    result = {}
     for index, match in enumerate(matches):
-        title = match.group(1)
-        start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        internal_boundary = re.search(r"(?m)^\s*[A-Z][A-Z0-9 &:/()'.,-]{3,}\s*$", text[start:end])
-        if internal_boundary:
-            end = start + internal_boundary.start()
-        body = text[start:end].strip()
-        if title in CUSTOMER_FACING_SECTIONS and body:
-            result[title] = body
-    return result if all(result.get(title) for title in CUSTOMER_FACING_SECTIONS) else {}
+        end = matches[index + 1].start() if index < 5 else len(text)
+        body = text[match.end():end].strip()
+        if not body:
+            return {}
+        result[titles[index]] = body
+    return result
 
 
 def validation_summary(configuration: dict[str, Any]) -> dict[str, Any]:
-    script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else {}
-    validation = validate_customer_facing_script(script, _text(configuration.get("language")) or "English")
+    from app.services.conversation_design import spoken_script
+    script = spoken_script(configuration)
+    validation = validate_customer_facing_script(script, _text(configuration.get("language")) or "English", require_six=not bool(configuration.get("conversation_design")))
     return validation.as_dict()
 
 
@@ -129,12 +134,14 @@ def _validate_native_section(
 ) -> list[ScriptLanguageIssue]:
     issues: list[ScriptLanguageIssue] = []
     native_count = _script_count(text, native_range)
+    # English gratitude is explicitly permitted even in a regional-language call.
+    english_closing = bool(re.fullmatch(r"(?:thanks|thank you)[,.! ]*(?:have a nice day[.! ]*)?", text.strip(), re.I))
     latin_words = _latin_words(text)
     meaningful_latin = [word for word in latin_words if not _is_allowed_latin(word)]
     roman_hits = [word for word in meaningful_latin if word in roman_markers]
     alpha_count = sum(1 for char in text if char.isalpha())
     native_ratio = native_count / max(alpha_count, 1)
-    if native_count < 4 and len(latin_words) >= 5:
+    if native_count < 4 and latin_words and not english_closing:
         issues.append(ScriptLanguageIssue(
             section,
             "english_only",

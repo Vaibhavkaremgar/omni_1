@@ -40,6 +40,33 @@ def test_research_failure_is_explicit_and_public_config_has_no_source_metadata(m
     assert "research_query" not in public["business_research"]
 
 
+def test_research_http_error_is_non_fatal_and_records_status(monkeypatch):
+    monkeypatch.setattr("app.services.business_research.get_settings", lambda: SimpleNamespace(
+        gemini_api_key="test-key", gemini_model="gemini-test",
+        gemini_base_url="https://generativelanguage.googleapis.com/v1beta",
+        gemini_research_timeout_seconds=5.0,
+    ))
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(403, json={"error": "forbidden"})))
+    result = ensure_business_research({"business_name": "HDFC Bank", "business_description": "KYC update calls"}, client)
+    assert result["business_research"]["status"] == "failed"
+    assert result["business_research"]["reason"] == "provider_error"
+    assert result["business_research"]["status_code"] == 403
+
+
+def test_research_timeout_is_non_fatal(monkeypatch):
+    monkeypatch.setattr("app.services.business_research.get_settings", lambda: SimpleNamespace(
+        gemini_api_key="test-key", gemini_model="gemini-test",
+        gemini_base_url="https://generativelanguage.googleapis.com/v1beta",
+        gemini_research_timeout_seconds=5.0,
+    ))
+    def handler(request):
+        raise httpx.TimeoutException("timed out", request=request)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = ensure_business_research({"business_name": "HDFC Bank", "business_description": "KYC update calls"}, client)
+    assert result["business_research"]["status"] == "failed"
+    assert result["business_research"]["reason"] == "provider_error"
+
+
 def test_research_fingerprint_changes_when_business_context_changes():
     base = {"business_name": "Acme", "business_description": "Tools", "purpose": "Support buyers"}
     assert research_fingerprint(base) != research_fingerprint({**base, "purpose": "Sell tools"})

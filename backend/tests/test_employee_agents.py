@@ -65,6 +65,13 @@ def six_section_script():
     }
 
 
+def prepare_publishable_draft(api, employee_id: str, headers: dict[str, str], **configuration):
+    payload = {"configuration": {"call_script": six_section_script(), "language": "English", **configuration}}
+    response = api.patch(f"/api/v1/employees/{employee_id}", json=payload, headers=headers)
+    assert response.status_code == 200
+    return response
+
+
 def authenticated_client(db, user_id, monkeypatch):
     monkeypatch.setattr(auth_service, "decode_access_token", lambda token: db.query(User).all()[0 if user_id.endswith("-a") else 1].id)
     app.dependency_overrides[get_db] = lambda: db
@@ -132,9 +139,11 @@ def test_publish_creates_agent_and_persists_provider_state(agent_database, monke
     api = authenticated_client(db, "agent-user-a", monkeypatch)
     try:
         with api:
-            response = api.post("/api/v1/employees", json=employee_payload(), headers={"Authorization": "Bearer a"})
+            headers = {"Authorization": "Bearer a"}
+            response = api.post("/api/v1/employees", json=employee_payload(), headers=headers)
             employee_id = response.json()["id"]
-            published = api.post(f"/api/v1/employees/{employee_id}/publish", headers={"Authorization": "Bearer a"})
+            prepare_publishable_draft(api, employee_id, headers)
+            published = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert published.status_code == 200
             assert published.json()["provider_name"] == "omnidimension"
             assert "provider_agent_id" not in published.json()
@@ -214,6 +223,7 @@ def test_publish_persists_mismatch_without_failing(agent_database, monkeypatch):
             headers = {"Authorization": "Bearer a"}
             payload = {**employee_payload(), "call_type": "outbound"}
             employee_id = api.post("/api/v1/employees", json=payload, headers=headers).json()["id"]
+            prepare_publishable_draft(api, employee_id, headers, call_type="outbound")
             published = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert published.status_code == 200
             verification = published.json()["provider_verification"]
@@ -241,6 +251,7 @@ def test_publish_marks_provider_readback_failed_without_failing(agent_database, 
         with api:
             headers = {"Authorization": "Bearer a"}
             employee_id = api.post("/api/v1/employees", json=employee_payload(), headers=headers).json()["id"]
+            prepare_publishable_draft(api, employee_id, headers)
             published = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert published.status_code == 200
             assert published.json()["provider_verification"]["status"] == "provider_readback_failed"
@@ -296,6 +307,7 @@ def test_publish_request_contract_is_bodyless_and_invalid_path_is_rejected(agent
         with api:
             headers = {"Authorization": "Bearer a"}
             employee_id = api.post("/api/v1/employees", json=employee_payload(), headers=headers).json()["id"]
+            prepare_publishable_draft(api, employee_id, headers)
 
             # No body and no Content-Type are required by the publish route.
             published = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
@@ -327,6 +339,7 @@ def test_provider_failure_preserves_draft_and_retry_succeeds(agent_database, mon
         with api:
             headers = {"Authorization": "Bearer a"}
             employee_id = api.post("/api/v1/employees", json=employee_payload(), headers=headers).json()["id"]
+            prepare_publishable_draft(api, employee_id, headers)
             failed = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert failed.status_code == 502
             assert "test-agent-key" not in failed.text
@@ -358,6 +371,7 @@ def test_same_employee_updates_existing_agent_after_a_draft_edit(agent_database,
         with api:
             headers = {"Authorization": "Bearer a"}
             employee_id = api.post("/api/v1/employees", json=employee_payload(), headers=headers).json()["id"]
+            prepare_publishable_draft(api, employee_id, headers)
             api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             repeated = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert repeated.status_code == 200

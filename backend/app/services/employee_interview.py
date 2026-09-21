@@ -28,14 +28,14 @@ logger = logging.getLogger(__name__)
 
 def _failure_category(error: HTTPException) -> str:
     detail = str(error.detail).lower()
-    if "rate limit" in detail:
-        return "groq_rate_limit"
+    if "http 429" in detail or "rate limit" in detail or "quota" in detail or "resource exhausted" in detail or "too many requests" in detail:
+        return "provider_rate_limit_or_quota"
+    if "http 503" in detail or "high demand" in detail or "temporarily unavailable" in detail:
+        return "provider_unavailable"
     if "timed out" in detail:
         return "groq_timeout"
-    if "api key" in detail:
-        return "groq_authentication"
-    if "unavailable" in detail:
-        return "groq_network_error"
+    if "api key" in detail or "authentication" in detail or "unauthorized" in detail:
+        return "provider_authentication"
     if "json" in detail or "completion" in detail or "response" in detail:
         return "llm_response_error"
     return "llm_error"
@@ -103,15 +103,14 @@ class DevelopmentLLMService(LLMService):
     """Offline fallback used only when a provider-backed LLM is unavailable locally."""
 
     question_plan = (
-        ("goals", "What should this employee achieve for the business?"),
-        ("products", "Which products or services should it focus on?"),
-        ("target_customers", "Who are the typical customers it should speak with?"),
-        ("tone", "What personality and tone should it use with customers?"),
-        ("qualification_rules", "What should it ask or learn before considering a customer qualified?"),
-        ("objection_handling", "How should it respond when a customer has a concern or objection?"),
-        ("transfer_rules", "When should it transfer the conversation to a human?"),
-        ("closing_behavior", "How should it close the conversation and handle follow-up?"),
-        ("post_call_extraction", "What information should be captured after each conversation?"),
+        ("goals", "What job should this employee complete?"),
+        ("audience", "Who will it speak with?"),
+        ("facts", "What exact facts, rules, or process steps should it use?"),
+        ("questions", "What information is truly necessary to ask for this job?"),
+        ("tone", "What tone should it use?"),
+        ("handoff_rules", "When should it hand off or stop instead of continuing?"),
+        ("completion", "How should it know the task is complete?"),
+        ("post_call_extraction", "What information should be recorded after each conversation?"),
     )
     completion_turns = 6
 
@@ -169,10 +168,10 @@ class DevelopmentLLMService(LLMService):
             if topic == "target_customers" and any(word in context for word in ("clinic", "patient", "doctor")):
                 question = "Which patients should it speak with, and which should be routed to the clinic team?"
                 reason = "Patient routing changes the questions and escalation path."
-            elif topic == "qualification_rules" and any(word in context for word in ("demo", "lead", "sales")):
-                question = "What details make a demo lead worth booking with the sales team?"
-                reason = "This lets the employee qualify leads consistently."
-            elif topic == "transfer_rules" and any(word in context for word in ("support", "issue", "billing")):
+            elif topic == "questions" and any(word in context for word in ("appointment", "booking", "reschedule")):
+                question = "Which appointment details are necessary to change or confirm the booking?"
+                reason = "The appointment task determines which details are actually required."
+            elif topic == "handoff_rules" and any(word in context for word in ("support", "issue", "billing")):
                 question = "Which support cases should be handed to a human immediately?"
                 reason = "Clear handoffs keep sensitive cases from being mishandled."
             suggestions.append({"question": question, "reason": reason})
@@ -185,20 +184,19 @@ class DevelopmentLLMService(LLMService):
                 ("goals", "What should this employee accomplish for customers?"),
                 ("target_customers", "Which customers or account types will it support?"),
                 ("tone", "What tone should it use when customers are frustrated?"),
-                ("qualification_rules", "What issue details should it collect before escalating?"),
-                ("transfer_rules", "When should it hand off to a human agent?"),
-                ("closing_behavior", "How should it end a support conversation?"),
+                ("questions", "What issue details should it collect before escalating?"),
+                ("handoff_rules", "When should it hand off to a human agent?"),
+                ("completion", "How should it know the support conversation is complete?"),
                 ("post_call_extraction", "What should be recorded after the call?"),
             )
         if any(word in purpose for word in ("lead", "sales", "qualify", "book", "demo")):
             return (
-                ("goals", "What should this employee accomplish for the business?"),
-                ("products", "What offer or service should it talk about?"),
-                ("target_customers", "Who is the ideal customer or lead?"),
-                ("qualification_rules", "What makes a lead qualified?"),
-                ("objection_handling", "How should it respond to price or timing objections?"),
-                ("closing_behavior", "What should it do when a lead is qualified?"),
-                ("transfer_rules", "When should it transfer to a human closer?"),
+                ("goals", "What job should this employee complete?"),
+                ("facts", "What offer, service, or process facts may it state?"),
+                ("audience", "Who should it speak with?"),
+                ("questions", "Which questions are necessary for this specific job?"),
+                ("completion", "What should it do when the job is complete?"),
+                ("handoff_rules", "When should it hand off to a human?"),
                 ("post_call_extraction", "What information should be captured after each conversation?"),
             )
         return self.question_plan
@@ -221,18 +219,18 @@ class DevelopmentLLMService(LLMService):
             updates["goals"] = [answer]
         if any(word in question for word in ("product", "service", "offer")):
             updates["products"] = [answer]
-        if "customer" in question or "audience" in question or "lead" in question:
+        if "customer" in question or "audience" in question or "lead" in question or "speak with" in question:
+            updates["audience"] = [answer]
             updates["target_customers"] = [answer]
         if any(word in question for word in ("personality", "tone", "frustrated")):
             updates["tone"] = {"description": answer}
-        if any(word in question for word in ("qualif", "issue details", "ask or learn")):
-            updates["qualification_rules"] = [answer]
-        if any(word in question for word in ("objection", "concern", "price")):
-            updates["objection_handling"] = [answer]
+        if any(word in question for word in ("necessary", "issue details", "ask", "information")):
+            updates["questions"] = [answer]
         if "transfer" in question or "human" in question or "hand off" in question:
+            updates["handoff_rules"] = [answer]
             updates["transfer_rules"] = [answer]
-        if any(word in question for word in ("close", "follow-up", "end a support")):
-            updates["closing_behavior"] = [answer]
+        if any(word in question for word in ("complete", "completion", "end a support")):
+            updates["completion"] = answer
         if "captured" in question or "recorded" in question or "information" in question:
             updates["post_call_extraction"] = [answer]
         return updates
@@ -283,183 +281,73 @@ class RealLLMService(LLMService):
         if not attempts:
             logger.error("LLM script generation configuration failure request_id=%s provider_configured=%s model_configured=%s api_key_configured=%s", request_id, bool(provider), bool(model), bool(self.settings.effective_llm_api_key))
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM script generation is not configured.")
-        context = {
-            "employee_name": employee.name,
-            "employee_role": configuration.get("role") or configuration.get("job_role") or configuration.get("purpose"),
-            "business_name": configuration.get("business_name"),
-            "business_description": configuration.get("business_description"),
-            "purpose": configuration.get("purpose"),
-            "original_requirement": configuration.get("original_requirement"),
-            "language": configuration.get("language", employee.language),
-            "call_type": configuration.get("call_type", employee.call_type),
-            "conversation_variables": configuration.get("conversation_variables", []),
+        # One small, provider-compatible response.  Semantic correctness belongs
+        # to the generation prompt; the server only checks shape and limits.
+        # Generated defaults and previous scripts must never become the source brief.
+        keys = ("business_name", "business_description", "purpose", "original_requirement",
+                "website_url", "role", "job_role", "products", "products_services",
+                "business_rules", "process_rules", "workflow", "goals", "tasks",
+                "constraints", "guardrails", "custom_sections", "conversation_variables")
+        context = {key: configuration[key] for key in keys if key in configuration}
+        context["employee_name"] = employee.name
+        context["language"] = configuration.get("language") or employee.language
+        context["call_type"] = configuration.get("call_type") or employee.call_type
+        research = configuration.get("business_research") or {}
+        user = json.dumps({
+            "USER_CONTEXT": context,
+            "RESEARCH": research if research.get("status") == "success" else {"status": "unavailable"},
             "knowledge_base_available": bool(configuration.get("knowledge_files") or configuration.get("knowledge_base_configured")),
-            "existing_custom_sections": configuration.get("custom_sections", []),
-            # This is configuration context, not document contents.  In
-            # particular, do not put uploaded PDF text into the generated prompt.
-            "existing_configuration": {
-                key: value for key, value in configuration.items()
-                if key not in {"final_prompt", "llm_api_key", "api_key", "knowledge_file_contents"}
-            },
-        }
-        system = (
-            "You are an expert AI voice-agent conversation designer. Design an executable call "
-            "conversation for this exact employee; do not paraphrase the requirement and do not "
-            "fill a generic call-center template. First reason about the business, the employee's "
-            "role, caller context, call purpose, success condition, information to collect, likely "
-            "caller questions and objections, supported next steps, unavailable information, "
-            "continuation conditions, and safe closing conditions. Only then write the sections.\n\n"
-            "OUTPUT CONTRACT: Return only valid JSON with exactly six objects in a logical order. "
-            "Each object must contain a concise unique key, a context-specific human-readable title, "
-            "and complete operational content. The six sections are a structural framework, not a fixed "
-            "business workflow. Determine each section's purpose, name, instructions, and conversation "
-            "behavior from the client's actual business context, call type, objective, and customer intent. "
-            "Do not copy example section names, questions, or workflows. Each content value is a concise, complete set of operational "
-            "instructions, not an essay. The sections property is required and must contain exactly "
-            "6 populated items: never return an empty array, omit a section, add a section, invent "
-            "a section name, or leave required content blank. Return only this JSON object; never "
-            "return markdown, code fences, commentary, explanations, or prose outside JSON. Do not "
-            "substitute generic boilerplate for use-case-specific content.\n\n"
-            "LANGUAGE CONTRACT: Write internal agent instructions primarily in clear English. "
-            "Write only customer-facing spoken examples, opening phrases, questions, objection "
-            "responses, CTA phrases, and closing phrases in the selected language. Do not translate "
-            "the whole internal prompt. Spoken language must sound natural for a real phone call, "
-            "not like word-for-word translation; write like a real person on a phone call, not a textbook, government document, translator, or formal speech. Keep sentences short and avoid repetitive filler. "
-            "Style examples only (never copy their business facts): English: 'Hi, I am calling to share a quick update. Would you like to hear more?' Telugu: 'నమస్కారం అండి, ఒక quick update కోసం call చేశాను. మీకు details కావాలా?' Hindi: 'नमस्ते जी, एक quick update के लिए call किया है। आपको details चाहिए?'\n\n"
-            "SECTION DESIGN: Design all six sections dynamically from the supplied business context. Do not assume every business needs qualification, objection handling, a CTA, or a sales funnel. Questions must be supported by the client's business, purpose, customer intent, or information required for the stated outcome. Do not introduce generic questions about location, occupation, family, budget, or profile unless the actual business process requires them. The following are reasoning examples only, never templates.\n\n"
-            "VOICE BEHAVIOR (must be explicit in the relevant sections): Short answers such as "
-            "'Printers.', 'Renewal.', 'Yes.', 'HP.', 'Hyderabad.', or '25 thousand.' are valid "
-            "answers, never hang-up instructions. Use the answer as context and ask the next useful "
-            "question. Do not end because one field was answered, the caller said yes, or the "
-            "objective is only partially complete. Listen without interrupting, yield on barge-in, "
-            "remember supplied information, do not repeat questions, avoid long monologues, and "
-            "respond to the caller's last statement instead of blindly following a fixed sequence.\n\n"
-            "KNOWLEDGE AND SAFETY: If a knowledge base is available, use it for relevant verified "
-            "facts such as products, prices, warranty, policy, FAQ, service, and documented "
-            "availability. Never invent facts or insert document contents. If the answer is not "
-            "available, acknowledge the limitation naturally and offer an appropriate next step. "
-            "Never claim capabilities or outcomes that are not configured."
-        )
-        if str(context["language"]).casefold() in {"hindi", "hi", "hi-in", "hindi (india)"}:
-            system += (
-                "\n\nHINDI HINGLISH CONTRACT (NON-NEGOTIABLE): Use natural contemporary Hindi-English mixing. Hindi words MUST use Devanagari; common business terms such as policy, renewal, service, offer, price, call, details, appointment, confirm, and support may remain English. Never use Roman Hindi, Sanskrit-heavy, literary, textbook, overly formal, or regional wording unless requested."
-            )
-        if str(context["language"]).casefold() in {"telugu", "te", "te-in", "telugu (india)"}:
-            system += (
-                "\n\nTELUGU TELUGISH CONTRACT (NON-NEGOTIABLE): Use natural contemporary Telugu-English mixing. Telugu words MUST use Telugu Unicode; common business terms such as policy, renewal, service, offer, price, call, details, appointment, confirm, and support may remain English. Never use Roman/Tinglish Telugu, Sanskrit-heavy, literary, textbook, overly formal, or regional wording unless requested."
-            )
-        if str(context["call_type"]).casefold() == "outbound":
-            system += (
-                "\n\nOUTBOUND PROMOTION CONTRACT (NON-NEGOTIABLE): The employee called the customer to promote the configured business and explain what it has in store. First introduce the employee and company, then explain the actual configured business purpose, product/service, and verified offer or benefit. Ask only whether the customer is interested or wants more information. Answer the customer's doubts using configured facts. Never ask qualification, discovery, profile, budget, location, timeline, preference, contact, or personal-detail questions. Do not perform bookings, purchases, transfers, callbacks, or other actions. Never invent an offer, price, discount, feature, or availability."
-            )
-        elif str(context["call_type"]).casefold() == "inbound":
-            system += (
-                "\n\nINBOUND ASSISTANCE CONTRACT: The customer initiated the call. Greet the caller and ask how you can help; do not assume why they called. Understand the caller's request and answer or assist before qualifying. Do not use an outbound opening such as 'I'm calling regarding' or ask whether they are interested in an offer unless their request makes it relevant. Ask for name or contact details only when required for the requested action."
-            )
-        if str(context["language"]).casefold() in {"hindi", "hi", "hi-in", "hindi (india)", "telugu", "te", "te-in", "telugu (india)"}:
-            system += (
-                "\n\nLANGUAGE OUTPUT GATE: A customer-facing section written entirely in pure Telugu or pure Hindi is invalid. Rewrite it using the selected native script for regional words plus natural Latin-script English business terms. Never transliterate those English terms into the regional script and never use Roman Telugu or Roman Hindi."
-            )
-        if str(context["language"]).casefold() in {"telugu", "te", "te-in", "telugu (india)"}:
-            system += (
-                "\n\nTELUGU NATURAL SENTENCE PATTERNS: Use correct modern Telugu grammar around English terms. Prefer exactly this style: 'నమస్కారం అండి, నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను. మీ insurance premium గురించి ఒక quick update ఇవ్వడానికి call చేశాను. మీకు ఈ offer గురించి details కావాలా?' Do not write 'నేను Akshay మాట్లాడుతున్నాను' when the company is being introduced; use 'నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను'. Keep 'insurance', 'premium', 'quick update', 'call', 'offer', and 'details' in English. Use Telugu postpositions and verbs in Telugu script, for example 'మీ budget ఎంత range లో ఉంది?', 'మీకు details WhatsApp లో share చేయనా?', and 'నేను team తో confirm చేస్తాను'."
-            )
-            system += (
-                "\n\nTELUGU URBAN ENGLISH MIX (ADDITIVE STYLE RULE): Preserve all Telugu Unicode, native Telugu grammar, natural modern spoken phrasing, and the existing Telugu-English contract above. In addition, prefer a natural urban Telugu-English phone style with common conversational English words where people normally use them. Keep words such as time, thanks, have a nice day, information, details, campaign, election, call, update, organization, activity, interest, question, answer, confirm, available, message, support, follow-up, busy, okay, sorry, sure, right, clear, continue, and stop in English when natural. For example: 'మీ time కి thanks.', 'ఈ information clear గా ఉందా?', 'ఆ detail నాకు available గా లేదు.', 'మీకు interest లేకపోతే no problem.', 'Have a nice day అండి.' Do not translate every English word into formal Telugu, but do not make the response mostly English. Telugu words must remain in Telugu script; never use Romanized Telugu or Tinglish."
-            )
-        selected_language = str(context["language"]).strip() or "English"
-        system += (
-            f"\n\nSELECTED SPOKEN LANGUAGE: The employee's customer-facing spoken content MUST be written in {selected_language}. "
-            "The business context below is owner-provided reference material and may be in English, mixed language, or any other language; understand it without validating or translating it wholesale. "
-            f"Generate all spoken examples, questions, objections, CTAs, and closing phrases in natural {selected_language}, while preserving natural English business/product terms where appropriate."
-        )
-        system += "\n\nFINAL LINGUISTIC QUALITY CHECK: Before producing the final script, internally check whether every spoken example sounds like something a real native speaker would naturally say on a phone call. If it sounds translated, literary, textbook-like, overly formal, or awkwardly mixed, rewrite it."
-        user = json.dumps(context, ensure_ascii=False, indent=2)
+        }, ensure_ascii=False)
+        language = str(context["language"])
+        system = """Return JSON only with exactly this shape: {\"sections\":[{\"title\":\"\",\"purpose\":\"\",\"instructions\":\"\",\"questions\":[\"\"],\"examples\":[\"\"],\"handling\":\"\"}]}. Generate exactly 6 dynamic sections based on USER_CONTEXT; the six sections together are the final employee prompt. Keep title, purpose, instructions, questions, and handling in clear English. Only spoken examples use the selected language. Telugu means Telugu script with natural conversational Telugu plus frequent natural English business words (Tenglish), never Roman Telugu, literary or translated language. Hindi means natural Devanagari Hindi plus English business words (Hinglish), never Roman or overly formal Hindi. English means natural conversational English. Do not invent facts or irrelevant questions and do not force sales, objections, CTA, payment, or appointment behavior unless relevant. Research and knowledge are optional."""
         response = self._perform_json_request_with_fallbacks(request_id, attempts, system, user)
-        expected = ("Identity & Purpose", "Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
-        expected_keys = ("identity_purpose", "greeting_intro", "qualification", "handling_objections", "call_to_action", "closing")
-        result = self._call_script_from_response(response, expected, expected_keys, request_id)
-        validation = validate_customer_facing_script(result, str(context["language"]))
-        if not validation.valid:
-            logger.warning(
-                "LLM script language validation retry request_id=%s language=%s issues=%s",
-                request_id, context["language"], validation.as_dict()["issues"],
-            )
-            correction = (
-                "\n\nCORRECTION: Your previous script failed deterministic language validation. "
-                "Rewrite the same six sections only. For Telugu, customer-facing Telugu words must use Telugu Unicode, while natural English business terms stay in Latin script; never use Roman/Tinglish Telugu. "
-                "For Hindi, customer-facing Hindi words must use Devanagari, while natural English business terms stay in Latin script; never use Roman Hindi. "
-                f"Validation issues: {json.dumps(validation.as_dict()['issues'], ensure_ascii=False)}"
-            )
-            response = self._perform_json_request_with_fallbacks(request_id, attempts, system + correction, user)
-            result = self._call_script_from_response(response, expected, expected_keys, request_id)
-            validation = validate_customer_facing_script(result, str(context["language"]))
-            if not validation.valid:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail={
-                        "message": "The LLM returned a call script that failed language validation.",
-                        "request_id": str(request_id),
-                        "validation": validation.as_dict(),
-                    },
-                )
-        if str(context["call_type"]).casefold() == "outbound":
-            _validate_outbound_script(result, request_id)
-        return result
-
-    def _call_script_from_response(
-        self,
-        response: dict[str, Any],
-        expected: tuple[str, ...],
-        expected_keys: tuple[str, ...],
-        request_id: UUID,
-    ) -> dict[str, str]:
         sections = response.get("sections") if isinstance(response, dict) else None
-        # Some JSON-mode providers follow the field contract but omit the
-        # wrapper and return {identity_purpose: "...", ...}. Normalize that
-        # equivalent representation before validating the six sections.
-        if not isinstance(sections, list) and isinstance(response, dict):
-            direct_sections = []
-            for key, title in zip(expected_keys, expected):
-                content = response.get(key)
-                if isinstance(content, str):
-                    direct_sections.append({"key": key, "title": title, "content": content})
-            if len(direct_sections) == len(expected):
-                sections = direct_sections
-        if not isinstance(sections, list):
-            logger.error("LLM script invalid response request_id=%s response_type=%s response_keys=%s", request_id, type(response).__name__, list(response.keys()) if isinstance(response, dict) else None)
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned an invalid call script. [request_id={request_id}]")
+        if not isinstance(sections, list) or len(sections) != 6:
+            raise HTTPException(status_code=502, detail={"message": "The LLM returned an invalid employee script shape.", "request_id": str(request_id), "failure_category": "malformed_provider_response"})
+        for section in sections:
+            if not isinstance(section, dict) or any(not isinstance(section.get(key), str) or not section[key].strip() for key in ("title", "purpose", "instructions", "handling")):
+                raise HTTPException(status_code=502, detail={"message": "The LLM returned an incomplete employee section.", "request_id": str(request_id), "failure_category": "malformed_provider_response"})
+            for key in ("questions", "examples"):
+                if not isinstance(section.get(key), list) or any(not isinstance(item, str) or not item.strip() for item in section[key]):
+                    raise HTTPException(status_code=502, detail={"message": "The LLM returned malformed section content.", "request_id": str(request_id), "failure_category": "malformed_provider_response"})
+        configuration["conversation_sections"] = sections
+        return {section["title"]: "\n".join([f"Purpose: {section['purpose']}", f"Instructions: {section['instructions']}", *[f"Question: {q}" for q in section['questions']], *[f"Spoken example: {e}" for e in section['examples']], f"Handling: {section['handling']}"]) for section in sections}
 
-        def normalized(value: Any) -> str:
-            return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
-
-        # Providers occasionally reorder JSON array items or add punctuation to
-        # keys. Re-key harmless variations, but still require all six sections.
-        by_key: dict[str, str] = {}
-        aliases = {normalized(key): title for key, title in zip(expected_keys, expected)}
-        aliases.update({normalized(title): title for title in expected})
-        for item in sections:
-            if not isinstance(item, dict) or not isinstance(item.get("content"), str):
-                continue
-            title = aliases.get(normalized(item.get("key"))) or aliases.get(normalized(item.get("title")))
-            if title and item["content"].strip():
-                if title in by_key:
-                    logger.error("LLM script duplicate section request_id=%s section=%s", request_id, title)
-                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned duplicate call-script sections. [request_id={request_id}]")
-                by_key[title] = item["content"].strip()
-        # Dynamic section titles are valid: preserve the six-section storage
-        # contract by mapping the provider's ordered sections to the stable
-        # structural slots used by existing saved employees.
-        if len(by_key) != len(expected) and len(sections) == len(expected) and all(
-            isinstance(item, dict) and isinstance(item.get("content"), str) and item["content"].strip()
-            for item in sections
-        ):
-            by_key = {title: sections[index]["content"].strip() for index, title in enumerate(expected)}
-        result = {title: by_key[title] for title in expected if title in by_key}
-        if len(sections) != len(expected) or tuple(result) != expected:
-            logger.error("LLM script incomplete response request_id=%s received_count=%s received_sections=%s", request_id, len(sections), list(by_key))
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned an incomplete call script. [request_id={request_id}]")
-        return result
+    def generate_employee_prompt(self, employee: AIEmployee, configuration: dict[str, Any]) -> str:
+        """Generate the new prompt-first artifact; legacy section generation is separate."""
+        attempts = self._configured_llm_attempts()
+        if not attempts:
+            raise HTTPException(status_code=503, detail="LLM script generation is not configured.")
+        from app.services.conversation_design import AssistantPrompt, strict_prompt_schema
+        context = {key: configuration[key] for key in (
+            "business_name", "business_description", "purpose", "original_requirement", "role", "job_role",
+            "language", "call_type", "products", "products_services", "business_rules", "process_rules",
+            "workflow", "goals", "tasks", "constraints", "guardrails", "conversation_variables",
+        ) if key in configuration}
+        context["employee_name"] = employee.name
+        context["employee_role"] = configuration.get("role") or configuration.get("job_role") or employee.purpose
+        research = configuration.get("business_research") or {"status": "unavailable"}
+        system = (
+            "Write one complete editable production prompt for the configured voice employee. "
+            "Use only USER_CONTEXT, successful RESEARCH, and available KB facts. Research is optional. "
+            "Adapt naturally to the selected language, including Telugu-English or Hindi-English speech when selected. "
+            "Outbound must introduce the employee and explain the reason before questions; inbound must first understand why the caller called. "
+            "Derive only business-relevant behavior. Do not force sales qualification, invent facts, availability, policies, or capabilities. "
+            "Include identity, workflow, questions, handoff, closing, interruption handling, safety, and variables only when relevant. "
+            "Preserve the exact requested purpose and call direction. Return JSON with only a single prompt string."
+        )
+        user = json.dumps({"USER_CONTEXT": context, "RESEARCH": research if research.get("status") == "success" else {"status": "unavailable"}, "knowledge_base_available": bool(configuration.get("knowledge_files"))}, ensure_ascii=False)
+        request_id = uuid4()
+        payload = self._build_request(
+            attempts[0].provider, attempts[0].model, system, user,
+            api_key=attempts[0].api_key, base_url=attempts[0].base_url,
+            response_schema=strict_prompt_schema(), response_schema_name="employee_prompt", max_output_tokens=4000,
+        )
+        response = self._perform_json_request(attempts[0].provider, payload)
+        prompt = AssistantPrompt.model_validate(response).prompt.strip()
+        if not prompt:
+            raise HTTPException(status_code=502, detail=f"The LLM returned an empty employee prompt. [request_id={request_id}]")
+        return prompt
 
     def _perform_json_request(self, provider: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -495,13 +383,20 @@ class RealLLMService(LLMService):
             provider_body = re.sub(r"\s+", " ", exc.response.text or "")[:240]
             schema_path_match = re.search(r"(?:jsonschema|schema)[^\"']{0,80}[\"']([^\"']+)[\"']", exc.response.text or "", re.IGNORECASE)
             logger.error(
-                "LLM script request failed provider=%s model=%s status=%s schema_failure_path=%s body=%s",
+                "LLM script request failed provider=%s model=%s status=%s failure_category=%s schema_failure_path=%s body=%s",
                 provider, payload.get("json", {}).get("model"), provider_status,
+                "provider_rate_limit_or_quota" if provider_status == 429 else "provider_unavailable" if provider_status in {502, 503, 504} else "provider_request_rejected",
                 schema_path_match.group(1)[:160] if schema_path_match else None, provider_body,
+            )
+            provider_category = (
+                "provider_schema_configuration" if re.search(r"invalid json schema|schema.*required.*array|response_format", exc.response.text or "", re.IGNORECASE)
+                else "provider_rate_limit_or_quota" if provider_status == 429
+                else "provider_unavailable" if provider_status in {502, 503, 504}
+                else "provider_request_rejected"
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"The LLM provider rejected the script request (HTTP {provider_status}).",
+                detail=f"The LLM provider rejected the script request (HTTP {provider_status}; category={provider_category}).",
             ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             logger.exception("LLM script generation failed provider=%s", provider)
@@ -525,6 +420,7 @@ class RealLLMService(LLMService):
                         schema_attempt == 0
                         and llm_attempt.provider.casefold() in {"openai", "open-ai", "groq"}
                         and "HTTP 400" in str(exc.detail)
+                        and "provider_schema_configuration" not in str(exc.detail)
                     )
                     if retryable_schema_error:
                         logger.warning(
@@ -736,6 +632,8 @@ class RealLLMService(LLMService):
     def _build_request(
         self, provider: str, model: str, system_prompt: str, user_prompt: str,
         *, api_key: str | None = None, base_url: str | None = None,
+        response_schema: dict[str, Any] | None = None, response_schema_name: str = "employee_conversation_design",
+        max_output_tokens: int | None = None,
     ) -> dict[str, Any]:
         normalized = provider.casefold()
         if normalized in {"openai", "open-ai", "groq"}:
@@ -746,35 +644,19 @@ class RealLLMService(LLMService):
                 {"max_completion_tokens": 12000, "reasoning_effort": "low"}
                 if is_groq else {"max_tokens": 5000}
             )
+            if max_output_tokens:
+                generation_limits = ({"max_completion_tokens": max_output_tokens, "reasoning_effort": "low"}
+                                     if is_groq else {"max_tokens": max_output_tokens})
             response_format = {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "employee_call_script",
+                    "name": response_schema_name,
                     "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["sections"],
-                        "properties": {
-                            "sections": {
-                                "type": "array",
-                                "minItems": 6,
-                                "maxItems": 6,
-                                "items": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "required": ["key", "title", "content"],
-                                    "properties": {
-                                        "key": {"type": "string"},
-                                        "title": {"type": "string"},
-                                        "content": {"type": "string"},
-                                    },
-                                },
-                            },
-                        },
-                    },
+                    "schema": response_schema,
                 },
-            } if is_groq else {"type": "json_object"}
+            } if response_schema and is_groq else {"type": "json_object"}
+            if response_schema and not is_groq:
+                response_format = {"type": "json_object"}
             return {
                 "method": "POST",
                 "url": f"{base_url}/chat/completions",

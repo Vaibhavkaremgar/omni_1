@@ -13,7 +13,7 @@ SCRIPT_SECTION_NAMES = (
 )
 SUPPORTED_VARIABLE_TYPES = {"text", "number", "boolean", "date", "datetime", "phone", "email"}
 
-TELUGU_ENGINE_CONTRACT = """TELUGU LANGUAGE ENGINE (STRICT): For customer-facing Telugu-English dialogue, write Telugu words only in Telugu Unicode script and English business/conversational words only in Latin script. This is Telugu-English mixed speech, not pure Telugu and not Roman Telugu. Preserve natural urban spoken grammar; avoid literary, textbook, Sanskritized, newsreader, or word-for-word translated Telugu. Use English terms naturally when they are common in business speech, such as requirement, budget, location, details, appointment, booking, service, product, offer, price, call, team, confirm, check, available, follow-up, WhatsApp, site visit, and support. Do not transliterate English terms into Telugu script. Do not infer Roman Telugu from the customer's input. Use Telugu script for Telugu words even when the business brief is written in English or Roman Telugu. Mix languages naturally rather than forcing English into every sentence. Keep answers short, conversational, one question at a time, and adapt to the caller's language. Before returning any Telugu dialogue, verify that Telugu words use Unicode, English business terms remain Latin, and the result does not read as pure formal Telugu or Roman Telugu."""
+TELUGU_ENGINE_CONTRACT = """TELUGU LANGUAGE ENGINE (STRICT): For customer-facing Telugu-English dialogue, write Telugu words only in Telugu Unicode script and English business/conversational words only in Latin script. This is natural urban Telugu-English code-mixing, not pure grandhika/formal Telugu and not Roman Telugu. Keep Telugu grammar and connectors in Telugu script, but deliberately mix English throughout: include a natural English word or short phrase at least every 3–5 spoken words where the sentence allows it. Use terms such as okay, actually, sure, details, update, call, service, offer, price, appointment, booking, confirm, available, support, team, follow-up, time, thanks, and have a nice day. Do not transliterate Telugu into Latin letters or translate every English term into formal Telugu. Do not infer the output language from the customer's business brief. Keep answers short, conversational, and phone-natural. Before returning dialogue, verify that it is visibly Telugu-English mixed throughout, never a long pure Telugu paragraph."""
 HINDI_ENGINE_CONTRACT = """HINDI LANGUAGE ENGINE (STRICT): For customer-facing Hindi-English dialogue, write Hindi words only in Devanagari Unicode script and English business/conversational words only in Latin script. This is natural spoken Hinglish, not pure formal Hindi and not Roman Hindi. Preserve conversational Indian Hindi grammar; avoid literary, textbook, Sanskritized, newsreader, or word-for-word translated Hindi. Use English terms naturally when common in business speech, such as requirement, budget, location, details, appointment, booking, service, product, offer, price, call, team, confirm, check, available, follow-up, WhatsApp, site visit, and support. Do not transliterate English terms into Devanagari. Do not infer Roman Hindi from the customer's input. Use Devanagari for Hindi words even when the business brief is written in English or Roman Hindi. Mix languages naturally rather than forcing English into every sentence. Keep answers short, conversational, one question at a time, and adapt to the caller's language. Before returning any Hindi dialogue, verify that Hindi words use Devanagari, English business terms remain Latin, and the result does not read as pure formal Hindi or Roman Hindi."""
 
 BUSINESS_PROFILES: dict[str, dict[str, str]] = {
@@ -152,6 +152,16 @@ def business_conversation_profile(configuration: dict[str, Any]) -> dict[str, st
         ("sales", ("sales", "sell", "lead", "product", "service", "printer", "offer", "discount", "demo")),
     )
     key = next((profile for profile, markers in checks if any(marker in signal for marker in markers)), "sales")
+    if any(marker in signal for marker in ("election", "campaign", "candidate", "voter", "constituency", "ghmc", "political")):
+        return {
+            "key": "election_campaign",
+            "domain": "election campaign outreach",
+            "focus": "the campaign's stated civic message, constituency context, voter questions, and respectful opt-in engagement",
+            "qualification": "Ask only campaign-relevant questions such as whether the voter wants more information or wishes to share a concern. Do not ask sales, budget, product, appointment, or booking questions.",
+            "objection": "Acknowledge political concerns respectfully, use only verified campaign facts, avoid persuasion claims that are not configured, and offer campaign information when requested.",
+            "cta": "Offer only the configured campaign next step, such as sharing verified information or recording a campaign-related concern. Do not arrange appointments or callbacks unless explicitly configured.",
+            "telugu": "Election outreach should sound respectful and conversational. Keep campaign, candidate, ward, constituency, vote, issue, message, details, and update in English when natural.",
+        }
     return {"key": key, **BUSINESS_PROFILES[key]}
 
 
@@ -202,7 +212,7 @@ def _language_conversation_guidance(language: str) -> str:
         fillers = TELUGU_ENGINE_CONTRACT + "\n\n" + fillers
         fillers += " Use correct modern Telugu grammar around English terms. Preferred pattern: 'నమస్కారం అండి, నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను. మీ insurance premium గురించి ఒక quick update ఇవ్వడానికి call చేశాను. మీకు ఈ offer గురించి details కావాలా?' Use 'నేను Akshay, KMG Insurance నుంచి మాట్లాడుతున్నాను', not 'నేను Akshay మాట్లాడుతున్నాను' when introducing the company. Keep insurance, premium, quick update, call, offer, and details in English; keep Telugu postpositions and verbs in Telugu script."
         fillers += " MANDATORY SCRIPT RULE: every Telugu word spoken to callers must be written in Telugu script, mixed naturally with English words like insurance, renewal, policy, details, available, call, support, service, offer, booking, appointment, price, budget, product, team, and follow-up. Never write Telugu in Roman letters."
-        fillers += " TELUGU THANKS RULE: say thanks as 'thanks andi' or close with 'thanks andi, have a nice day.' Never translate thanks into Telugu."
+        fillers += " TELUGU THANKS RULE: close gratitude in English only, for example 'Thank you. Have a nice day.' Never translate thanks or have-a-nice-day into Telugu and do not add Telugu suffixes to the thanks message."
         hello = "If the caller is silent for approximately 2-3 seconds, say exactly '\u0c35\u0c3f\u0c28\u0c3f\u0c2a\u0c3f\u0c38\u0c4d\u0c24\u0c41\u0c02\u0c26\u0c3e \u0c05\u0c02\u0c21\u0c3f?' to check that they are present, then STOP speaking and WAIT for the caller's response."
     elif _is_hindi(normalized):
         fillers = HINDI_ENGINE_CONTRACT + "\n\n" + fillers
@@ -250,292 +260,34 @@ def natural_voice_conversation_behavior() -> str:
 
 
 def build_call_script(configuration: dict[str, Any]) -> dict[str, str]:
-    """Create the minimum useful, editable script from the owner's brief.
+    """Only an existing reviewed script can be reused; drafts have no fabricated fallback."""
+    script = configuration.get("call_script")
+    return dict(script) if isinstance(script, dict) else {}
 
-    This intentionally infers conversation topics, not business facts. Unknown
-    prices, availability, policies, and outcomes remain explicitly configurable.
-    """
-    name = _text(configuration.get("name")) or "AI employee"
-    language = _text(configuration.get("language")) or "English"
-    call_type = _text(configuration.get("call_type")).casefold()
-    inbound = call_type == "inbound"
-    business_name = _text(configuration.get("business_name"))
-    business_description = _text(configuration.get("business_description"))
-    purpose = _text(configuration.get("purpose")) or "help callers with the configured business request"
-    brief = business_description or _text(configuration.get("original_requirement")) or _text(configuration.get("original_shabdha_brief")) or purpose
-    lowered = f"{purpose} {brief}".casefold()
-    profile = business_conversation_profile(configuration)
-    domain = profile["domain"]
-    if profile["key"] == "sales" and any(word in lowered for word in ("printer", "printing")):
-        domain = "printer sales"
-        qualification = "Ask one question at a time about intended use, printer type, quantity, and budget. Use only product and discount details supplied by the business."
-        objection = "Acknowledge concerns about price, fit, or timing. Do not invent models, stock, warranty, delivery, or pricing; offer to check or arrange a human follow-up."
-        cta = "When the caller is interested, summarize their needs and ask whether they would like a sales follow-up about the configured offer."
-    else:
-        qualification = profile["qualification"]
-        objection = profile["objection"]
-        cta = profile["cta"]
-    identity = (f"You are {name}. {('Represent ' + business_name + '. ') if business_name else ''}" + (f"The customer initiated this inbound call; assist them with {purpose}. Never claim you called them." if inbound else f"You initiated this outbound call. Represent the business and explain the verified reason for calling before qualifying the customer's need. Never claim the customer initiated the call."))
-    greeting = (f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, and ask how you can help with {domain}." if inbound else f"Greet naturally, identify yourself as {name}{(' from ' + business_name) if business_name else ''}, explain the verified business purpose or offer for calling, and ask whether the customer is interested or whether it is relevant to them.")
-    qualification_text = (qualification if inbound else "OUTBOUND: No qualification is required. Do not ask discovery, profile, budget, location, timeline, preference, contact, or personal-detail questions. Explain the configured business, product or service, reason for calling, and verified benefits, then ask only whether the customer is interested or wants more information. Answer relevant doubts clearly and end or offer the configured informational next step without collecting details.")
-    cta_text = (cta if inbound else "When the customer is interested, explain verified benefits and move toward the actual configured next step such as a booking, callback, visit, or purchase. Never invent an offer, price, feature, or guarantee.")
-    if _is_telugu(language):
-        business = f" {business_name}" if business_name else ""
-        return {
-            SCRIPT_SECTION_NAMES[0]: f"You are {name}. Use this script as the spoken behavior source of truth for {profile['domain']}. Spoken examples must be natural Telugu-English: Telugu words in Telugu script plus useful English fillers and business terms such as okay, actually, sure, right, details, call, service, offer, booking, appointment, support, confirm, and follow-up. {profile['telugu']} Use only configured business details: {brief}.",
-            SCRIPT_SECTION_NAMES[1]: (
-                f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 {name}{business} \u0c28\u0c41\u0c02\u0c1a\u0c3f \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. \u0c2e\u0c40\u0c30\u0c41 \u0c0e\u0c02\u0c26\u0c41\u0c15\u0c41 call \u0c1a\u0c47\u0c36\u0c3e\u0c30\u0c41, \u0c0e\u0c32\u0c3e help \u0c1a\u0c47\u0c2f\u0c3e\u0c32\u0c3f \u0c05\u0c02\u0c21\u0c3f?"
-                if inbound else
-                f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 {name}{business} \u0c28\u0c41\u0c02\u0c1a\u0c3f \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. {domain} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41; details \u0c35\u0c3f\u0c28\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f \u0c2e\u0c40\u0c15\u0c41 interest \u0c09\u0c02\u0c26\u0c3e?"
-            ),
-            SCRIPT_SECTION_NAMES[2]: ("\u0c2e\u0c4a\u0c26\u0c1f product/service details \u0c28\u0c3f clear \u0c17\u0c3e explain \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f. Outbound \u0c15\u0c3e\u0c32\u0c4d\u0c32\u0c4d\u0c32\u0c4b customer name, phone, location, profession, identity, or personal details \u0c0e\u0c0f\u0c3f \u0c2f\u0c3f ask \u0c1a\u0c47\u0c2f\u0c15\u0c02\u0c21\u0c3f. Interest \u0c0e\u0c01\u0c26\u0c3e \u0c05\u0c28\u0c3f confirm \u0c1a\u0c47\u0c38\u0c3f, \u0c05\u0c2a\u0c4d\u0c2a\u0c41\u0c21\u0c41 \u0c2e\u0c3e\u0c24\u0c4d\u0c30\u0c2e\u0c47 business-relevant question \u0c05\u0c21\u0c17\u0c02\u0c21\u0c3f; ahh, hmm, okay, yes \u0c32\u0c3e\u0c02\u0c1f\u0c3f filler \u0c35\u0c32\u0c4d\u0c32 call end \u0c1a\u0c47\u0c2f\u0c15\u0c02\u0c21\u0c3f.") if not inbound else "Caller \u0c0e\u0c02\u0c26\u0c41\u0c15\u0c41 call \u0c1a\u0c47\u0c36\u0c3e\u0c30\u0c4b \u0c2e\u0c4a\u0c26\u0c1f understand \u0c1a\u0c47\u0c38\u0c41\u0c15\u0c41\u0c28\u0c3f, \u0c05\u0c24\u0c28\u0c3f request \u0c15\u0c41 answer \u0c07\u0c35\u0c4d\u0c35\u0c02\u0c21\u0c3f; \u0c05\u0c35\u0c38\u0c30\u0c2e\u0c48\u0c24\u0c47 \u0c2e\u0c3e\u0c24\u0c4d\u0c30\u0c2e\u0c47 relevant question \u0c05\u0c21\u0c17\u0c02\u0c21\u0c3f.",
-            SCRIPT_SECTION_NAMES[3]: "\u0c2e\u0c41\u0c02\u0c26\u0c41 caller concern \u0c28\u0c3f acknowledge \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f. Configured information \u0c2e\u0c3e\u0c24\u0c4d\u0c30\u0c2e\u0c47 explain \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f. Unknown \u0c05\u0c2f\u0c3f\u0c24\u0c47 'Sorry \u0c05\u0c02\u0c21\u0c3f, \u0c06 detail \u0c28\u0c3e\u0c15\u0c41 available \u0c17\u0c3e \u0c32\u0c47\u0c26\u0c41; team follow-up arrange \u0c1a\u0c47\u0c38\u0c4d\u0c24\u0c3e\u0c28\u0c41' \u0c05\u0c28\u0c02\u0c21\u0c3f.",
-            SCRIPT_SECTION_NAMES[4]: "\u0c2e\u0c40 next step clear \u0c05\u0c2f\u0c4d\u0c2f\u0c3e\u0c15 details \u0c28\u0c3f short \u0c17\u0c3e summarize \u0c1a\u0c47\u0c38\u0c3f confirmation \u0c05\u0c21\u0c17\u0c02\u0c21\u0c3f. Booking, callback, site visit, renewal, purchase \u0c32\u0c3e\u0c02\u0c1f\u0c3f action configured \u0c09\u0c28\u0c4d\u0c28\u0c2a\u0c4d\u0c2a\u0c41\u0c21\u0c47 offer \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f.",
-            SCRIPT_SECTION_NAMES[5]: "Objective complete \u0c05\u0c2f\u0c4d\u0c2f\u0c3e\u0c15 '\u0c07\u0c02\u0c15\u0c3e \u0c0f\u0c2e\u0c48\u0c28\u0c3e help \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3e \u0c05\u0c02\u0c21\u0c3f?' \u0c05\u0c28\u0c3f \u0c05\u0c21\u0c17\u0c02\u0c21\u0c3f. Caller goodbye, done, \u0c32\u0c47\u0c26\u0c3e no further help \u0c05\u0c28\u0c3f clear \u0c17\u0c3e \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c3f\u0c28\u0c2a\u0c4d\u0c2a\u0c41\u0c21\u0c47 polite \u0c17\u0c3e end \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f.",
-        }
-    if _is_hindi(language):
-        business = f" {business_name}" if business_name else ""
-        return {
-            SCRIPT_SECTION_NAMES[0]: f"You are {name}. Use this script as the spoken behavior source of truth. Spoken examples must be Hinglish: Hindi words in Devanagari plus natural English terms such as insurance, renewal, policy, details, call, service, offer, booking, support. Use only configured business details: {brief}.",
-            SCRIPT_SECTION_NAMES[1]: (
-                f"\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 {name}{business} \u0938\u0947 \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. \u0906\u092a\u0915\u0940 help \u0915\u0948\u0938\u0947 \u0915\u0930 \u0938\u0915\u0924\u093e \u0939\u0942\u0901?"
-                if inbound else
-                f"\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 {name}{business} \u0938\u0947 \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. {domain} \u0915\u0947 \u092c\u093e\u0930\u0947 \u092e\u0947\u0902 call \u0915\u093f\u092f\u093e \u0939\u0948; \u0915\u094d\u092f\u093e \u0906\u092a details \u0938\u0941\u0928\u0928\u093e \u091a\u093e\u0939\u0947\u0902\u0917\u0947?"
-            ),
-            SCRIPT_SECTION_NAMES[2]: "\u090f\u0915 \u0935\u0915\u094d\u0924 \u092a\u0930 \u090f\u0915 question \u092a\u0942\u091b\u0947\u0902. Caller short answer \u0926\u0947 \u0924\u094b acknowledge \u0915\u0930\u0915\u0947 next useful follow-up \u092a\u0942\u091b\u0947\u0902; ahh, hmm, okay, yes \u091c\u0948\u0938\u0947 filler \u0915\u094b end intent \u092e\u0924 \u092e\u093e\u0928\u093f\u090f.",
-            SCRIPT_SECTION_NAMES[3]: "\u092a\u0939\u0932\u0947 caller concern acknowledge \u0915\u0930\u0947\u0902. Sirf configured information explain \u0915\u0930\u0947\u0902. Unknown \u0939\u094b \u0924\u094b 'Sorry \u091c\u0940, \u092f\u0947 detail \u0905\u092d\u0940 available \u0928\u0939\u0940\u0902 \u0939\u0948; \u092e\u0948\u0902 team follow-up arrange \u0915\u0930 \u0926\u0942\u0901\u0917\u093e' \u0915\u0939\u0947\u0902.",
-            SCRIPT_SECTION_NAMES[4]: "Next step clear \u0939\u094b\u0928\u0947 \u092a\u0930 details short \u092e\u0947\u0902 summarize \u0915\u0930\u0915\u0947 confirmation \u092a\u0942\u091b\u0947\u0902. Booking, callback, site visit, renewal, purchase \u091c\u0948\u0938\u093e action sirf configured \u0939\u094b \u0924\u092d\u0940 offer \u0915\u0930\u0947\u0902.",
-            SCRIPT_SECTION_NAMES[5]: "Objective complete \u0939\u094b\u0928\u0947 \u0915\u0947 \u092c\u093e\u0926 '\u0914\u0930 \u0915\u0941\u091b help \u091a\u093e\u0939\u093f\u090f \u091c\u0940?' \u092a\u0942\u091b\u0947\u0902. Caller goodbye, done, \u092f\u093e no further help clearly \u0915\u0939\u0947 \u0924\u092d\u0940 politely call end \u0915\u0930\u0947\u0902.",
-        }
-    return {
-        SCRIPT_SECTION_NAMES[0]: identity + f" Business description: {brief}. Never treat the description as the business name.",
-        SCRIPT_SECTION_NAMES[1]: greeting,
-        SCRIPT_SECTION_NAMES[2]: qualification_text + " If the caller gives a short answer, acknowledge it and ask one useful follow-up; never end the call because the answer is brief or incomplete.",
-        SCRIPT_SECTION_NAMES[3]: objection,
-        SCRIPT_SECTION_NAMES[4]: cta_text,
-        SCRIPT_SECTION_NAMES[5]: "After the objective is complete, ask whether anything else is needed. Continue if the caller has another request. End only after clear intent to finish.",
-    }
 
 def _text(value: Any) -> str:
     if isinstance(value, list): return "\n".join(f"- {item}" for item in value if item)
     if isinstance(value, dict): return "\n".join(f"{key}: {item}" for key, item in value.items())
     return str(value).strip() if value is not None else ""
 
+
 def build_employee_prompt(configuration: dict[str, Any]) -> str:
-    sections: list[tuple[str, str]] = []
-    name = _text(configuration.get("name")) or "AI employee"
-    call_type = _text(configuration.get("call_type")).casefold()
-    mode_rules = (
-        "CALL MODE: INBOUND. The customer initiated this call. Greet them, ask why they called / what help they need, understand and answer their request, and guide them to a suitable next action. Never say or imply that you called the customer or invent a reason for calling."
-        if call_type == "inbound" else
-        "CALL MODE: OUTBOUND. You initiated this call. The opening is offer-first: identify yourself and the company, then clearly explain the configured business, product/service, reason for calling, and any verified benefit before asking the customer anything. The first customer-directed question may only ask whether they would like to hear more or whether the offer is relevant. Never open with 'What is your requirement?', 'How can I help?', or any discovery/qualification question. Ask qualification questions only after the customer has heard the offer and shown interest. Never say or imply that the customer initiated the call; never invent an offer or claim."
-    )
-    sections.append(("CALL TYPE AND CONVERSATION STRATEGY", mode_rules))
-    purpose = _text(configuration.get("purpose"))
-    if purpose.casefold() == "to be defined through the builder":
-        purpose = ""
-    template_id = _text(configuration.get("selected_template_id"))
-    template = None
-    if template_id:
-        try:
-            template = get_template(template_id)
-        except KeyError:
-            template = None
-    if template:
-        sections.append(("TEMPLATE FOUNDATION", f"You are {name}, based on the Pontis template '{template['name']}'.\n{template['purpose']}"))
-        sections.append(("TEMPLATE RESPONSIBILITIES", _text(template.get("responsibilities"))))
-        sections.append(("TEMPLATE WORKFLOW", _text(template.get("workflow"))))
-        values = configuration.get("template_values") or {}
-        business = "\n".join(
-            f"- {field['label']}: {_text(values.get(field['key']))}"
-            for field in template["placeholders"]
-            if _text(values.get(field["key"]))
-        )
-        if business:
-            sections.append(("CUSTOMER PLACEHOLDER VALUES", business))
-    profile = business_conversation_profile(configuration)
-    sections.append((
-        "BUSINESS TYPE CONVERSATION PROFILE",
-        (
-            f"Detected business type: {profile['key']} ({profile['domain']}). "
-            f"Shape the conversation around {profile['focus']}. "
-            f"Qualification: {profile['qualification']} "
-            f"Objection handling: {profile['objection']} "
-            f"Next step: {profile['cta']}"
-        ),
-    ))
-    language = _text(configuration.get("language"))
-    if language.casefold() in {"telugu", "te", "te-in", "telugu (india)"}:
-        sections.append(("TELUGU LANGUAGE ENGINE", TELUGU_ENGINE_CONTRACT))
-    elif language.casefold() in {"hindi", "hi", "hi-in", "hindi (india)"}:
-        sections.append(("HINDI LANGUAGE ENGINE", HINDI_ENGINE_CONTRACT))
-    if purpose: sections.append(("IDENTITY AND ROLE", f"You are {name}. {purpose}"))
-    opening_rules = (
-        "The platform has already spoken the welcome message before this conversation begins. "
-        "Do not repeat the greeting, your name, the business name, or the reason for calling. "
-        "After the welcome, wait for the caller's first utterance. When the caller speaks, respond directly to what they said first; "
-        "do not restart the introduction or switch to a generic questionnaire. Acknowledge their request, answer from configured business information, "
-        "and then ask only the single most relevant next question for the business objective. "
-        "If the caller asks what services are available, explain the configured services or say that the available details are not configured; "
-        "never answer with another introduction. Treat every caller turn as progress in the same conversation."
-    )
-    if call_type == "outbound":
-        opening_rules += (
-            " The welcome for this outbound call must already introduce the company and explain the configured product/service or offer. "
-            "If the caller asks what the call is about, restate the configured offer and its verified benefit before asking any qualifying question. "
-            "Do not turn an outbound call into a support-style conversation by asking what the customer needs before explaining what the business is offering."
-        )
-    elif call_type == "inbound":
-        opening_rules += " This is an inbound call: the caller initiated it. Ask why they called or what help they need, understand the caller's request, and answer or assist before qualifying. Do not assume the reason for the call, use an outbound sales opening, or ask for identity details unless they become relevant to the requested action."
-    sections.append(("OPENING AND FIRST CALLER TURN", opening_rules))
-    sections.append((
-        "QUESTION ANSWERING AND NO REPETITION",
-        (
-            "For every caller turn, first decide what the caller is asking, correcting, confirming, or objecting to. "
-            "Answer that exact question from the employee context, canonical call script, configured business details, Knowledge Base, and verified research before asking any follow-up. "
-            "If the answer is not available in that context, say the detail is not configured and offer a callback, human follow-up, or other configured next step. "
-            "Do not hallucinate. Do not ignore the caller's question to continue a script. "
-            "Say a substantive sentence only once; never repeat the same greeting, offer, explanation, question, or closing line back-to-back. "
-            "If the caller did not understand, rephrase once in simpler conversational wording instead of repeating the same sentence."
-        ),
-    ))
-    shabdha_brief = _text(configuration.get("original_shabdha_brief"))
-    direct_prompt = _text(configuration.get("direct_prompt"))
-    creation_mode = _text(configuration.get("creation_mode")).casefold()
-    if shabdha_brief:
-        sections.append(("ORIGINAL SHABDHA BRIEF", shabdha_brief))
-    elif direct_prompt:
-        title = "ORIGINAL CUSTOMER PROMPT" if creation_mode == "prompt" else "ORIGINAL SHABDHA BRIEF"
-        sections.append((title, direct_prompt))
-    for title, keys in ((
-        ("OBJECTIVE", ("objective", "conversation_objective", "desired_outcomes")),
-        ("ROLE", ("role", "job_role")),
-        ("RESPONSIBILITIES", ("responsibilities", "goals")),
-        ("TASKS", ("tasks",)),
-        ("PRODUCTS AND SERVICES", ("products", "products_services")),
-        ("TARGET CUSTOMERS", ("target_customers", "target_callers", "audience")),
-        ("CONVERSATION BEHAVIOR", ("tone", "personality", "communication_style", "conversation_behavior")),
-        ("CONVERSATION FLOW", ("conversation_flow", "workflow", "call_flow", "discovery_questions", "questions_to_ask")),
-        ("INFORMATION TO COLLECT", ("information_to_collect", "information_to_extract", "post_call_extraction", "lead_outcome_fields")),
-        ("QUALIFICATION AND DECISION RULES", ("qualification_rules", "qualification_criteria", "decision_rules")),
-        ("BUSINESS AND PROCESS RULES", ("business_rules", "process_rules", "appointment_rules", "booking_rules")),
-        ("OBJECTION HANDLING", ("objection_handling", "common_objections")),
-        ("ESCALATION AND HANDOFF", ("transfer_rules", "human_transfer_conditions", "escalation", "escalation_rules")),
-        ("FALLBACK BEHAVIOR", ("fallback_behavior", "fallback_rules")),
-        ("CLOSING BEHAVIOR", ("closing_behavior",)),
-        ("CONSTRAINTS AND GUARDRAILS", ("constraints", "guardrails", "restrictions")),
-        ("ADDITIONAL INSTRUCTIONS", ("system_prompt", "additional_information", "other_information")),
-    )):
-        value = next((_text(configuration.get(key)) for key in keys if _text(configuration.get(key))), "")
-        if title == "ADDITIONAL INSTRUCTIONS" and value and direct_prompt and value == direct_prompt:
-            value = ""
-        if value: sections.append((title, value))
-    if template:
-        sections.append(("TEMPLATE GUARDRAILS", _text(template.get("safety_guardrails"))))
-    identity_language = language or "the selected language"
-    details_rule = (
-        f"Do not ask for the caller's name, mobile number, or profession at the beginning of the call. "
-        f"First complete the relevant business conversation and confirm the appropriate next action for the configured objective. "
-        f"Only near the end, when a callback, follow-up, booking, purchase, handoff, or other concrete next step is needed, collect only the details required for that next step in {identity_language}, one question at a time. "
-        "Do not ask for profession unless it is genuinely relevant to the configured business objective. "
-        "Repeat any collected detail once for confirmation, then continue or close based on the caller's response."
-    )
-    if _text(configuration.get("call_type")).casefold() == "inbound":
-        details_rule = "For this inbound call, understand the caller's request before collecting identity or contact details. Ask for the name, mobile number, or other details only when the requested action genuinely requires them, one question at a time, and never as a fixed opening step."
-    elif call_type == "outbound":
-        details_rule = "ABSOLUTE OUTBOUND RULE: Never ask for the customer's name, phone number, mobile number, location, profession, identity, profile, budget, timeline, preferences, or any other personal/detail field. Use campaign variables silently. Keep the call focused only on introducing the company, explaining what the business offers and why it is relevant, checking whether the customer is interested, answering doubts, and offering information. There is no outbound qualification step. Do not perform bookings, purchases, transfers, callbacks, or other actions unless a separate configured action explicitly requires it."
-    sections.append(("CALLER DETAILS AT THE END", details_rule))
-    if language:
-        language_rule = f"Speak in {language}. Follow the caller's language preference when appropriate."
-        if language == "Telugu":
-            language_rule += " Use Telugish: Telugu script for Telugu words plus natural English business terms. Never romanize Telugu."
-        elif language == "Hindi":
-            language_rule += " Use Hinglish: Devanagari for Hindi words plus natural English business terms. Never romanize Hindi."
-        sections.append(("LANGUAGE", language_rule + " Keep the conversation warm, spontaneous, and human-sounding rather than robotic or scripted. For ordinary numbers use English pronunciation; for codes and identifiers, speak each digit separately in English."))
-    normalized_language = language.casefold()
-    if normalized_language in {"telugu", "te", "te-in", "telugu (india)"}:
-        idle_phrase = "Vinipisthunda andi?"
-    elif normalized_language in {"hindi", "hi", "hi-in", "hindi (india)"}:
-        idle_phrase = "Kya aap wahan hain ji?"
-    else:
-        idle_phrase = "Are you still there?"
-    sections.append(("MANDATORY IDLE CONFIRMATION", f"If the caller becomes silent or idle for 2–3 seconds, ask exactly: '{idle_phrase}' Then STOP speaking and WAIT silently for the caller's response. Do not repeat the previous question, ask a new question, infer an answer, or continue the conversation while waiting. If the caller says 'hello' repeatedly instead of answering, ask the same phrase '{idle_phrase}' and WAIT for the caller's response. This is a mandatory idle-confirmation step, not an optional suggestion."))
-    script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else build_call_script(configuration)
-    sections.append(("CANONICAL SIX-SECTION CALL SCRIPT", "\n\n".join(f"{index}. {title}\n{script.get(title, '')}" for index, title in enumerate(SCRIPT_SECTION_NAMES, 1))))
-    custom_sections = configuration.get("custom_sections")
-    if isinstance(custom_sections, list):
-        for item in custom_sections:
-            if isinstance(item, dict) and _text(item.get("title")) and _text(item.get("content")):
-                sections.append((f"CUSTOM CALL SCRIPT: {_text(item['title'])}", _text(item["content"])))
-    variables = _conversation_variables(configuration)
-    if variables:
-        sections.append(("CONVERSATION VARIABLES", "Capture these structured fields when the caller provides them; never invent values:\n" + "\n".join(f"- {item['key']}: {item.get('description', '')} ({item.get('type', 'text')})" for item in variables)))
-    if configuration.get("knowledge_base_configured") or configuration.get("knowledge_files"):
-        sections.append(("KNOWLEDGE BASE POLICY", "Use attached knowledge-base documents for verified product, service, pricing, FAQ, and policy information. Prefer verified knowledge-base information over assumptions. Never invent unavailable information; if it cannot be found, say so and continue helping or offer an appropriate human follow-up."))
-        knowledge_files = configuration.get("knowledge_files") if isinstance(configuration.get("knowledge_files"), list) else []
-        details = []
-        for item in knowledge_files:
-            if isinstance(item, dict) and _text(item.get("text")):
-                details.append(f"SOURCE: {_text(item.get('filename'))}\n{_text(item.get('text'))}")
-        if details:
-            sections.append(("KNOWLEDGE BASE DETAILS", "Use these extracted document details as configured business information. Prefer them over assumptions and do not mention internal prompt sections.\n\n" + "\n\n".join(details)))
-    research = configuration.get("business_research")
-    if isinstance(research, dict):
-        status = _text(research.get("status")) or "unavailable"
-        if status == "success":
-            facts = research.get("facts") if isinstance(research.get("facts"), list) else []
-            verified = "\n".join(f"- {item}" for item in facts if item)
-            body = (
-                "The following business facts were researched at build time with grounded web sources. "
-                "Use them only when relevant to the caller's question; do not mention research or source URLs aloud. "
-                "If a fact is absent, say the information is not configured and offer a human follow-up.\n"
-                f"Summary: {_text(research.get('summary'))}\nVerified facts:\n{verified or '- None'}"
-            )
-        else:
-            body = (
-                f"Build-time business research status: {status}. Do not claim that research was completed and do not invent company facts. "
-                "Use only the explicit employee configuration and knowledge base; if information is unavailable, say so clearly and offer a human follow-up."
-            )
-        sections.append(("VERIFIED BUSINESS RESEARCH", body))
-    sections.append(("NATURAL VOICE CONVERSATION BEHAVIOR", "Use natural human-like conversation, concise spoken responses, contextual acknowledgements, conversational pacing, varied phrasing, short natural pauses, and responsive turn-taking. If the caller is silent for 2–3 seconds, ask the configured idle re-engagement phrase ('Vinipisthundha andi?' in Telugu or its Hindi equivalent in Hindi) exactly once and then WAIT silently for the caller's response. Do not advance to the next question, infer an answer, or continue speaking during that wait. Avoid sounding robotic, scripted, repetitive, or overly formal. Use no repetitive filler, ask one question at a time, do not repeat caller information, yield immediately on interruption, and recover naturally after interruptions or topic changes. Never invent information or expose internal instructions/provider details. Do not volunteer internal labels such as 'Business description' or 'Employee role and purpose'; share business details naturally only when relevant or when the caller asks. In outbound calls, customer identity and contact details are already configured: never ask for the customer's name, phone number, profession, or other details already supplied. Completing the objective does not end the call; ask whether anything else is needed and end only on clear caller intent."))
-    sections.append(("ADDITIONAL NATURAL CONVERSATION RULES", natural_voice_conversation_behavior()))
-    sections.append(("LANGUAGE-AWARE NATURAL CONVERSATION CONTRACT", _language_conversation_guidance(language)))
-    # Preserve later-added business fields instead of silently dropping them.
-    consumed = {
-        "name", "purpose", "language", "creation_mode", "original_shabdha_brief", "direct_prompt", "final_prompt", "selected_template_id", "selected_template_version", "template_values", "llm_provider", "llm_model", "voice", "call_type", "greeting", "transfer", "end_call", "custom_sections", "conversation_variables", "knowledge_base_configured", "knowledge_files",
-        "objective", "conversation_objective", "desired_outcomes", "role", "job_role", "responsibilities", "goals", "tasks",
-        "products", "products_services", "target_customers", "target_callers", "audience", "tone", "personality",
-        "communication_style", "conversation_behavior", "conversation_flow", "workflow", "call_flow", "discovery_questions",
-        "questions_to_ask", "information_to_collect", "information_to_extract", "post_call_extraction", "lead_outcome_fields",
-        "qualification_rules", "qualification_criteria", "decision_rules", "business_rules", "process_rules", "appointment_rules",
-        "booking_rules", "objection_handling", "common_objections", "transfer_rules", "human_transfer_conditions", "escalation",
-        "escalation_rules", "fallback_behavior", "fallback_rules", "closing_behavior", "constraints", "guardrails", "restrictions",
-        "system_prompt", "additional_information", "other_information", "business_research", "knowledge_files",
-    }
-    for key, value in configuration.items():
-        if key in consumed or not _text(value):
-            continue
-        label = key.replace("_", " ").title()
-        if not any(title.casefold() == label.casefold() for title, _ in sections):
-            sections.append((label.upper(), _text(value)))
-    return "\n\n".join(f"{title}\n{body}" for title, body in sections)
+    if configuration.get("final_prompt_overridden") and _text(configuration.get("final_prompt")):
+        return _text(configuration["final_prompt"])
+    from app.services.conversation_design import employee_prompt
+    return employee_prompt(configuration)
 
 
 def compose_employee_configuration(configuration: dict[str, Any]) -> dict[str, Any]:
-    """Build the one deployable prompt while retaining all original customer input.
-
-    The script is canonical: edits to its six sections must be reflected in the
-    prompt shown in the UI and sent to OmniDimension on the next publish.
-    """
-    result = normalize_business_identity(configuration)
+    """Preserve six arbitrary ordered section titles, including legacy saved headings."""
+    result = dict(configuration)
     result.setdefault("original_requirement", _text(result.get("direct_prompt")) or _text(result.get("purpose")))
-    existing_script = result.get("call_script")
-    if not isinstance(existing_script, dict) or any(not _text(existing_script.get(title)) for title in SCRIPT_SECTION_NAMES):
-        result["call_script"] = build_call_script(result)
-    result["conversation_variables"] = _conversation_variables(result)
-    result["opening"] = result["call_script"]["Greeting & Intro"]
-    if result.get("final_prompt_overridden") and _text(result.get("final_prompt")):
-        result["final_prompt"] = _text(result.get("final_prompt"))
-    else:
+    script = build_call_script(result)
+    result["call_script"] = script
+    # New designs carry an explicit opening independent of section position.
+    if not result.get("conversation_design") and script.get("Greeting & Intro"):
+        result.setdefault("opening", script["Greeting & Intro"])
+    result.setdefault("conversation_variables", [])
+    if not (result.get("final_prompt_overridden") and _text(result.get("final_prompt"))):
         result["final_prompt"] = build_employee_prompt(result)
     return result
