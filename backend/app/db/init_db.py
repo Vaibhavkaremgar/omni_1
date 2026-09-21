@@ -41,6 +41,12 @@ def _column_type(type_name: str) -> str:
     return type_name
 
 
+def _boolean_default(value: bool) -> str:
+    if engine.dialect.name == "postgresql":
+        return "TRUE" if value else "FALSE"
+    return "1" if value else "0"
+
+
 def _ensure_employee_knowledge_file_columns() -> None:
     """Create the additive KB table for databases initialized before this feature."""
     if "employee_knowledge_files" not in inspect(engine).get_table_names():
@@ -326,7 +332,7 @@ def _ensure_phone_number_demo_columns() -> None:
             connection.execute(text("ALTER TABLE phone_numbers ADD COLUMN ownership VARCHAR(32) NOT NULL DEFAULT 'tenant'"))
         tables = set(inspect(engine).get_table_names())
         if "platform_demo_phone_access" not in tables:
-            connection.execute(text(_column_type("""
+            connection.execute(text(_column_type(f"""
                 CREATE TABLE platform_demo_phone_access (
                     id CHAR(32) NOT NULL PRIMARY KEY,
                     phone_number_id CHAR(32) NOT NULL REFERENCES phone_numbers(id),
@@ -354,10 +360,10 @@ def _ensure_tenant_feature_columns() -> None:
     existing = {column["name"] for column in inspect(engine).get_columns("tenants")}
     with engine.begin() as connection:
         if "instant_leads_enabled" not in existing:
-            connection.execute(text("ALTER TABLE tenants ADD COLUMN instant_leads_enabled BOOLEAN NOT NULL DEFAULT 1"))
+            connection.execute(text(f"ALTER TABLE tenants ADD COLUMN instant_leads_enabled BOOLEAN NOT NULL DEFAULT {_boolean_default(True)}"))
         for column in ("notify_campaign_completed", "notify_low_balance"):
             if column not in existing:
-                connection.execute(text(f"ALTER TABLE tenants ADD COLUMN {column} BOOLEAN NOT NULL DEFAULT 1"))
+                connection.execute(text(f"ALTER TABLE tenants ADD COLUMN {column} BOOLEAN NOT NULL DEFAULT {_boolean_default(True)}"))
 
 
 def _ensure_campaign_execution_columns() -> None:
@@ -368,7 +374,7 @@ def _ensure_campaign_execution_columns() -> None:
     with engine.begin() as connection:
         if "phone_number_id" not in existing:
             connection.execute(text("ALTER TABLE campaigns ADD COLUMN phone_number_id CHAR(32)"))
-        additions = {"timezone": "VARCHAR(64)", "scheduled_at": "TIMESTAMP", "calling_window_start": "VARCHAR(8)", "calling_window_end": "VARCHAR(8)", "max_attempts": "INTEGER NOT NULL DEFAULT 3", "concurrency": "INTEGER NOT NULL DEFAULT 1", "retry_enabled": "BOOLEAN NOT NULL DEFAULT 1", "retry_intervals": "JSON"}
+        additions = {"timezone": "VARCHAR(64)", "scheduled_at": "TIMESTAMP", "calling_window_start": "VARCHAR(8)", "calling_window_end": "VARCHAR(8)", "max_attempts": "INTEGER NOT NULL DEFAULT 3", "concurrency": "INTEGER NOT NULL DEFAULT 1", "retry_enabled": f"BOOLEAN NOT NULL DEFAULT {_boolean_default(True)}", "retry_intervals": "JSON"}
         for column, kind in additions.items():
             if column not in existing:
                 connection.execute(text(f"ALTER TABLE campaigns ADD COLUMN {column} {kind}"))
@@ -438,7 +444,7 @@ def _ensure_integration_tables() -> None:
                     integration_key VARCHAR(64) NOT NULL,
                     state_token VARCHAR(128) NOT NULL UNIQUE,
                     expires_at DATETIME NOT NULL,
-                    used BOOLEAN NOT NULL DEFAULT 0,
+                    used BOOLEAN NOT NULL DEFAULT {_boolean_default(False)},
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL
                 )
