@@ -367,6 +367,12 @@ class RealLLMService(LLMService):
             system += (
                 "\n\nTELUGU URBAN ENGLISH MIX (ADDITIVE STYLE RULE): Preserve all Telugu Unicode, native Telugu grammar, natural modern spoken phrasing, and the existing Telugu-English contract above. In addition, prefer a natural urban Telugu-English phone style with common conversational English words where people normally use them. Keep words such as time, thanks, have a nice day, information, details, campaign, election, call, update, organization, activity, interest, question, answer, confirm, available, message, support, follow-up, busy, okay, sorry, sure, right, clear, continue, and stop in English when natural. For example: 'మీ time కి thanks.', 'ఈ information clear గా ఉందా?', 'ఆ detail నాకు available గా లేదు.', 'మీకు interest లేకపోతే no problem.', 'Have a nice day అండి.' Do not translate every English word into formal Telugu, but do not make the response mostly English. Telugu words must remain in Telugu script; never use Romanized Telugu or Tinglish."
             )
+        selected_language = str(context["language"]).strip() or "English"
+        system += (
+            f"\n\nSELECTED SPOKEN LANGUAGE: The employee's customer-facing spoken content MUST be written in {selected_language}. "
+            "The business context below is owner-provided reference material and may be in English, mixed language, or any other language; understand it without validating or translating it wholesale. "
+            f"Generate all spoken examples, questions, objections, CTAs, and closing phrases in natural {selected_language}, while preserving natural English business/product terms where appropriate."
+        )
         system += "\n\nFINAL LINGUISTIC QUALITY CHECK: Before producing the final script, internally check whether every spoken example sounds like something a real native speaker would naturally say on a phone call. If it sounds translated, literary, textbook-like, overly formal, or awkwardly mixed, rewrite it."
         user = json.dumps(context, ensure_ascii=False, indent=2)
         response = self._perform_json_request_with_fallbacks(request_id, attempts, system, user)

@@ -143,8 +143,15 @@ def _validate_publish(employee: AIEmployee, draft: AIEmployeeVersion | None) -> 
 
 
 def _validate_script_language_or_422(configuration: dict) -> None:
+    # Configuration fields (business name, purpose, requirement, etc.) are
+    # owner-authored context and may be written in any language. Only validate
+    # when a customer-facing script has actually been supplied/generated.
+    call_script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else {}
+    has_spoken_script = any(str(value or "").strip() for value in call_script.values())
+    if not has_spoken_script and not (configuration.get("final_prompt_overridden") and str(configuration.get("final_prompt") or "").strip()):
+        return
     assert_customer_facing_script_language(
-        configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else {},
+        call_script,
         str(configuration.get("language") or "English"),
     )
     if configuration.get("final_prompt_overridden") and str(configuration.get("final_prompt") or "").strip():
