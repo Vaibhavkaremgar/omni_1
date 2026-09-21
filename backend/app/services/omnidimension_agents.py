@@ -327,6 +327,7 @@ def _automatic_post_call_actions() -> dict[str, Any]:
     return {
         "webhook": {
             "url": webhook_url,
+            "extracted_variables": [],
             "trigger_call_statuses": ["completed", "failed", "no_answer", "busy", "voicemail_detected"],
         }
     }

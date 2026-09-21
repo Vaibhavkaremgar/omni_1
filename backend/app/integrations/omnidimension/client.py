@@ -174,11 +174,12 @@ def _log_agent_payload_diagnostic(method: str, path: str, payload: Any) -> None:
     logger.info(
         "Omni serialized agent payload method=%s path=%s name=%s language=%s model=%s voice=%s "
         "sections=%d section_details=%s context_chars=%d context_words=%d welcome_chars=%d "
-        "post_call_webhook=%s context_breakdown_present=%s",
+        "post_call_webhook=%s post_call_webhook_config=%s context_breakdown_present=%s",
         method, "/" + path.lstrip("/"), str(payload.get("name", "")), payload.get("languages"),
         payload.get("model"), bool(payload.get("voice")), len(details), details, len(context_text),
         len(context_text.split()), len(str(payload.get("welcome_message", ""))),
-        bool((payload.get("post_call_actions") or {}).get("webhook")), True,
+        bool((payload.get("post_call_actions") or {}).get("webhook")),
+        _redact((payload.get("post_call_actions") or {}).get("webhook")), True,
     )
 
 
