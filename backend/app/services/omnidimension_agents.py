@@ -656,7 +656,7 @@ def _raw_welcome_message(employee: AIEmployee, configuration: dict[str, Any], la
     # The reviewed second script section is the caller-facing source of truth.
     # Omni plays welcome_message before the LLM gets a turn, so it must receive
     # that exact opening rather than a separately reconstructed version.
-    if script_greeting:
+    if script_greeting and not _contains_raw_description(script_greeting, configuration):
         return script_greeting
     # A saved generic greeting can otherwise undo the outbound offer-first
     # contract. Generate this opening from the verified employee configuration.
@@ -755,7 +755,29 @@ def _telugu_outbound_reason(configuration: dict[str, Any], purpose: str) -> str:
         return f"\u0c2e\u0c40 insurance renewal {timing}\u0c09\u0c02\u0c26\u0c3f. Renewal reminder \u0c15\u0c4b\u0c38\u0c02 call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
     if _looks_like_internal_instruction(brief):
         return "\u0c2e\u0c3e current offer \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
-    return f"{brief} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
+    return "మీకు relevant details చెప్పడానికి call చేశాను."
+
+
+def _contains_raw_description(text: str, configuration: dict[str, Any], minimum_words: int = 16) -> bool:
+    """Detect an owner brief being copied into caller-facing welcome text."""
+    descriptions = [
+        _text(configuration.get(key))
+        for key in ("business_description", "description", "original_requirement", "purpose")
+    ]
+    normalized_text = re.findall(r"[\w%'-]+", text.casefold())
+    if not normalized_text:
+        return False
+    for description in descriptions:
+        words = re.findall(r"[\w%'-]+", description.casefold())
+        if len(words) < minimum_words:
+            continue
+        for start in range(0, len(words) - minimum_words + 1):
+            if words[start:start + minimum_words] == normalized_text[:minimum_words]:
+                return True
+            phrase = words[start:start + minimum_words]
+            if " ".join(phrase) in text.casefold():
+                return True
+    return False
     brief = _text(configuration.get("business_description")) or purpose
     promotion = _promotion_from_brief(brief)
     if promotion:
