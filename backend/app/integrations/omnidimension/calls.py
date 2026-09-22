@@ -39,9 +39,14 @@ class OmniDimensionCallProvider:
             "call_context": call_context,
             "metadata": metadata,
         }
+        masked_number = to_number[:3] + "***" + to_number[-2:] if len(to_number) > 5 else "***"
+        self.logger.info(
+            "[OMNI_DISPATCH_REQUEST] agent_id=%s masked_destination=%s from_number_id=%s context_keys=%s",
+            agent_id, masked_number, from_number_id, sorted(call_context.keys()),
+        )
         response = self.client.post(self.endpoint, json=payload)
         self.logger.info(
-            "[OMNI_CALL_DISPATCH_RESPONSE] endpoint=%s agent_id=%s status=%s request_id=%s "
+            "[OMNI_DISPATCH_RESPONSE] endpoint=%s agent_id=%s status=%s request_id=%s "
             "provider_call_id=%s response_keys=%s",
             self.endpoint, agent_id, response.get("status") if isinstance(response, dict) else None,
             response.get("requestId") if isinstance(response, dict) else None,

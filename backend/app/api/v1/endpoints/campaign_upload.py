@@ -170,7 +170,7 @@ def _process_rows(raw_rows: list[dict[str, str]]) -> dict[str, Any]:
         valid.append({
             "phone_number": phone,
             "original_phone_number": phone_raw,
-            "first_name": normalized.get("first_name") or normalized.get("firstname") or normalized.get("first"),
+            "first_name": normalized.get("first_name") or normalized.get("firstname") or normalized.get("first") or normalized.get("name") or normalized.get("full_name") or normalized.get("customer_name"),
             "last_name": normalized.get("last_name") or normalized.get("lastname") or normalized.get("last"),
             "email": normalized.get("email") or normalized.get("email_address"),
             "customer_data": customer_data,

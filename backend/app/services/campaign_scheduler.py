@@ -32,7 +32,7 @@ class CampaignScheduler:
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="campaign-scheduler", daemon=True)
         self._thread.start()
-        logger.info("Campaign scheduler started interval_seconds=%s", self.interval_seconds)
+        logger.info("[SCHEDULER_START] interval_seconds=%s", self.interval_seconds)
 
     def stop(self) -> None:
         self._stop.set()
@@ -41,7 +41,9 @@ class CampaignScheduler:
         logger.info("Campaign scheduler stopped")
 
     def _run(self) -> None:
-        while not self._stop.wait(self.interval_seconds):
+        first_tick = True
+        while first_tick or not self._stop.wait(self.interval_seconds):
+            first_tick = False
             db = self.session_factory()
             try:
                 self.run_once(db)
@@ -53,14 +55,14 @@ class CampaignScheduler:
 
     def run_once(self, db: Session) -> int:
         now = datetime.now(timezone.utc)
-        logger.info("Campaign scheduler tick started at=%s", now.isoformat())
+        logger.info("[SCHEDULER_TICK] at=%s", now.isoformat())
         recover_stale_contacts(db)
         recover_stale_slots(db)
         campaigns = db.scalars(select(Campaign).where(
             Campaign.status.in_([CampaignStatus.scheduled.value, CampaignStatus.running.value]),
             (Campaign.scheduled_at.is_(None) | (Campaign.scheduled_at <= now)),
         )).all()
-        logger.info("Campaign scheduler campaigns discovered count=%s", len(campaigns))
+        logger.info("[SCHEDULER_CAMPAIGNS] count=%s ids=%s", len(campaigns), [str(c.id) for c in campaigns])
         dispatched = 0
         for campaign in campaigns:
             logger.info("Campaign scheduler processing campaign_id=%s status=%s concurrency=%s", campaign.id, campaign.status, campaign.concurrency)
@@ -76,6 +78,8 @@ class CampaignScheduler:
                     ))
                     if eligible is None:
                         logger.info("Campaign scheduler no eligible contacts campaign_id=%s", campaign.id)
+                    else:
+                        logger.info("[SCHEDULER_ELIGIBLE_CONTACT] campaign_id=%s contact_id=%s", campaign.id, eligible)
                     call = campaign_execution_service.dispatch_next_pending(db, campaign.id, campaign.tenant_id)
                 except CampaignExecutionError as exc:
                     logger.warning("Campaign scheduler validation failure campaign_id=%s reason=%s", campaign.id, str(exc)[:160])
@@ -88,10 +92,10 @@ class CampaignScheduler:
                     logger.info("Campaign scheduler contact skipped or no slot available campaign_id=%s", campaign.id)
                     break
                 dispatched += 1
-                logger.info("Campaign scheduler dispatched campaign_id=%s campaign_contact_id=%s call_id=%s", campaign.id, call.campaign_contact_id, call.id)
+                logger.info("[SCHEDULER_DISPATCHED] campaign_id=%s contact_id=%s call_id=%s", campaign.id, call.campaign_contact_id, call.id)
             db.refresh(campaign)
             if campaign.status == CampaignStatus.completed.value:
-                logger.info("Campaign scheduler campaign completed campaign_id=%s", campaign.id)
+                logger.info("[CAMPAIGN_COMPLETED] campaign_id=%s", campaign.id)
             elif campaign.status in {CampaignStatus.paused.value, CampaignStatus.cancelled.value}:
                 logger.info("Campaign scheduler campaign paused_or_cancelled campaign_id=%s status=%s", campaign.id, campaign.status)
         logger.info("Campaign scheduler tick finished dispatched=%s", dispatched)

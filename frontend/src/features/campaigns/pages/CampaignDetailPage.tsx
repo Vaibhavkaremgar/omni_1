@@ -439,6 +439,7 @@ export default function CampaignDetailPage() {
   const canResume = isPaused;
   const canStop = ['scheduled', 'running', 'paused', 'paused_credits'].includes(campaign.status);
   const canRetry = (isStopped || isCompleted) && campaign.progress.failed > 0;
+  const canRestart = isStopped || isCompleted || campaign.status === 'cancelled';
   const visibleContacts = contacts.filter(c => {
     const text = `${c.first_name || ''} ${c.last_name || ''} ${c.phone_number}`.toLowerCase();
     return (!contactSearch || text.includes(contactSearch.toLowerCase())) && (contactFilter === 'all' || c.status === contactFilter || (contactFilter === 'calling' && c.status === 'in_progress'));
@@ -519,7 +520,7 @@ export default function CampaignDetailPage() {
               className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition"
             >
               {acting ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-              Resume
+              Continue Campaign
             </button>
           )}
           {canPause && (
@@ -550,6 +551,16 @@ export default function CampaignDetailPage() {
             >
               {acting ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
               Retry Failed
+            </button>
+          )}
+          {canRestart && (
+            <button
+              onClick={() => { if (window.confirm('Restart this campaign from the beginning?')) void doAction('restart'); }}
+              disabled={acting}
+              className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition"
+            >
+              {acting ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+              Restart Campaign
             </button>
           )}
           {isDraft && !campaign.employee?.is_ready && (

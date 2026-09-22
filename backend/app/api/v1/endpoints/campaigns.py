@@ -517,6 +517,19 @@ def retry_campaign(
     return _campaign_detail(campaign, db)
 
 
+@router.post("/{campaign_id}/restart", response_model=CampaignDetail)
+def restart_campaign(
+    campaign_id: UUID,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CampaignDetail:
+    try:
+        campaign = campaign_execution_service.restart(db, campaign_id, current_user.tenant.id)
+    except CampaignExecutionError as exc:
+        raise _execution_error_to_http(exc) from exc
+    return _campaign_detail(campaign, db)
+
+
 @router.get("/{campaign_id}/progress", response_model=CampaignProgress)
 def get_campaign_progress(
     campaign_id: UUID,

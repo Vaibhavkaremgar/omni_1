@@ -47,6 +47,10 @@ from app.services.phone_numbers import PhoneNumberService
 logger = logging.getLogger(__name__)
 
 
+def _mask_phone(value: str) -> str:
+    return value[:3] + "***" + value[-2:] if len(value) > 5 else "***"
+
+
 # ── Errors ────────────────────────────────────────────────────────────────────
 
 class CampaignExecutionError(Exception):
@@ -280,6 +284,7 @@ def dispatch_single_contact(
     ).rowcount
     db.commit()
     if claimed != 1:
+        logger.info("[CONTACT_CLAIM_SKIPPED] campaign_id=%s contact_id=%s reason=already_claimed", campaign.id, contact.id)
         existing = db.scalar(select(Call).where(Call.campaign_contact_id == contact.id).order_by(Call.created_at.desc()))
         if existing is not None:
             return existing
@@ -323,6 +328,7 @@ def dispatch_single_contact(
     contact.status = ContactStatus.in_progress.value
     db.commit()
     db.refresh(call)
+    logger.info("[CALL_CREATED] campaign_id=%s contact_id=%s call_id=%s employee_id=%s provider_agent_id=%s masked_phone=%s provider_phone_id=%s", campaign.id, contact.id, call.id, employee.id, agent_id, _mask_phone(contact.phone_number), from_number_id)
 
     call_context: dict[str, str] = {str(k): str(v) for k, v in (contact.customer_data or {}).items()}
     # Outbound agents ask the caller for their name first; do not pre-seed
@@ -375,6 +381,7 @@ def dispatch_single_contact(
     contact.provider_call_id = result.provider_call_id
     contact.last_call_id = call.id
     db.commit()
+    logger.info("[CAMPAIGN_CONTACT_UPDATED] campaign_id=%s contact_id=%s status=%s provider_request_id=%s", campaign.id, contact.id, contact.status, provider_request_id or "unknown")
     db.refresh(call)
     return call
 
@@ -546,6 +553,41 @@ class CampaignExecutionService:
         for c in failed_contacts:
             c.status = ContactStatus.pending.value
         campaign.status = CampaignStatus.running.value
+        db.commit()
+        return campaign
+
+    def restart(self, db: Session, campaign_id: UUID, tenant_id: UUID) -> Campaign:
+        """Restart a finished/stopped campaign from its full contact list."""
+        campaign = _require_campaign(db, campaign_id, tenant_id)
+        if campaign.status not in {
+            CampaignStatus.completed.value, CampaignStatus.stopped.value,
+            CampaignStatus.failed.value, CampaignStatus.cancelled.value,
+        }:
+            raise CampaignStateError("Only completed, stopped, failed, or cancelled campaigns can be restarted.")
+        _require_published_employee(db, campaign.employee_id, tenant_id)
+        if campaign.phone_number_id is None:
+            raise CampaignExecutionError("Campaign has no phone number recorded; cannot restart.")
+        _require_usable_phone(db, campaign.phone_number_id, tenant_id)
+        contacts = db.scalars(select(CampaignContact).where(CampaignContact.campaign_id == campaign.id)).all()
+        if not contacts:
+            raise CampaignExecutionError("Campaign has no contacts to restart.")
+        for contact in contacts:
+            contact.status = ContactStatus.pending.value
+            contact.attempt_count = 0
+            contact.last_called_at = None
+            contact.last_call_id = None
+            contact.provider_request_id = None
+            contact.provider_call_id = None
+            contact.error_message = None
+            contact.claimed_at = None
+            contact.attempt_started_at = None
+            contact.completed_at = None
+            contact.retry_at = None
+            contact.callback_at = None
+            contact.lease_token = None
+        campaign.status = CampaignStatus.running.value
+        campaign.starts_at = campaign.starts_at or utc_now()
+        campaign.ends_at = None
         db.commit()
         return campaign
 
