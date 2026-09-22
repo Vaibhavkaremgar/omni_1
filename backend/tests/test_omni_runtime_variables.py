@@ -41,6 +41,9 @@ def test_published_agent_declares_name_slot_and_references_it_in_runtime_prompt(
     assert payload["dynamic_variables"] == {"name": ""}
     runtime = next(item["body"] for item in payload["context_breakdown"] if item["title"] == "Employee Runtime Rules")
     assert "{{name}}" in runtime
+    assert "DISPATCH RUNTIME CONTEXT" in runtime
+    assert "no dispatch context is supplied" in runtime
+    assert "location, project, configuration, budget, and status" in runtime
     assert "Rahul" not in str(payload)
     assert "{{name}}" in payload["welcome_message"]
 
