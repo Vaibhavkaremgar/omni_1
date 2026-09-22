@@ -14,7 +14,11 @@ from app.integrations.omnidimension import OmniDimensionAgentProvider, OmniDimen
 from app.main import app
 from app.models import AIEmployee, AIEmployeeVersion, Tenant, User
 from app.services import auth as auth_service
-from app.services.omnidimension_agents import OmniDimensionAgentService, map_employee_configuration, _provider_verification, _returned_configuration, _sent_configuration
+from app.services.omnidimension_agents import (
+    OmniDimensionAgentService, _automatic_post_call_actions, _provider_verification,
+    _returned_configuration, _sent_configuration, _verify_post_call_persistence,
+    map_employee_configuration,
+)
 
 
 @pytest.fixture()
@@ -120,18 +124,28 @@ def test_mapper_sends_only_supported_agent_fields(agent_database):
 def test_publish_creates_agent_and_persists_provider_state(agent_database, monkeypatch):
     db, _, _ = agent_database
     seen = []
+    sent_body = {}
 
     def handler(request: httpx.Request):
+        nonlocal sent_body
         seen.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={
+                "id": 9001,
+                "post_call_config_ids": [{
+                    "id": 301, "webhook_url": sent_body["post_call_actions"]["webhook"]["url"],
+                    "trigger_call_statuses": sent_body["post_call_actions"]["webhook"]["trigger_call_statuses"],
+                }],
+            })
         assert request.url.path == "/api/v1/agents/create"
         raw = request.read().decode()
         import json
-        body = json.loads(raw)
-        assert body["post_call_actions"]["webhook"]["url"].endswith("/api/v1/webhooks/omnidimension/post-call")
-        assert body["post_call_actions"]["webhook"]["url"] not in str(body.get("context_breakdown"))
-        assert "completed" in body["post_call_actions"]["webhook"]["trigger_call_statuses"]
-        payload = raw
-        assert "internal_secret" not in payload
+        sent_body = json.loads(raw)
+        assert sent_body["post_call_actions"]["webhook"]["url"].endswith("/api/v1/webhooks/omnidimension/post-call")
+        assert sent_body["post_call_actions"]["webhook"]["url"] not in str(sent_body.get("context_breakdown"))
+        assert "completed" in sent_body["post_call_actions"]["webhook"]["trigger_call_statuses"]
+        assert "voicemail_detected" not in sent_body["post_call_actions"]["webhook"]["trigger_call_statuses"]
+        assert "internal_secret" not in raw
         return httpx.Response(200, json={"id": 9001, "name": "Ava Support", "status": "Completed"})
 
     client, service = provider_service(handler)
@@ -171,6 +185,11 @@ def test_publish_persists_verified_provider_configuration(agent_database, monkey
             **sent_body,
             "id": 9010,
             "status": "Completed",
+            "post_call_config_ids": [{
+                "id": 302,
+                "webhook_url": sent_body["post_call_actions"]["webhook"]["url"],
+                "trigger_call_statuses": sent_body["post_call_actions"]["webhook"]["trigger_call_statuses"],
+            }],
         }
         return httpx.Response(200, json=readback)
 
@@ -213,7 +232,14 @@ def test_publish_persists_mismatch_without_failing(agent_database, monkeypatch):
             import json
             sent_body = json.loads(request.read().decode())
             return httpx.Response(200, json={"id": 9011, "status": "Completed"})
-        return httpx.Response(200, json={**sent_body, "call_type": "Incoming", "id": 9011, "status": "Completed"})
+        return httpx.Response(200, json={
+            **sent_body, "call_type": "Incoming", "id": 9011, "status": "Completed",
+            "post_call_config_ids": [{
+                "id": 303,
+                "webhook_url": sent_body["post_call_actions"]["webhook"]["url"],
+                "trigger_call_statuses": sent_body["post_call_actions"]["webhook"]["trigger_call_statuses"],
+            }],
+        })
 
     client, service = provider_service(handler)
     monkeypatch.setattr(employee_endpoint, "agent_service", service)
@@ -260,6 +286,45 @@ def test_publish_marks_provider_readback_failed_without_failing(agent_database, 
         app.dependency_overrides.clear()
 
 
+@pytest.mark.parametrize(
+    ("post_call_config_ids", "configured"),
+    [
+        ([{"id": 77, "webhook_url": "https://voice.example.test/api/v1/webhooks/omnidimension/post-call", "trigger_call_statuses": ["completed", "failed", "no_answer", "busy"]}], True),
+        (None, False),
+        ([], False),
+        ([{"id": 78, "webhook_url": "https://wrong.example.test/hook", "trigger_call_statuses": ["completed", "failed", "no_answer", "busy"]}], False),
+    ],
+)
+def test_post_call_get_verification_requires_matching_webhook(post_call_config_ids, configured):
+    expected = {
+        "url": "https://voice.example.test/api/v1/webhooks/omnidimension/post-call",
+        "trigger_call_statuses": ["completed", "failed", "no_answer", "busy"],
+    }
+    result = _verify_post_call_persistence(
+        agent_id="9001", expected_webhook=expected,
+        response={"post_call_config_ids": post_call_config_ids},
+    )
+    assert result["configured"] is configured
+    if post_call_config_ids:
+        assert result["post_call_config_ids"][0]["webhook_url"] == post_call_config_ids[0]["webhook_url"]
+    else:
+        assert result["post_call_config_ids"] == post_call_config_ids
+
+
+def test_post_call_get_verification_requires_all_requested_statuses():
+    result = _verify_post_call_persistence(
+        agent_id="9001",
+        expected_webhook={"url": "https://voice.example.test/hook", "trigger_call_statuses": ["completed", "failed"]},
+        response={"post_call_config_ids": [{"id": 80, "webhook_url": "https://voice.example.test/hook", "trigger_call_statuses": ["completed"]}]},
+    )
+    assert result["configured"] is False
+
+
+def test_post_call_payload_uses_documented_non_voicemail_statuses():
+    webhook = _automatic_post_call_actions()["webhook"]
+    assert webhook["trigger_call_statuses"] == ["completed", "failed", "no_answer", "busy"]
+
+
 def test_verification_detects_reordered_six_section_prompt(agent_database):
     _, tenant, _ = agent_database
     employee = AIEmployee(
@@ -298,6 +363,9 @@ def test_publish_request_contract_is_bodyless_and_invalid_path_is_rejected(agent
 
     def handler(request: httpx.Request):
         seen.append(request)
+        if request.method == "GET":
+            webhook = _automatic_post_call_actions()["webhook"]
+            return httpx.Response(200, json={"id": 9004, "post_call_config_ids": [{"id": 304, "webhook_url": webhook["url"], "trigger_call_statuses": webhook["trigger_call_statuses"]}]})
         return httpx.Response(200, json={"id": 9004, "status": "Completed"})
 
     client, service = provider_service(handler)
@@ -330,6 +398,9 @@ def test_provider_failure_preserves_draft_and_retry_succeeds(agent_database, mon
         calls.append(request)
         if len(calls) == 1:
             return httpx.Response(503, json={"error": "temporary"})
+        if request.method == "GET":
+            webhook = _automatic_post_call_actions()["webhook"]
+            return httpx.Response(200, json={"id": 9002, "post_call_config_ids": [{"id": 305, "webhook_url": webhook["url"], "trigger_call_statuses": webhook["trigger_call_statuses"]}]})
         return httpx.Response(200, json={"id": 9002, "status": "Completed"})
 
     client, service = provider_service(handler)
@@ -362,6 +433,13 @@ def test_same_employee_updates_existing_agent_after_a_draft_edit(agent_database,
         calls.append(request)
         if request.method == "POST":
             return httpx.Response(200, json={"id": 9003, "status": "Completed"})
+        if request.method == "GET":
+            webhook = _automatic_post_call_actions()["webhook"]
+            return httpx.Response(200, json={"id": 9003, "post_call_config_ids": [{"id": 306, "webhook_url": webhook["url"], "trigger_call_statuses": webhook["trigger_call_statuses"]}]})
+        assert request.method == "PUT"
+        import json
+        body = json.loads(request.read().decode())
+        assert body["post_call_actions"]["webhook"]["trigger_call_statuses"] == ["completed", "failed", "no_answer", "busy"]
         return httpx.Response(200, json={"id": 9003, "status": "Completed"})
 
     client, service = provider_service(handler)
@@ -375,13 +453,13 @@ def test_same_employee_updates_existing_agent_after_a_draft_edit(agent_database,
             api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             repeated = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert repeated.status_code == 200
-            assert calls[2].method == "PUT"
-            assert calls[2].url.path == "/api/v1/agents/9003"
+            assert [call.method for call in calls] == ["POST", "GET", "GET", "PUT", "GET"]
+            assert calls[3].url.path == "/api/v1/agents/9003"
             api.patch(f"/api/v1/employees/{employee_id}", json={"purpose": "New support flow"}, headers=headers)
             new_publish = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
             assert new_publish.status_code == 200
-            assert calls[2].method == "PUT"
-            assert calls[2].url.path == "/api/v1/agents/9003"
+            assert [call.method for call in calls] == ["POST", "GET", "GET", "PUT", "GET", "GET", "PUT", "GET"]
+            assert calls[6].url.path == "/api/v1/agents/9003"
             versions = db.scalars(select(AIEmployeeVersion).where(AIEmployeeVersion.employee_id == UUID(employee_id)).order_by(AIEmployeeVersion.version_number)).all()
             # The provider identity is unique: only the current published
             # version owns the provider columns; archived history keeps it in

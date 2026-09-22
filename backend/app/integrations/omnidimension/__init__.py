@@ -9,6 +9,7 @@ from .exceptions import (
     OmniDimensionConfigurationError,
     OmniDimensionError,
     OmniDimensionNetworkError,
+    OmniDimensionPostCallConfigurationNotPersistedError,
     OmniDimensionResponseError,
     OmniDimensionServerError,
 )
@@ -29,5 +30,6 @@ __all__ = [
     "OmniDimensionClientError",
     "OmniDimensionServerError",
     "OmniDimensionNetworkError",
+    "OmniDimensionPostCallConfigurationNotPersistedError",
     "OmniDimensionResponseError",
 ]

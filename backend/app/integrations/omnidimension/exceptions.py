@@ -46,3 +46,15 @@ class OmniDimensionNetworkError(OmniDimensionError):
 
 class OmniDimensionResponseError(OmniDimensionError):
     """The provider returned a response that could not be consumed safely."""
+
+
+class OmniDimensionPostCallConfigurationNotPersistedError(OmniDimensionResponseError):
+    """The provider accepted an agent write but did not retain its webhook."""
+
+    code = "provider_post_call_configuration_not_persisted"
+
+    def __init__(self, *, agent_id: str, webhook_url: str, post_call_config_ids: object):
+        self.agent_id = agent_id
+        self.webhook_url = webhook_url
+        self.post_call_config_ids = post_call_config_ids
+        super().__init__("OmniDimension did not persist the post-call webhook configuration.")

@@ -8,7 +8,10 @@ import json
 from typing import Any
 
 from app.integrations.omnidimension import OmniDimensionAgentProvider, ProviderAgent
-from app.integrations.omnidimension.exceptions import OmniDimensionResponseError
+from app.integrations.omnidimension.exceptions import (
+    OmniDimensionPostCallConfigurationNotPersistedError,
+    OmniDimensionResponseError,
+)
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.services.employee_prompt import (
@@ -71,6 +74,10 @@ class OmniDimensionAgentService:
             bool(voice and voice.get("voice_id")), payload.get("languages"), payload.get("call_type"), payload.get("transcriber"),
             bool(((payload.get("post_call_actions") or {}).get("webhook"))),
         )
+        logger.info(
+            "[OMNI_REQUEST_JSON] %s",
+            json.dumps({"post_call_actions": payload.get("post_call_actions")}, ensure_ascii=False, sort_keys=True),
+        )
         # Draft versions deliberately do not duplicate the unique provider
         # identity. When publishing a draft, update the currently published
         # Omni agent; only create an agent when the employee has never been
@@ -106,8 +113,27 @@ class OmniDimensionAgentService:
         readback_error: Exception | None = None
         try:
             readback = self.provider.get_agent(provider_agent.provider_id)
-            verification_summary = _post_call_verification_summary(provider_agent.provider_id, readback)
+            verification_summary = _verify_post_call_persistence(
+                agent_id=provider_agent.provider_id,
+                expected_webhook=_automatic_post_call_actions()["webhook"],
+                response=readback,
+            )
             logger.info("[OMNI_POST_CALL_VERIFICATION] %s", json.dumps(verification_summary, ensure_ascii=False, sort_keys=True))
+            if verification_summary["configured"]:
+                logger.info(
+                    "[OMNI_POST_CALL_CONFIGURED] %s",
+                    json.dumps(verification_summary, ensure_ascii=False, sort_keys=True),
+                )
+            else:
+                logger.error(
+                    "[OMNI_POST_CALL_NOT_PERSISTED] %s",
+                    json.dumps(verification_summary, ensure_ascii=False, sort_keys=True),
+                )
+                raise OmniDimensionPostCallConfigurationNotPersistedError(
+                    agent_id=provider_agent.provider_id,
+                    webhook_url=verification_summary["webhook_url"],
+                    post_call_config_ids=verification_summary["post_call_config_ids"],
+                )
             sections = readback.get("context_breakdown") if isinstance(readback, dict) else None
             logger.info(
                 "Omni agent readback agent_id=%s sections=%d prompt_chars=%d languages=%s welcome_chars=%d",
@@ -161,6 +187,8 @@ class OmniDimensionAgentService:
                 requested_language = (payload.get("languages") or [None])[0] if isinstance(payload.get("languages"), list) else None
                 if stored_languages and requested_language not in stored_languages:
                     logger.warning("Omni agent configuration mismatch agent_id=%s requested_language=%s stored_languages=%s", provider_agent.provider_id, requested_language, stored_languages)
+        except OmniDimensionPostCallConfigurationNotPersistedError:
+            raise
         except Exception as exc:
             readback_error = exc
             logger.warning("Omni agent readback unavailable agent_id=%s exception_class=%s", provider_agent.provider_id, type(exc).__name__)
@@ -172,10 +200,6 @@ class OmniDimensionAgentService:
             readback_error=readback_error,
         )
         webhook_mismatch = any(item.get("field") in {"webhook_enabled", "webhook_url", "webhook_statuses"} for item in verification.get("mismatches", []))
-        # OmniDimension's GET /agents response currently omits post-call
-        # delivery settings even though the create/update payload accepts and
-        # stores them. Treat missing readback fields as unverified, not failed;
-        # an explicit provider mismatch still blocks publication.
         if webhook_mismatch:
             raise OmniDimensionResponseError("OmniDimension post-call webhook verification failed.")
         for field in verification.get("mismatches", []):
@@ -331,30 +355,45 @@ def _automatic_post_call_actions() -> dict[str, Any]:
         "webhook": {
             "url": webhook_url,
             "extracted_variables": [],
-            "trigger_call_statuses": ["completed", "failed", "no_answer", "busy", "voicemail_detected"],
+            "trigger_call_statuses": ["completed", "failed", "no_answer", "busy"],
         }
     }
 
 
-def _post_call_verification_summary(agent_id: str, response: Any) -> dict[str, Any]:
-    """Extract post-call fields from the provider response without assuming nesting."""
-    post_actions = _find_nested_key(response, "post_call_actions")
-    config_ids = _find_nested_key(response, "post_call_config_ids")
-    webhook = _find_nested_key(post_actions, "webhook") if post_actions is not None else None
-    if webhook is None:
-        webhook = _find_nested_key(response, "webhook")
-    webhook_url = _find_nested_key(webhook, "url") if webhook is not None else None
-    if webhook_url is None:
-        webhook_url = _find_nested_key(response, "webhook_url")
-    statuses = _find_nested_key(webhook, "trigger_call_statuses") if webhook is not None else None
-    if statuses is None:
-        statuses = _find_nested_key(response, "trigger_call_statuses")
+def _verify_post_call_persistence(*, agent_id: str, expected_webhook: dict[str, Any], response: Any) -> dict[str, Any]:
+    """Verify the documented GET /agents post_call_config_ids representation."""
+    configs = response.get("post_call_config_ids") if isinstance(response, dict) else None
+    expected_url = str(expected_webhook["url"])
+    expected_statuses = set(expected_webhook["trigger_call_statuses"])
+    sanitized_configs = [_sanitize_post_call_config(config) for config in configs] if isinstance(configs, list) else configs
+    matching_config: dict[str, Any] | None = None
+    for config in configs if isinstance(configs, list) else []:
+        if not isinstance(config, dict) or config.get("webhook_url") != expected_url:
+            continue
+        statuses = config.get("trigger_call_statuses")
+        if isinstance(statuses, list) and expected_statuses.issubset(set(statuses)):
+            matching_config = config
+            break
     return {
         "agent_id": str(agent_id),
-        "post_call_config_ids": config_ids,
-        "post_call_actions": post_actions,
-        "webhook_url": webhook_url,
-        "trigger_call_statuses": statuses,
+        "create_or_update_status": 200,
+        "configured": matching_config is not None,
+        "post_call_config_id": str(matching_config["id"]) if isinstance(matching_config, dict) and matching_config.get("id") is not None else None,
+        "webhook_url": expected_url,
+        "trigger_call_statuses": matching_config.get("trigger_call_statuses") if matching_config else None,
+        "post_call_config_ids": sanitized_configs,
+    }
+
+
+def _sanitize_post_call_config(config: Any) -> Any:
+    if not isinstance(config, dict):
+        return config
+    return {
+        key: config.get(key)
+        for key in (
+            "id", "delivery_method", "webhook_url", "payload_transformation_type",
+            "extracted_variables", "trigger_call_statuses",
+        )
     }
 
 
@@ -457,6 +496,12 @@ def _returned_configuration(readback: dict[str, Any] | None) -> dict[str, Any] |
     voice = readback.get("voice") if isinstance(readback.get("voice"), dict) else {}
     model = readback.get("model")
     webhook = (readback.get("post_call_actions") or {}).get("webhook") if isinstance(readback.get("post_call_actions"), dict) else {}
+    post_call_configs = readback.get("post_call_config_ids")
+    if not webhook and isinstance(post_call_configs, list):
+        webhook = next(
+            (config for config in post_call_configs if isinstance(config, dict) and isinstance(config.get("webhook_url"), str)),
+            {},
+        )
     end_call = readback.get("end_call") if isinstance(readback.get("end_call"), dict) else {}
     prompt = _extract_six_section_prompt(readback.get("context_breakdown")) or _extract_six_section_prompt(readback.get("context"))
     return {
@@ -475,8 +520,8 @@ def _returned_configuration(readback: dict[str, Any] | None) -> dict[str, Any] |
         "idle_threshold_sec": readback.get("user_idle_threshold_sec"),
         "end_call_enabled": readback.get("is_end_call_enabled"),
         "end_call_condition": end_call.get("condition") or readback.get("end_call_condition"),
-        "webhook_enabled": bool(webhook) if "post_call_actions" in readback else None,
-        "webhook_url": webhook.get("url") if isinstance(webhook, dict) else readback.get("webhook_url"),
+        "webhook_enabled": bool(webhook) if ("post_call_actions" in readback or isinstance(post_call_configs, list)) else None,
+        "webhook_url": (webhook.get("url") or webhook.get("webhook_url")) if isinstance(webhook, dict) else readback.get("webhook_url"),
         "webhook_statuses": webhook.get("trigger_call_statuses") if isinstance(webhook, dict) else readback.get("trigger_call_statuses"),
     }
 

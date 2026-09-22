@@ -23,7 +23,10 @@ from app.services.auth import AuthenticatedUser
 from app.services.llm_registry import llm_registry
 from app.core.config import get_settings
 from app.integrations.omnidimension import OmniDimensionClient, OmniDimensionAgentProvider
-from app.integrations.omnidimension.exceptions import OmniDimensionError
+from app.integrations.omnidimension.exceptions import (
+    OmniDimensionError,
+    OmniDimensionPostCallConfigurationNotPersistedError,
+)
 from app.services.omnidimension_agents import OmniDimensionAgentService
 from app.services.employee_configuration import (
     normalize_employee_llm_configuration,
@@ -599,6 +602,16 @@ def publish_employee(
     assert version is not None
     try:
         provider_result = get_agent_service().synchronize(employee, version)
+    except OmniDimensionPostCallConfigurationNotPersistedError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": exc.code,
+                "message": "OmniDimension did not persist the post-call webhook configuration.",
+                "agent_id": exc.agent_id,
+            },
+        ) from exc
     except OmniDimensionError as exc:
         db.rollback()
         raise HTTPException(
