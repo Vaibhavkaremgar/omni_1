@@ -14,6 +14,7 @@ Lifecycle:
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, time as dt_time, timedelta
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -42,6 +43,8 @@ from app.models.phone_number import PhoneNumber
 from app.core.config import get_settings
 from app.services.wallets import InsufficientBalanceError, require_minimum_balance
 from app.services.phone_numbers import PhoneNumberService
+
+logger = logging.getLogger(__name__)
 
 
 # ── Errors ────────────────────────────────────────────────────────────────────
@@ -330,6 +333,17 @@ def dispatch_single_contact(
         "tenant_id": str(campaign.tenant_id),
         "employee_id": str(employee.id),
     }
+
+    # Safe correlation diagnostics: expose context keys and only a masked
+    # destination so dispatch issues can be traced without logging secrets or
+    # full customer phone numbers.
+    masked_number = contact.phone_number[:3] + "***" + contact.phone_number[-2:] if len(contact.phone_number) > 5 else "***"
+    logger.info(
+        "Campaign dispatch prepared campaign_id=%s contact_id=%s local_call_id=%s "
+        "agent_id=%s destination=%s from_number_id=%s context_keys=%s customer_name_present=%s",
+        campaign.id, contact.id, call.id, agent_id, masked_number, from_number_id,
+        sorted(call_context.keys()), bool(call_context.get("name")),
+    )
 
     settings = get_settings()
     call_provider = OmniDimensionCallProvider(OmniDimensionClient(settings))

@@ -269,6 +269,7 @@ def runtime_rules(configuration: dict[str, Any]) -> str:
         "Follow the reviewed employee instructions and the stated job. Ask only necessary context-supported questions, "
         "one at a time, and use already-known variables silently. Perform only explicitly configured actions. "
         "Do not add a sales funnel or infer personal-data requirements. Never invent facts, capabilities or results. "
+        "When runtime customer details include a name, use that name naturally and do not ask the customer for their name again; never speak a literal placeholder such as {name}. "
         f"Call direction: {configuration.get('call_type', 'inbound')}. "
         "The welcome has already been spoken; listen and respond to the person's actual words without repeating it. "
         "Yield immediately on interruption. A short answer, hesitation or silence is not permission to hang up. "

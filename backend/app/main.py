@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
 from app.services.instant_leads import InstantLeadMonitor
+from app.services.campaign_scheduler import campaign_scheduler
 
 
 settings = get_settings()
@@ -18,9 +19,11 @@ settings = get_settings()
 async def lifespan(_: FastAPI):
     init_db()
     monitor = InstantLeadMonitor(SessionLocal)
+    campaign_scheduler.start()
     monitor.start()
     yield
     monitor.stop()
+    campaign_scheduler.stop()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

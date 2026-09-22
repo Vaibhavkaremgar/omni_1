@@ -184,8 +184,6 @@ class InstantLeadMonitor:
         while not self._stop.wait(self.interval_seconds):
             db = self.session_factory()
             try:
-                from app.services.campaign_scheduler import campaign_scheduler
-                campaign_scheduler.run_once(db)
                 sources = db.scalars(select(InstantLeadSource).where(InstantLeadSource.enabled.is_(True))).all()
                 for source in sources:
                     try:

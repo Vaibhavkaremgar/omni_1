@@ -158,13 +158,22 @@ def _process_rows(raw_rows: list[dict[str, str]]) -> dict[str, Any]:
             continue
         seen_phones.add(phone)
         normalized = {re.sub(r"[^a-z0-9]+", "_", k.strip().lower()).strip("_"): (v or "").strip() for k, v in row.items()}
+        customer_data = {k: v for k, v in normalized.items() if k not in {"phone", "mobile", "mobile_number", "phone_number", "contact", "contact_number", "cell", "telephone", "number"}}
+        # Keep a stable runtime key even when an agency labels the name column
+        # as "Full Name", "Customer Name", or similar.
+        if not customer_data.get("name"):
+            name_value = next((customer_data.get(key) for key in ("full_name", "customer_name", "client_name", "lead_name") if customer_data.get(key)), "")
+            if not name_value:
+                name_value = " ".join(part for part in (normalized.get("first_name"), normalized.get("last_name")) if part)
+            if name_value:
+                customer_data["name"] = name_value
         valid.append({
             "phone_number": phone,
             "original_phone_number": phone_raw,
             "first_name": normalized.get("first_name") or normalized.get("firstname") or normalized.get("first"),
             "last_name": normalized.get("last_name") or normalized.get("lastname") or normalized.get("last"),
             "email": normalized.get("email") or normalized.get("email_address"),
-            "customer_data": {k: v for k, v in normalized.items() if k not in {"phone", "mobile", "mobile_number", "phone_number", "contact", "contact_number", "cell", "telephone", "number"}},
+            "customer_data": customer_data,
         })
 
     return {
