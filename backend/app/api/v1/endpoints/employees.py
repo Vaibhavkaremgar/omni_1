@@ -559,6 +559,25 @@ def generate_employee_script(
     return draft
 
 
+@router.post("/{employee_id}/suggest-conversation-variables")
+def suggest_conversation_variables(
+    employee_id: UUID,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, list[dict]]:
+    """Return reviewable extraction suggestions without changing the employee draft."""
+    employee = get_employee_or_404(employee_id, current_user.tenant.id, db)
+    draft = _draft_for(employee)
+    source = draft.configuration if draft is not None else (employee.published_version.configuration if employee.published_version else {})
+    configuration = dict(source or {})
+    knowledge = db.scalars(select(EmployeeKnowledgeFile).where(
+        EmployeeKnowledgeFile.employee_id == employee_id,
+        EmployeeKnowledgeFile.tenant_id == current_user.tenant.id,
+    )).all()
+    configuration["knowledge_files"] = [{"filename": item.filename, "status": item.status} for item in knowledge]
+    return {"variables": RealLLMService().suggest_conversation_variables(employee, configuration)}
+
+
 @router.get("/{employee_id}/published", response_model=AIEmployeeVersionRead)
 def get_published_employee_version(
     employee_id: UUID,

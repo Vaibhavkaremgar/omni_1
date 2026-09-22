@@ -7,7 +7,7 @@ import json
 import re
 import logging
 import time
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
@@ -48,6 +48,18 @@ def now() -> datetime:
 class SuggestedQuestion(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class SuggestedConversationVariable(BaseModel):
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    label: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=500)
+    type: Literal["text", "number", "phone", "email", "date", "datetime", "boolean"]
+    required: bool = False
+
+
+class ConversationVariableSuggestions(BaseModel):
+    variables: list[SuggestedConversationVariable] = Field(default_factory=list, max_length=12)
 
 
 class InterviewLLMResponse(BaseModel):
@@ -299,7 +311,7 @@ class RealLLMService(LLMService):
             "knowledge_base_available": bool(configuration.get("knowledge_files") or configuration.get("knowledge_base_configured")),
         }, ensure_ascii=False)
         language = str(context["language"])
-        system = """Return JSON only with exactly this shape: {\"sections\":[{\"title\":\"\",\"purpose\":\"\",\"instructions\":\"\",\"questions\":[\"\"],\"examples\":[\"\"],\"handling\":\"\"}]}. Generate exactly 6 dynamic sections based on USER_CONTEXT; the six sections together are the final employee prompt. Keep title, purpose, instructions, questions, and handling in clear English. Only spoken examples use the selected language. Telugu means Telugu script with natural conversational Telugu plus frequent natural English business words (Tenglish), never Roman Telugu, literary or translated language. Hindi means natural Devanagari Hindi plus English business words (Hinglish), never Roman or overly formal Hindi. English means natural conversational English. Do not invent facts or irrelevant questions and do not force sales, objections, CTA, payment, or appointment behavior unless relevant. Research and knowledge are optional."""
+        system = """Return JSON only with exactly this shape: {\"sections\":[{\"title\":\"\",\"purpose\":\"\",\"instructions\":\"\",\"questions\":[\"\"],\"examples\":[\"\"],\"handling\":\"\"}]}. Generate exactly 6 dynamic sections based on USER_CONTEXT; the six sections together are the final employee prompt. Keep title, purpose, instructions, questions, and handling in clear English. Only spoken examples use the selected language. Telugu means primarily Telugu Unicode script with short, natural Hyderabad/Indian Telugu speech and naturally retained English business/conversation words where a speaker would use them (for example appointment, policy, renewal, insurance, product, offer, discount, location, budget, site visit, booking, details, available, option, confirm, schedule, demo, price, quotation, follow-up, call, customer, payment, document). Keep sentences simple and human; do not force English into every sentence, use Roman Telugu, literary/Sanskrit-heavy Telugu, or translate natural English terms into formal Telugu. Hindi means natural Devanagari Hindi plus English business words (Hinglish), never Roman or overly formal Hindi. English means natural conversational English. Do not invent facts or irrelevant questions and do not force sales, objections, CTA, payment, or appointment behavior unless relevant. Research and knowledge are optional."""
         response = self._perform_json_request_with_fallbacks(request_id, attempts, system, user)
         sections = response.get("sections") if isinstance(response, dict) else None
         if not isinstance(sections, list) or len(sections) != 6:
@@ -312,6 +324,38 @@ class RealLLMService(LLMService):
                     raise HTTPException(status_code=502, detail={"message": "The LLM returned malformed section content.", "request_id": str(request_id), "failure_category": "malformed_provider_response"})
         configuration["conversation_sections"] = sections
         return {section["title"]: "\n".join([f"Purpose: {section['purpose']}", f"Instructions: {section['instructions']}", *[f"Question: {q}" for q in section['questions']], *[f"Spoken example: {e}" for e in section['examples']], f"Handling: {section['handling']}"]) for section in sections}
+
+    def suggest_conversation_variables(self, employee: AIEmployee, configuration: dict[str, Any]) -> list[dict[str, Any]]:
+        """Suggest optional post-call extraction fields; callers choose what to save."""
+        attempts = self._configured_llm_attempts()
+        if not attempts:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM variable suggestions are not configured.")
+        context_keys = (
+            "business_name", "business_description", "purpose", "original_requirement", "role", "job_role",
+            "call_type", "language", "call_script", "products", "products_services", "workflow", "goals",
+            "tasks", "business_rules", "process_rules", "constraints", "guardrails", "knowledge_files",
+        )
+        context = {key: configuration[key] for key in context_keys if key in configuration}
+        context["employee_name"] = employee.name
+        context["employee_purpose"] = employee.purpose
+        research = configuration.get("business_research") or {}
+        system = (
+            "Return JSON only in the form {\"variables\":[{\"key\":\"snake_case\",\"label\":\"\",\"description\":\"\","
+            "\"type\":\"text|number|phone|email|date|datetime|boolean\",\"required\":false}]}. "
+            "Suggest only practical post-call fields that this employee is realistically expected to collect according to USER_CONTEXT, "
+            "the Call Script, and successful RESEARCH. Suggestions must help CRM or follow-up. Do not invent business facts, "
+            "do not add generic metadata, do not suggest facts the script does not seek, and keep the list concise. "
+            "Use stable lowercase snake_case keys and concise labels/descriptions. These are suggestions only, not instructions to the caller."
+        )
+        user = json.dumps({
+            "USER_CONTEXT": context,
+            "RESEARCH": research if research.get("status") == "success" else {"status": "unavailable"},
+        }, ensure_ascii=False)
+        response = self._perform_json_request_with_fallbacks(uuid4(), attempts, system, user)
+        try:
+            return [item.model_dump() for item in ConversationVariableSuggestions.model_validate(response).variables]
+        except ValidationError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The LLM returned invalid conversation variable suggestions.") from exc
 
     def generate_employee_prompt(self, employee: AIEmployee, configuration: dict[str, Any]) -> str:
         """Generate the new prompt-first artifact; legacy section generation is separate."""
