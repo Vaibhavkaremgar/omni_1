@@ -21,6 +21,8 @@ def test_scheduler_starts_and_performs_immediate_tick(monkeypatch):
         assert ticked.wait(1), "scheduler did not perform its immediate first tick"
     finally:
         scheduler.stop()
+    assert scheduler._thread is not None
+    assert not scheduler._thread.is_alive()
 
 
 def test_scheduler_continues_after_iteration_exception(monkeypatch):

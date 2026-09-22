@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import socket
+import sys
 import threading
 from datetime import datetime, timezone
 
@@ -29,6 +30,7 @@ class CampaignScheduler:
         self._last_heartbeat: datetime | None = None
 
     def start(self) -> None:
+        logger.info("[SCHEDULER_START_ENTER] pid=%s thread=%s object_id=%s class=%s environment=%s enabled=%s", os.getpid(), threading.get_ident(), id(self), f"{type(self).__module__}.{type(self).__name__}", get_settings().environment, True)
         if self._thread and self._thread.is_alive():
             logger.info("[SCHEDULER_START_SKIPPED] reason=already_running pid=%s thread=%s", os.getpid(), threading.get_ident())
             return
@@ -38,8 +40,11 @@ class CampaignScheduler:
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="campaign-scheduler", daemon=True)
         self._thread.start()
+        logger.info("[SCHEDULER_WORKER_CREATED] pid=%s thread=%s daemon=%s alive=%s object_id=%s", os.getpid(), self._thread.ident, self._thread.daemon, self._thread.is_alive(), id(self))
         logger.info("[SCHEDULER_START] pid=%s thread=%s interval=%s environment=%s timestamp=%s", os.getpid(), self._thread.ident, self.interval_seconds, get_settings().environment, datetime.now(timezone.utc).isoformat())
-        logger.info("[SCHEDULER_RUNTIME] pid=%s thread=%s hostname=%s worker_configuration=process_local_thread", os.getpid(), self._thread.ident, socket.gethostname())
+        logger.info("[SCHEDULER_RUNTIME] pid=%s ppid=%s thread=%s hostname=%s python=%s worker_configuration=process_local_thread", os.getpid(), os.getppid(), self._thread.ident, socket.gethostname(), sys.version.split()[0])
+        logger.info("[PROCESS_RUNTIME] pid=%s ppid=%s hostname=%s python=%s", os.getpid(), os.getppid(), socket.gethostname(), sys.version.split()[0])
+        logger.info("[SCHEDULER_START_COMPLETE] pid=%s thread=%s object_id=%s", os.getpid(), self._thread.ident, id(self))
 
     def stop(self) -> None:
         self._stop.set()
@@ -48,17 +53,31 @@ class CampaignScheduler:
         logger.info("[SCHEDULER_STOP] pid=%s thread=%s timestamp=%s", os.getpid(), threading.get_ident(), datetime.now(timezone.utc).isoformat())
 
     def _run(self) -> None:
+        logger.info("[SCHEDULER_WORKER_ENTERED] pid=%s thread=%s object_id=%s", os.getpid(), threading.get_ident(), id(self))
         first_tick = True
-        while first_tick or not self._stop.wait(self.interval_seconds):
-            first_tick = False
-            try:
-                db = self.session_factory()
+        try:
+            while first_tick or not self._stop.wait(self.interval_seconds):
+                if first_tick:
+                    logger.info("[SCHEDULER_FIRST_TICK] pid=%s thread=%s", os.getpid(), threading.get_ident())
+                first_tick = False
                 try:
+                    logger.info("[SCHEDULER_DB_CHECK] pid=%s thread=%s", os.getpid(), threading.get_ident())
+                    db = self.session_factory()
+                except Exception:
+                    logger.exception("[SCHEDULER_DB_FAILED] pid=%s thread=%s", os.getpid(), threading.get_ident())
+                    continue
+                try:
+                    logger.info("[SCHEDULER_RUN_ONCE_BEGIN] pid=%s thread=%s tick=%s", os.getpid(), threading.get_ident(), self._tick_number + 1)
                     self.run_once(db)
+                    logger.info("[SCHEDULER_RUN_ONCE_END] pid=%s thread=%s tick=%s", os.getpid(), threading.get_ident(), self._tick_number)
+                except Exception:
+                    logger.exception("[SCHEDULER_FATAL_ITERATION_ERROR] pid=%s thread=%s tick=%s", os.getpid(), threading.get_ident(), self._tick_number)
                 finally:
                     db.close()
-            except Exception:
-                logger.exception("[SCHEDULER_FATAL_ITERATION_ERROR] pid=%s thread=%s tick=%s", os.getpid(), threading.get_ident(), self._tick_number)
+        except BaseException:
+            logger.exception("[SCHEDULER_WORKER_EXITED] reason=unexpected_exception pid=%s thread=%s", os.getpid(), threading.get_ident())
+            raise
+        logger.info("[SCHEDULER_WORKER_EXITED] reason=stop_requested pid=%s thread=%s", os.getpid(), threading.get_ident())
 
     def run_once(self, db: Session) -> int:
         now = datetime.now(timezone.utc)

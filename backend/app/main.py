@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    logger.info("[LIFESPAN_ENTER] pid=%s thread=%s environment=%s hostname=%s", os.getpid(), threading.get_ident(), settings.environment, socket.gethostname())
     init_db()
     monitor = InstantLeadMonitor(SessionLocal)
     logger.info("[LIFESPAN_SCHEDULER_STARTING] pid=%s thread=%s environment=%s hostname=%s", os.getpid(), threading.get_ident(), settings.environment, socket.gethostname())
