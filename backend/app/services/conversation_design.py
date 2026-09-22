@@ -269,7 +269,7 @@ def runtime_rules(configuration: dict[str, Any]) -> str:
         "Follow the reviewed employee instructions and the stated job. Ask only necessary context-supported questions, "
         "one at a time, and use already-known variables silently. Perform only explicitly configured actions. "
         "Do not add a sales funnel or infer personal-data requirements. Never invent facts, capabilities or results. "
-        "When runtime customer details include a name, use that name naturally and do not ask the customer for their name again; never speak a literal placeholder such as {name}. "
+        "When runtime customer details include a name, use {{name}} naturally in the opening and in later relevant references (for Telugu, use {{name}} గారికి where natural). If the name is missing or blank, address the caller naturally and respectfully without a name (use అండి in Telugu or restructure the sentence), do not leave a dangling గారికి, do not speak any placeholder, and do not ask for the customer's name merely because it was not provided. "
         f"Call direction: {configuration.get('call_type', 'inbound')}. "
         "The welcome has already been spoken; listen and respond to the person's actual words without repeating it. "
         "Yield immediately on interruption. A short answer, hesitation or silence is not permission to hang up. "

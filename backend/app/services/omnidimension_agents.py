@@ -270,7 +270,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         # immediately after the static welcome instead of relying on account
         # defaults. All values can be overridden by employee configuration.
         "transcriber": _transcriber_configuration(configuration, lang),
-        "is_welcome_message_dynamic": False,
+        "is_welcome_message_dynamic": True,
         "is_welcome_message_interruption": True,
         "is_interruption_allowed": True,
         "interruption_min_words": 3,
@@ -445,6 +445,7 @@ def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any])
         "voice_provider": str(voice_provider) if voice_provider else None,
         "voice_id": str(voice_id) if voice_id else None,
         "welcome_message": _welcome_message(employee, configuration, language),
+        "is_welcome_message_dynamic": True,
         "six_section_prompt": _format_call_script(script) if script else "",
         "six_section_titles": list(script) if script else [],
         "interruption_enabled": True,
@@ -640,7 +641,22 @@ def _remove_builder_instruction(text: str) -> str:
 
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
     """Build the static greeting sent to Omni, excluding builder-only copy."""
-    return _remove_builder_instruction(_raw_welcome_message(employee, configuration, language))
+    base = _remove_builder_instruction(_raw_welcome_message(employee, configuration, language))
+    if language == "Telugu":
+        return (
+            "Generate the opening greeting using the caller name variable when it is available. "
+            "Start naturally with: నమస్కారం {{name}} గారు. "
+            "If the name is missing or blank, omit {{name}} గారు entirely, start with నమస్కారం అండి, "
+            "and continue without asking for the caller's name or leaving an awkward gap. "
+            f"Then continue naturally with this approved opening: {base}"
+        )
+    return (
+        "Generate the opening greeting using the caller name variable when it is available. "
+        "Start naturally with: Hello {{name}}. "
+        "If the name is missing or blank, omit {{name}} entirely, use a generic greeting, "
+        "and continue without asking for the caller's name or leaving an awkward gap. "
+        f"Then continue naturally with this approved opening: {base}"
+    )
 
 
 def _raw_welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
