@@ -324,7 +324,7 @@ export default function InstantLeads() {
                 className="mt-1 w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm bg-white"
               >
                 <option value="">Select assigned number...</option>
-                {numbers.map(n => <option key={n.id} value={n.id}>{n.e164_number} — {n.provider_name || 'Provider'}</option>)}
+                {numbers.map(n => <option key={n.id} value={n.id}>{n.e164_number}</option>)}
               </select>
             </label>
 

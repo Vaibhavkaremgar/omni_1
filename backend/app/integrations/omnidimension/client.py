@@ -86,10 +86,15 @@ class OmniDimensionClient:
         headers.update(kwargs.pop("extra_headers", None) or {})
         if "json" in kwargs and kwargs["json"] is not None:
             headers["Content-Type"] = "application/json"
+            diagnostic_json = (
+                _safe_dispatch_payload(kwargs["json"])
+                if method == "POST" and path.lstrip("/") == "calls/dispatch"
+                else _redact(kwargs["json"])
+            )
             logger.info(
                 "[OMNI_REQUEST_JSON] method=%s path=%s json=%s",
                 method, "/" + path.lstrip("/"),
-                json.dumps(_redact(kwargs["json"]), ensure_ascii=False, separators=(",", ":")),
+                json.dumps(diagnostic_json, ensure_ascii=False, separators=(",", ":")),
             )
             _log_agent_payload_diagnostic(method, path, kwargs["json"])
         try:
@@ -170,6 +175,30 @@ def _safe_params(params: Any) -> dict[str, str]:
     if not isinstance(params, Mapping):
         return {}
     return {key: str(params[key])[:80] for key in ("region", "carrier") if key in params}
+
+
+def _safe_dispatch_payload(payload: Any) -> Any:
+    """Log the dispatch contract without recording customer PII.
+
+    The keys are intentionally retained: they are the provider custom-variable
+    names and are needed to diagnose runtime-variable substitution.
+    """
+    if not isinstance(payload, Mapping):
+        return _redact(payload)
+    context = payload.get("call_context")
+    safe_context = (
+        {str(key): "[present]" for key, value in context.items() if value not in (None, "")}
+        if isinstance(context, Mapping) else {}
+    )
+    metadata = payload.get("metadata")
+    return {
+        "agent_id": payload.get("agent_id"),
+        "to_number": "[redacted]",
+        "from_number_id": payload.get("from_number_id"),
+        "call_context": safe_context,
+        "call_context_keys": sorted(safe_context),
+        "metadata": _redact(metadata) if isinstance(metadata, Mapping) else {},
+    }
 
 
 def _log_agent_payload_diagnostic(method: str, path: str, payload: Any) -> None:

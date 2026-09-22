@@ -260,6 +260,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     payload: dict[str, Any] = {
         "name": _text(configuration.get("name"), employee.name),
         "welcome_message": _welcome_message(employee, configuration, lang),
+        # Omni substitutes {{name}} from the dispatch call_context at call
+        # time.  Declare the slot on the published agent without assigning a
+        # contact value: each call supplies its own value in call_context.
+        "dynamic_variables": {"name": ""},
         "context_breakdown": context,
         # Omni's live voice agent is always Gemini; Groq remains available for
         # Pontis-side generation but must never leak into the live call agent.
