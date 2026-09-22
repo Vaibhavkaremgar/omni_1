@@ -25,6 +25,7 @@ class CampaignScheduler:
         self.session_factory = session_factory
         self.interval_seconds = interval_seconds
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._tick_number = 0
         self._last_heartbeat: datetime | None = None
@@ -48,15 +49,22 @@ class CampaignScheduler:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
         if self._thread:
             self._thread.join(timeout=5)
         logger.info("[SCHEDULER_STOP] pid=%s thread=%s timestamp=%s", os.getpid(), threading.get_ident(), datetime.now(timezone.utc).isoformat())
+
+    def wake(self) -> None:
+        """Ensure a worker exists and request an immediate campaign scan."""
+        self.start()
+        self._wake.set()
+        logger.info("[CAMPAIGN_WORKER_STARTED] pid=%s thread=%s worker_alive=%s trigger=campaign_start", os.getpid(), threading.get_ident(), bool(self._thread and self._thread.is_alive()))
 
     def _run(self) -> None:
         logger.info("[SCHEDULER_WORKER_ENTERED] pid=%s thread=%s object_id=%s", os.getpid(), threading.get_ident(), id(self))
         first_tick = True
         try:
-            while first_tick or not self._stop.wait(self.interval_seconds):
+            while first_tick or not self._stop.is_set():
                 if first_tick:
                     logger.info("[SCHEDULER_FIRST_TICK] pid=%s thread=%s", os.getpid(), threading.get_ident())
                 first_tick = False
@@ -74,6 +82,8 @@ class CampaignScheduler:
                     logger.exception("[SCHEDULER_FATAL_ITERATION_ERROR] pid=%s thread=%s tick=%s", os.getpid(), threading.get_ident(), self._tick_number)
                 finally:
                     db.close()
+                self._wake.wait(self.interval_seconds)
+                self._wake.clear()
         except BaseException:
             logger.exception("[SCHEDULER_WORKER_EXITED] reason=unexpected_exception pid=%s thread=%s", os.getpid(), threading.get_ident())
             raise
@@ -83,6 +93,7 @@ class CampaignScheduler:
         now = datetime.now(timezone.utc)
         self._tick_number += 1
         logger.info("[SCHEDULER_TICK] tick=%s pid=%s thread=%s timestamp=%s", self._tick_number, os.getpid(), threading.get_ident(), now.isoformat())
+        logger.info("[CAMPAIGN_WORKER_TICK] tick=%s pid=%s thread=%s", self._tick_number, os.getpid(), threading.get_ident())
         if self._last_heartbeat is None or (now - self._last_heartbeat).total_seconds() >= 60:
             self._last_heartbeat = now
             logger.info("[SCHEDULER_HEARTBEAT] tick=%s pid=%s thread=%s timestamp=%s", self._tick_number, os.getpid(), threading.get_ident(), now.isoformat())
@@ -95,6 +106,7 @@ class CampaignScheduler:
         logger.info("[SCHEDULER_CAMPAIGN_SCAN] running_campaigns=%s campaign_ids=%s", len(campaigns), [str(c.id) for c in campaigns])
         dispatched = 0
         for campaign in campaigns:
+            logger.info("[CAMPAIGN_DISCOVERED] campaign_id=%s tenant_id=%s", campaign.id, campaign.tenant_id)
             logger.info("[SCHEDULER_CAMPAIGN] campaign_id=%s tenant_id=%s status=%s employee_id=%s phone_number_id=%s schedule_type=%s calling_window=%s-%s current_time=%s timezone=%s concurrency=%s", campaign.id, campaign.tenant_id, campaign.status, campaign.employee_id, campaign.phone_number_id, (campaign.schedule_config or {}).get("type", "immediate"), campaign.calling_window_start, campaign.calling_window_end, now.isoformat(), campaign.timezone or "UTC", campaign.concurrency)
             if campaign.status == CampaignStatus.scheduled.value:
                 campaign.status = CampaignStatus.running.value
@@ -115,6 +127,7 @@ class CampaignScheduler:
                         logger.info("[SCHEDULER_NO_ELIGIBLE_CONTACT] campaign_id=%s reason=no_pending_or_due_retry", campaign.id)
                     else:
                         logger.info("[SCHEDULER_ELIGIBLE_CONTACT] campaign_id=%s contact_id=%s status=%s attempts=%s", campaign.id, eligible.id, eligible.status, eligible.attempt_count)
+                        logger.info("[CAMPAIGN_CONTACT_SELECTED] campaign_id=%s contact_id=%s attempt_number=%s", campaign.id, eligible.id, eligible.attempt_count + 1)
                     logger.info("[DISPATCH_NEXT_PENDING_START] campaign_id=%s tenant_id=%s", campaign.id, campaign.tenant_id)
                     call = campaign_execution_service.dispatch_next_pending(db, campaign.id, campaign.tenant_id)
                     logger.info("[DISPATCH_NEXT_PENDING_RESULT] campaign_id=%s result_type=%s contact_id=%s local_call_id=%s reason=%s", campaign.id, type(call).__name__ if call else "None", getattr(call, "campaign_contact_id", None), getattr(call, "id", None), "not_dispatched" if call is None else "dispatched")

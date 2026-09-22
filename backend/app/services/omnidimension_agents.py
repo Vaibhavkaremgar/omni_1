@@ -263,7 +263,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         "context_breakdown": context,
         # Omni's live voice agent is always Gemini; Groq remains available for
         # Pontis-side generation but must never leak into the live call agent.
-        "model": {"model": "gemini-2.5-flash-lite"},
+        # Keep responses deterministic for concise, low-variance call turns.
+        "model": {"model": "gemini-2.5-flash-lite", "temperature": 0.1},
         "languages": [lang],
         "post_call_actions": post_call_actions,
         # Make the speech handoff explicit so the provider starts listening

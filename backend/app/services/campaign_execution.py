@@ -294,7 +294,7 @@ def dispatch_single_contact(
         if existing is not None:
             return existing
         raise CampaignExecutionError("Contact is already claimed by another worker.")
-    logger.info("[CONTACT_CLAIMED] campaign_id=%s contact_id=%s previous_status=%s new_status=%s attempt_number=%s", campaign.id, contact.id, previous_status, ContactStatus.dispatching.value, (contact.attempt_count or 0) + 1)
+    logger.info("[CONTACT_CLAIMED] [CAMPAIGN_CONTACT_CLAIMED] campaign_id=%s contact_id=%s previous_status=%s new_status=%s attempt_number=%s", campaign.id, contact.id, previous_status, ContactStatus.dispatching.value, (contact.attempt_count or 0) + 1)
 
     # Duplicate guard — an accepted or active call is never dispatched again.
     existing = db.scalar(
@@ -340,8 +340,12 @@ def dispatch_single_contact(
     db.commit()
     db.refresh(call)
     logger.info("[CALL_CREATED] campaign_id=%s contact_id=%s call_id=%s employee_id=%s provider_agent_id=%s masked_phone=%s provider_phone_id=%s", campaign.id, contact.id, call.id, employee.id, agent_id, _mask_phone(contact.phone_number), from_number_id)
+    logger.info("[CAMPAIGN_CALL_CREATED] campaign_id=%s contact_id=%s local_call_id=%s employee_id=%s provider_agent_id=%s provider_phone_number_id=%s attempt_number=%s masked_destination=%s", campaign.id, contact.id, call.id, employee.id, agent_id, from_number_id, contact.attempt_count, _mask_phone(contact.phone_number))
 
     call_context: dict[str, str] = {str(k): str(v) for k, v in (contact.customer_data or {}).items()}
+    canonical_name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
+    if canonical_name:
+        call_context["name"] = canonical_name
     # Outbound agents ask the caller for their name first; do not pre-seed
     # customer_name with a contact or employee display name.
     metadata = {
@@ -363,6 +367,7 @@ def dispatch_single_contact(
         campaign.id, contact.id, call.id, employee.id, agent_id, masked_number, from_number_id,
         sorted(call_context.keys()), utc_now().isoformat(),
     )
+    logger.info("[CAMPAIGN_OMNI_DISPATCH] campaign_id=%s contact_id=%s local_call_id=%s employee_id=%s provider_agent_id=%s provider_phone_number_id=%s attempt_number=%s masked_destination=%s", campaign.id, contact.id, call.id, employee.id, agent_id, from_number_id, contact.attempt_count, masked_number)
 
     settings = get_settings()
     call_provider = OmniDimensionCallProvider(OmniDimensionClient(settings))
@@ -400,6 +405,7 @@ def dispatch_single_contact(
         logger.exception("[CAMPAIGN_CONTACT_UPDATE_FAILED] campaign_id=%s contact_id=%s local_call_id=%s", campaign.id, contact.id, call.id)
         raise
     logger.info("[CAMPAIGN_CONTACT_UPDATED] campaign_id=%s contact_id=%s old_status=%s new_status=%s attempt_count=%s provider_request_id=%s provider_call_id=%s", campaign.id, contact.id, ContactStatus.dispatching.value, contact.status, contact.attempt_count, provider_request_id or "unknown", result.provider_call_id or "unknown")
+    logger.info("[CAMPAIGN_CONTACT_DISPATCHED] campaign_id=%s contact_id=%s local_call_id=%s provider_request_id=%s", campaign.id, contact.id, call.id, provider_request_id or "unknown")
     db.refresh(call)
     return call
 

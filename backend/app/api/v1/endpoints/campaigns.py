@@ -30,6 +30,7 @@ from app.services.campaign_execution import (
     CampaignStateError,
     campaign_execution_service,
 )
+from app.services.campaign_scheduler import campaign_scheduler
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -452,6 +453,9 @@ def start_campaign(
         logger.warning("[CAMPAIGN_START_FAILED] campaign_id=%s tenant_id=%s validation_reason=%s", campaign_id, current_user.tenant.id, str(exc))
         raise _execution_error_to_http(exc) from exc
     logger.info("[CAMPAIGN_START_SUCCESS] campaign_id=%s tenant_id=%s employee_id=%s phone_number_id=%s status_after=%s scheduling_mode=%s calling_window=%s-%s timezone=%s", campaign.id, campaign.tenant_id, campaign.employee_id, campaign.phone_number_id, campaign.status, (campaign.schedule_config or {}).get("type", "immediate"), campaign.calling_window_start, campaign.calling_window_end, campaign.timezone or "UTC")
+    # Lifespan starts the long-lived worker, but starting a campaign must also
+    # wake/repair it in the process that accepted this request.
+    campaign_scheduler.wake()
     return _campaign_detail(campaign, db)
 
 

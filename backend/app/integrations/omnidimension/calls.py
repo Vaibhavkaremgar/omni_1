@@ -59,6 +59,7 @@ class OmniDimensionCallProvider:
             (response.get("callId") or response.get("call_id") or response.get("call_log_id")) if isinstance(response, dict) else None,
             round((time.monotonic() - started) * 1000, 1), sorted(response.keys()) if isinstance(response, dict) else type(response).__name__,
         )
+        self.logger.info("[CAMPAIGN_OMNI_RESPONSE] campaign_id=%s local_call_id=%s request_id=%s provider_status=%s", metadata.get("campaign_id"), metadata.get("local_call_id"), response.get("requestId") if isinstance(response, dict) else None, response.get("status") if isinstance(response, dict) else None)
         if not isinstance(response, dict) or not response.get("requestId"):
             raise OmniDimensionResponseError("OmniDimension returned an invalid dispatch response.")
         status = str(response.get("status") or "dispatched")
