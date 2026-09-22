@@ -43,3 +43,23 @@ def test_scheduler_continues_after_iteration_exception(monkeypatch):
         assert len(attempts) >= 2
     finally:
         scheduler.stop()
+
+
+def test_wake_restarts_a_stopped_worker(monkeypatch):
+    scheduler = CampaignScheduler(_Session, interval_seconds=60)
+    first_tick = threading.Event()
+    monkeypatch.setattr(scheduler, "run_once", lambda _db: first_tick.set())
+
+    scheduler.start()
+    assert first_tick.wait(1)
+    scheduler.stop()
+    stopped_thread = scheduler._thread
+    assert stopped_thread is not None and not stopped_thread.is_alive()
+
+    first_tick.clear()
+    scheduler.wake()
+    try:
+        assert scheduler._thread is not stopped_thread
+        assert first_tick.wait(1), "wake did not restart the stopped worker"
+    finally:
+        scheduler.stop()

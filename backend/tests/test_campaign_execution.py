@@ -369,6 +369,90 @@ def test_dispatch_uses_correct_agent_and_phone(exec_db, monkeypatch):
     assert dispatched[0]["metadata"]["campaign_id"] == str(camp.id)
 
 
+def test_start_dispatches_first_contact_after_commit_without_scheduler_tick(exec_db, monkeypatch):
+    """An immediate start must reach Omni even when no scheduler worker runs."""
+    db, tenant_a, _ = exec_db
+    emp = _make_employee(db, tenant_a, provider_agent_id="5555")
+    camp = _make_campaign(db, tenant_a, emp)
+    contact = _make_contact(db, tenant_a, camp, phone="+919876543210")
+    contact.first_name = "Rahul"
+    contact.last_name = "Sharma"
+    contact.customer_data = {"location": "Hyderabad", "project": "GreenNest Meadows"}
+    db.commit()
+    pn = _make_phone(db, tenant_a, provider_id="8888")
+
+    import app.api.v1.endpoints.campaigns as campaigns_endpoint
+    import app.services.campaign_execution as exec_mod
+
+    dispatched = []
+
+    class CapturingProvider:
+        def dispatch(self, *, agent_id, to_number, from_number_id, call_context, metadata):
+            # The endpoint's start transaction must be visible before dispatch.
+            assert db.get(Campaign, camp.id).status == CampaignStatus.running.value
+            dispatched.append((agent_id, to_number, from_number_id, call_context, metadata))
+            return SimpleNamespace(provider_call_id="first-dispatch", status="queued")
+
+    monkeypatch.setattr(exec_mod, "OmniDimensionCallProvider", lambda _c: CapturingProvider())
+    monkeypatch.setattr(exec_mod, "OmniDimensionClient", lambda *_a, **_kw: None)
+    monkeypatch.setattr(campaigns_endpoint.campaign_scheduler, "wake", lambda: None)
+
+    client = _api_client(db, 0, monkeypatch)
+    try:
+        with client:
+            response = client.post(
+                f"/api/v1/campaigns/{camp.id}/start",
+                json={"phone_number_id": str(pn.id)},
+                headers={"Authorization": "Bearer a"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert len(dispatched) == 1
+    agent_id, to_number, from_number_id, call_context, metadata = dispatched[0]
+    assert (agent_id, to_number, from_number_id) == (5555, "+919876543210", 8888)
+    assert call_context["name"] == "Rahul Sharma"
+    assert call_context["location"] == "Hyderabad"
+    assert metadata["campaign_id"] == str(camp.id)
+    assert db.scalars(select(Call).where(Call.campaign_contact_id == contact.id)).all()
+
+
+def test_start_of_future_campaign_does_not_dispatch_early(exec_db, monkeypatch):
+    from datetime import timedelta
+    from app.db.base import utc_now
+
+    db, tenant_a, _ = exec_db
+    emp = _make_employee(db, tenant_a)
+    camp = _make_campaign(db, tenant_a, emp)
+    camp.scheduled_at = utc_now() + timedelta(hours=1)
+    _make_contact(db, tenant_a, camp)
+    pn = _make_phone(db, tenant_a)
+    db.commit()
+
+    import app.api.v1.endpoints.campaigns as campaigns_endpoint
+    monkeypatch.setattr(campaigns_endpoint.campaign_scheduler, "wake", lambda: None)
+    dispatch = monkeypatch.setattr(
+        campaigns_endpoint.campaign_execution_service, "dispatch_next_pending",
+        lambda *_args: pytest.fail("future campaign dispatched early"),
+    )
+    _ = dispatch
+    client = _api_client(db, 0, monkeypatch)
+    try:
+        with client:
+            response = client.post(
+                f"/api/v1/campaigns/{camp.id}/start",
+                json={"phone_number_id": str(pn.id)},
+                headers={"Authorization": "Bearer a"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    db.refresh(camp)
+    assert camp.status == CampaignStatus.scheduled.value
+
+
 # ── 7. Duplicate dispatch prevention ─────────────────────────────────────────
 
 def test_duplicate_dispatch_is_prevented(exec_db, monkeypatch):

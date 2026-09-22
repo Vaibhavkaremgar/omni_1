@@ -453,8 +453,29 @@ def start_campaign(
         logger.warning("[CAMPAIGN_START_FAILED] campaign_id=%s tenant_id=%s validation_reason=%s", campaign_id, current_user.tenant.id, str(exc))
         raise _execution_error_to_http(exc) from exc
     logger.info("[CAMPAIGN_START_SUCCESS] campaign_id=%s tenant_id=%s employee_id=%s phone_number_id=%s status_after=%s scheduling_mode=%s calling_window=%s-%s timezone=%s", campaign.id, campaign.tenant_id, campaign.employee_id, campaign.phone_number_id, campaign.status, (campaign.schedule_config or {}).get("type", "immediate"), campaign.calling_window_start, campaign.calling_window_end, campaign.timezone or "UTC")
-    # Lifespan starts the long-lived worker, but starting a campaign must also
-    # wake/repair it in the process that accepted this request.
+    # `start()` committed the running state before returning.  Do not make the
+    # first contact depend on a process-local scheduler thread: Railway may
+    # route this request to a process whose lifecycle worker is unavailable.
+    # The conditional contact claim in dispatch_next_pending is the shared
+    # cross-worker idempotency boundary, so a simultaneous scheduler tick
+    # cannot send this contact twice.
+    if campaign.status == CampaignStatus.running.value:
+        try:
+            call = campaign_execution_service.dispatch_next_pending(
+                db, campaign.id, campaign.tenant_id
+            )
+            logger.info(
+                "[CAMPAIGN_START_FIRST_DISPATCH] campaign_id=%s local_call_id=%s result=%s",
+                campaign.id, getattr(call, "id", None), "dispatched" if call else "not_eligible",
+            )
+        except Exception:
+            # The campaign state is already durable.  Dispatch failures are
+            # recorded by the execution service and must not turn a valid
+            # campaign start into a rolled-back/ambiguous request.
+            db.rollback()
+            logger.exception("[CAMPAIGN_START_FIRST_DISPATCH_FAILED] campaign_id=%s", campaign.id)
+    # Keep the scheduler for later contacts, retries, and scheduled campaigns.
+    # wake() also repairs a dead worker in this request's process.
     campaign_scheduler.wake()
     return _campaign_detail(campaign, db)
 

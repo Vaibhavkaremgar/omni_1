@@ -26,21 +26,23 @@ class CampaignScheduler:
         self.interval_seconds = interval_seconds
         self._stop = threading.Event()
         self._wake = threading.Event()
+        self._lifecycle_lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._tick_number = 0
         self._last_heartbeat: datetime | None = None
 
     def start(self) -> None:
         logger.info("[SCHEDULER_START_ENTER] pid=%s thread=%s object_id=%s class=%s environment=%s enabled=%s", os.getpid(), threading.get_ident(), id(self), f"{type(self).__module__}.{type(self).__name__}", get_settings().environment, True)
-        if self._thread and self._thread.is_alive():
-            logger.info("[SCHEDULER_START_SKIPPED] reason=already_running pid=%s thread=%s", os.getpid(), threading.get_ident())
-            return
-        if self.session_factory is None:
-            logger.error("[SCHEDULER_START_SKIPPED] reason=no_session_factory pid=%s thread=%s", os.getpid(), threading.get_ident())
-            raise RuntimeError("Campaign scheduler requires a database session factory.")
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="campaign-scheduler", daemon=True)
-        self._thread.start()
+        with self._lifecycle_lock:
+            if self._thread and self._thread.is_alive():
+                logger.info("[SCHEDULER_START_SKIPPED] reason=already_running pid=%s thread=%s", os.getpid(), threading.get_ident())
+                return
+            if self.session_factory is None:
+                logger.error("[SCHEDULER_START_SKIPPED] reason=no_session_factory pid=%s thread=%s", os.getpid(), threading.get_ident())
+                raise RuntimeError("Campaign scheduler requires a database session factory.")
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, name="campaign-scheduler", daemon=True)
+            self._thread.start()
         logger.info("[SCHEDULER_WORKER_CREATED] pid=%s thread=%s daemon=%s alive=%s object_id=%s", os.getpid(), self._thread.ident, self._thread.daemon, self._thread.is_alive(), id(self))
         logger.info("[SCHEDULER_START] pid=%s thread=%s interval=%s environment=%s timestamp=%s", os.getpid(), self._thread.ident, self.interval_seconds, get_settings().environment, datetime.now(timezone.utc).isoformat())
         logger.info("[SCHEDULER_RUNTIME] pid=%s ppid=%s thread=%s hostname=%s python=%s worker_configuration=process_local_thread", os.getpid(), os.getppid(), self._thread.ident, socket.gethostname(), sys.version.split()[0])
