@@ -325,7 +325,7 @@ def test_post_call_payload_uses_documented_non_voicemail_statuses():
     assert webhook["trigger_call_statuses"] == ["completed", "failed", "no_answer", "busy"]
 
 
-def test_publish_exposes_safe_post_call_diagnostic_when_get_has_no_configuration(agent_database, monkeypatch):
+def test_publish_continues_when_get_has_no_post_call_configuration(agent_database, monkeypatch):
     db, _, _ = agent_database
 
     def handler(request: httpx.Request):
@@ -342,13 +342,10 @@ def test_publish_exposes_safe_post_call_diagnostic_when_get_has_no_configuration
             employee_id = api.post("/api/v1/employees", json=employee_payload(), headers=headers).json()["id"]
             prepare_publishable_draft(api, employee_id, headers)
             response = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
-            assert response.status_code == 502
-            detail = response.json()["detail"]
-            assert detail["category"] == "provider_post_call_configuration_not_persisted"
-            assert detail["agent_id"] == "9014"
-            assert detail["provider_status"] == 200
-            assert detail["verification"]["post_call_config_ids"] is None
-            assert detail["verification"]["webhook_url"] is None
+            assert response.status_code == 200
+            verification = response.json()["provider_verification"]
+            assert verification["status"] == "partially_verified"
+            assert "webhook_url" in {item["field"] for item in verification["unverified_fields"]}
             assert "test-agent-key" not in response.text
     finally:
         client.close()

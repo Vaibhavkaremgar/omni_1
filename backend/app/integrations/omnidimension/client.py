@@ -225,7 +225,7 @@ def _response_value(response: httpx.Response) -> Any:
 
 def _redact(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return {str(key): ("[redacted]" if str(key).lower() in {"authorization", "api_key", "token", "password", "pan", "aadhaar", "aadhar", "otp", "mobile", "email"} else _redact(item)) for key, item in value.items()}
+        return {str(key): ("[redacted]" if str(key).lower() in {"authorization", "api_key", "token", "password", "secret", "secret_key", "pan", "aadhaar", "aadhar", "otp", "mobile", "email"} else _redact(item)) for key, item in value.items()}
     if isinstance(value, list):
         return [_redact(item) for item in value]
     return value

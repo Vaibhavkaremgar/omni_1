@@ -8,10 +8,7 @@ import json
 from typing import Any
 
 from app.integrations.omnidimension import OmniDimensionAgentProvider, ProviderAgent
-from app.integrations.omnidimension.exceptions import (
-    OmniDimensionPostCallConfigurationNotPersistedError,
-    OmniDimensionResponseError,
-)
+from app.integrations.omnidimension.exceptions import OmniDimensionResponseError
 from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.services.employee_prompt import (
@@ -125,14 +122,9 @@ class OmniDimensionAgentService:
                     json.dumps(verification_summary, ensure_ascii=False, sort_keys=True),
                 )
             else:
-                logger.error(
+                logger.warning(
                     "[OMNI_POST_CALL_NOT_PERSISTED] %s",
                     json.dumps(verification_summary, ensure_ascii=False, sort_keys=True),
-                )
-                raise OmniDimensionPostCallConfigurationNotPersistedError(
-                    agent_id=provider_agent.provider_id,
-                    provider_status=provider_agent.metadata.get("http_status") if isinstance(provider_agent.metadata, dict) else None,
-                    verification=verification_summary,
                 )
             sections = readback.get("context_breakdown") if isinstance(readback, dict) else None
             logger.info(
@@ -187,8 +179,6 @@ class OmniDimensionAgentService:
                 requested_language = (payload.get("languages") or [None])[0] if isinstance(payload.get("languages"), list) else None
                 if stored_languages and requested_language not in stored_languages:
                     logger.warning("Omni agent configuration mismatch agent_id=%s requested_language=%s stored_languages=%s", provider_agent.provider_id, requested_language, stored_languages)
-        except OmniDimensionPostCallConfigurationNotPersistedError:
-            raise
         except Exception as exc:
             readback_error = exc
             logger.warning("Omni agent readback unavailable agent_id=%s exception_class=%s", provider_agent.provider_id, type(exc).__name__)
@@ -201,7 +191,10 @@ class OmniDimensionAgentService:
         )
         webhook_mismatch = any(item.get("field") in {"webhook_enabled", "webhook_url", "webhook_statuses"} for item in verification.get("mismatches", []))
         if webhook_mismatch:
-            raise OmniDimensionResponseError("OmniDimension post-call webhook verification failed.")
+            logger.warning(
+                "OmniDimension post-call webhook was not verified agent_id=%s; continuing because public API persistence is unconfirmed.",
+                provider_agent.provider_id,
+            )
         for field in verification.get("mismatches", []):
             logger.warning(
                 "Omni agent verification mismatch agent_id=%s field=%s intended=%s sent=%s returned=%s",
@@ -347,6 +340,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
 
 def _automatic_post_call_actions() -> dict[str, Any]:
     """Return the platform callback attached to every created/updated agent."""
+    # As of September 2026, real create/update + GET probes have shown this
+    # documented field can be silently ignored. Dashboard configuration may be
+    # required for delivery; retain this payload for compatibility and logging,
+    # but do not treat its absence in GET as a publish-blocking failure.
     settings = get_settings()
     if settings.environment.casefold() == "production" and not settings.backend_public_url.strip():
         raise RuntimeError("BACKEND_PUBLIC_URL is required in production to configure the OmniDimension post-call webhook.")
