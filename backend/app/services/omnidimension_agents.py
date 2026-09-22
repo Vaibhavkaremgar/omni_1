@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
+import json
 from typing import Any
 
 from app.integrations.omnidimension import OmniDimensionAgentProvider, ProviderAgent
@@ -105,6 +106,8 @@ class OmniDimensionAgentService:
         readback_error: Exception | None = None
         try:
             readback = self.provider.get_agent(provider_agent.provider_id)
+            verification_summary = _post_call_verification_summary(provider_agent.provider_id, readback)
+            logger.info("[OMNI_POST_CALL_VERIFICATION] %s", json.dumps(verification_summary, ensure_ascii=False, sort_keys=True))
             sections = readback.get("context_breakdown") if isinstance(readback, dict) else None
             logger.info(
                 "Omni agent readback agent_id=%s sections=%d prompt_chars=%d languages=%s welcome_chars=%d",
@@ -333,6 +336,44 @@ def _automatic_post_call_actions() -> dict[str, Any]:
     }
 
 
+def _post_call_verification_summary(agent_id: str, response: Any) -> dict[str, Any]:
+    """Extract post-call fields from the provider response without assuming nesting."""
+    post_actions = _find_nested_key(response, "post_call_actions")
+    config_ids = _find_nested_key(response, "post_call_config_ids")
+    webhook = _find_nested_key(post_actions, "webhook") if post_actions is not None else None
+    if webhook is None:
+        webhook = _find_nested_key(response, "webhook")
+    webhook_url = _find_nested_key(webhook, "url") if webhook is not None else None
+    if webhook_url is None:
+        webhook_url = _find_nested_key(response, "webhook_url")
+    statuses = _find_nested_key(webhook, "trigger_call_statuses") if webhook is not None else None
+    if statuses is None:
+        statuses = _find_nested_key(response, "trigger_call_statuses")
+    return {
+        "agent_id": str(agent_id),
+        "post_call_config_ids": config_ids,
+        "post_call_actions": post_actions,
+        "webhook_url": webhook_url,
+        "trigger_call_statuses": statuses,
+    }
+
+
+def _find_nested_key(value: Any, key: str) -> Any:
+    if isinstance(value, dict):
+        if key in value:
+            return value[key]
+        for child in value.values():
+            found = _find_nested_key(child, key)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_nested_key(child, key)
+            if found is not None:
+                return found
+    return None
+
+
 def _canonical_call_script(configuration: dict[str, Any]) -> dict[str, str]:
     script = configuration.get("call_script")
     if not isinstance(script, dict):
@@ -543,7 +584,23 @@ def _language_code(language: str) -> str:
     }.get(language, language)
 
 
+def _remove_builder_instruction(text: str) -> str:
+    """Keep UI-only employee-builder instructions out of Omni's spoken greeting."""
+    cleaned = re.sub(
+        r"\s*Describe\s+the\s+job,\s*business\s+process,\s*customers,\s+or\s+goal\.?\s*",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
+    """Build the static greeting sent to Omni, excluding builder-only copy."""
+    return _remove_builder_instruction(_raw_welcome_message(employee, configuration, language))
+
+
+def _raw_welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
     if configuration.get("conversation_design"):
         return _text(configuration.get("opening"))
     configured = _text(configuration.get("greeting"))
