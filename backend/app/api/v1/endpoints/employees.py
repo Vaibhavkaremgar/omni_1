@@ -45,6 +45,7 @@ from app.services.script_language_validation import (
 MAX_KNOWLEDGE_FILE_SIZE = 4 * 1024 * 1024
 from app.services.employee_interview import RealLLMService
 from app.services.business_research import ensure_business_research, validate_public_research_url
+from app.services.knowledge_base_files import to_pdf
 
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -254,24 +255,37 @@ async def upload_knowledge_file(employee_id: UUID, file: UploadFile = File(...),
     employee = get_employee_or_404(employee_id, current_user.tenant.id, db)
     filename = (file.filename or "").strip()
     content = await file.read()
-    if not filename.lower().endswith(".pdf") or file.content_type not in (None, "application/pdf") or not content or not content.startswith(b"%PDF"):
-        raise HTTPException(status_code=422, detail="Only non-empty PDF files are supported.")
-    if len(content) >= MAX_KNOWLEDGE_FILE_SIZE:
+    if not content:
+        raise HTTPException(status_code=422, detail="The uploaded file is empty.")
+    try:
+        pdf_content, pdf_filename = to_pdf(content, filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if len(pdf_content) >= MAX_KNOWLEDGE_FILE_SIZE:
         raise HTTPException(status_code=413, detail="Knowledge files must be smaller than 4 MB.")
     try:
-        knowledge_text = "\n\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(content)).pages).strip()
+        knowledge_text = "\n\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(pdf_content)).pages).strip()
     except Exception as exc:
         raise HTTPException(status_code=422, detail="The PDF text could not be extracted.") from exc
     version = employee.published_version
     agent_id = version.provider_agent_id if version else None
-    row = EmployeeKnowledgeFile(tenant_id=current_user.tenant.id, employee_id=employee_id, filename=filename[:255], content_type="application/pdf", file_size=len(content), knowledge_text=knowledge_text, status="uploading")
+    row = EmployeeKnowledgeFile(tenant_id=current_user.tenant.id, employee_id=employee_id, filename=pdf_filename[:255], content_type="application/pdf", file_size=len(pdf_content), knowledge_text=knowledge_text, status="uploading")
     db.add(row); db.commit(); db.refresh(row)
     provider = get_agent_service().provider
+    preserve_uploaded_provider_file = False
     try:
-        row.provider_file_id = provider.upload_knowledge_file(base64.b64encode(content).decode("ascii"), row.filename)
+        logger.info("Knowledge Base create started employee_id=%s filename=%s", employee_id, row.filename)
+        row.provider_file_id = provider.upload_knowledge_file(base64.b64encode(pdf_content).decode("ascii"), row.filename)
         if agent_id:
             row.status = "attaching"; db.commit()
-            provider.attach_knowledge_file(row.provider_file_id, agent_id)
+            try:
+                provider.attach_knowledge_file(row.provider_file_id, agent_id, f"Use this document to answer questions about {employee.name}'s configured business, products, services, and policies.")
+            except Exception:
+                preserve_uploaded_provider_file = True
+                row.status = "uploaded_not_attached"
+                row.error_message = "The file was uploaded to OmniDimension but could not be attached. Retry attachment."
+                db.commit()
+                raise
             row.status = "ready"
         else:
             # Files uploaded during initial employee creation are attached
@@ -290,13 +304,15 @@ async def upload_knowledge_file(employee_id: UUID, file: UploadFile = File(...),
         db.commit()
         return _public_knowledge_file(row)
     except Exception as exc:
-        if row.provider_file_id:
+        if row.provider_file_id and not preserve_uploaded_provider_file:
             try:
                 if agent_id:
                     provider.detach_knowledge_file(row.provider_file_id, agent_id)
                 provider.delete_knowledge_file(row.provider_file_id)
             except Exception:
                 logger.warning("Knowledge provider cleanup failed file_id=%s", row.id)
+        if not preserve_uploaded_provider_file:
+            row.provider_file_id = None
         row.status = "failed"; row.error_message = "Knowledge file processing failed. Please retry."; db.commit()
         logger.warning("Knowledge file processing failed employee_id=%s file_id=%s exception_class=%s", employee_id, row.id, type(exc).__name__)
         raise HTTPException(status_code=502, detail=row.error_message) from exc
@@ -635,7 +651,11 @@ def publish_employee(
         try:
             provider = get_agent_service().provider
             for knowledge_file in knowledge_files:
-                provider.attach_knowledge_file(knowledge_file.provider_file_id, provider_result.provider_id)
+                provider.attach_knowledge_file(
+                    knowledge_file.provider_file_id,
+                    provider_result.provider_id,
+                    f"Use this document to answer questions about {employee.name}'s configured business, products, services, and policies.",
+                )
         except OmniDimensionError as exc:
             db.rollback()
             raise HTTPException(

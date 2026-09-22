@@ -33,18 +33,25 @@ class OmniDimensionAgentProvider:
         return response
 
     def upload_knowledge_file(self, content_base64: str, filename: str) -> str:
-        response = self.client.post("/knowledge-base/files", json={"file_data": content_base64, "filename": filename})
+        response = self.client.post("/knowledge_base/create", json={"file": content_base64, "filename": filename})
+        if isinstance(response, dict) and response.get("success") is False:
+            raise OmniDimensionResponseError(str(response.get("message") or "OmniDimension rejected the knowledge file."))
         file = response.get("file") if isinstance(response, dict) else None
         file_id = file.get("id") if isinstance(file, dict) else response.get("id") if isinstance(response, dict) else None
         if file_id is None:
             raise OmniDimensionResponseError("OmniDimension returned an invalid knowledge file response.")
         return str(file_id)
 
-    def attach_knowledge_file(self, file_id: str, agent_id: str) -> None:
-        self.client.post("/knowledge-base/attach", json={"file_ids": [int(file_id)], "agent_id": int(agent_id)})
+    def attach_knowledge_file(self, file_id: str, agent_id: str, when_to_use: str | None = None) -> None:
+        payload = {"file_ids": [int(file_id)], "agent_id": int(agent_id)}
+        if when_to_use:
+            payload["when_to_use"] = when_to_use
+        response = self.client.post("/knowledge_base/attach", json=payload)
+        if isinstance(response, dict) and response.get("success") is False:
+            raise OmniDimensionResponseError(str(response.get("message") or "OmniDimension could not attach the knowledge file."))
 
     def detach_knowledge_file(self, file_id: str, agent_id: str) -> None:
-        self.client.post("/knowledge-base/detach", json={"file_ids": [int(file_id)], "agent_id": int(agent_id)})
+        self.client.post("/knowledge_base/detach", json={"file_ids": [int(file_id)], "agent_id": int(agent_id)})
 
     def delete_knowledge_file(self, file_id: str) -> None:
         self.client.delete(f"/knowledge-base/files/{file_id}")
