@@ -82,7 +82,7 @@ class Settings(BaseSettings):
         return self.llm_base_url or self.groq_base_url
     omnidimension_api_key: str | None = Field(default=None, validation_alias="OMNIDIMENSION_API_KEY")
     omnidimension_base_url: str = Field(
-        default="https://omnidim.io/api/v1",
+        default="https://backend.omnidim.io/api/v1",
         validation_alias="OMNIDIMENSION_BASE_URL",
     )
     omnidimension_timeout_seconds: float = Field(

@@ -50,7 +50,7 @@ variables in the backend runtime when the provider is enabled:
 
 ```text
 OMNIDIMENSION_API_KEY=your-omnidimension-api-key
-OMNIDIMENSION_BASE_URL=https://omnidim.io/api/v1
+OMNIDIMENSION_BASE_URL=https://backend.omnidim.io/api/v1
 OMNIDIMENSION_TIMEOUT_SECONDS=15
 ```
 
