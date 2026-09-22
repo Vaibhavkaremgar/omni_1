@@ -300,7 +300,7 @@ def update_campaign(
 ) -> CampaignDetail:
     campaign = _get_campaign(campaign_id, current_user.tenant.id, db)
     if campaign.status not in {CampaignStatus.draft.value, CampaignStatus.scheduled.value}:
-        raise HTTPException(status_code=409, detail="Only draft campaigns can be edited.")
+        raise HTTPException(status_code=409, detail="Only draft or scheduled campaigns can be edited.")
     if payload.name is not None:
         campaign.name = payload.name.strip()
     if payload.description is not None:

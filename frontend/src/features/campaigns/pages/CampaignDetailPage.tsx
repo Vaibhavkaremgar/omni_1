@@ -4,7 +4,7 @@ import {
   Megaphone, Users, CheckCircle, XCircle, Clock, PhoneCall,
   Upload, X, AlertTriangle, ChevronLeft, Play, Pause, Square,
   RotateCcw, Phone,
-  History,
+  History, Pencil, Trash2, Save,
 } from 'lucide-react';
 import { backendJson, backendFetch } from '../../../services/backend/api';
 
@@ -283,6 +283,16 @@ export default function CampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editScheduledAt, setEditScheduledAt] = useState('');
+  const [editTimezone, setEditTimezone] = useState('UTC');
+  const [editStart, setEditStart] = useState('09:00');
+  const [editEnd, setEditEnd] = useState('18:00');
+  const [editAttempts, setEditAttempts] = useState(3);
+  const [editRetry, setEditRetry] = useState(true);
+  const [savingEdit, setSavingEdit] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -302,7 +312,7 @@ export default function CampaignDetailPage() {
     if (!id) return;
     try {
       const camp = await backendJson<CampaignDetail>(`/campaigns/${id}`);
-      setCampaign(camp);
+      setCampaign(camp); hydrateEditForm(camp);
     } catch { /* non-fatal refresh */ }
   }, [id]);
 
@@ -322,7 +332,7 @@ export default function CampaignDetailPage() {
           backendJson<CampaignDetail>(`/campaigns/${id}`),
           backendJson<Contact[]>(`/campaigns/${id}/contacts`),
         ]);
-        setCampaign(camp);
+        setCampaign(camp); hydrateEditForm(camp);
         setContacts(data || []);
       } catch { setError('Failed to load campaign.'); }
       finally { setLoading(false); }
@@ -353,6 +363,37 @@ export default function CampaignDetailPage() {
     } catch (err) {
       setActionError(err instanceof Error ? err.message : `Failed to ${action} campaign.`);
     } finally { setActing(false); }
+  };
+  const hydrateEditForm = (camp: CampaignDetail) => {
+    setEditName(camp.name);
+    setEditDescription(camp.description || '');
+    setEditScheduledAt(camp.scheduled_at ? new Date(camp.scheduled_at).toISOString().slice(0, 16) : '');
+    setEditTimezone(camp.timezone || 'UTC');
+    setEditStart(camp.calling_window_start || '09:00');
+    setEditEnd(camp.calling_window_end || '18:00');
+    setEditAttempts(camp.max_attempts || 3);
+    setEditRetry(camp.retry_enabled !== false);
+  };
+  const saveCampaign = async () => {
+    if (!id || !editName.trim()) return;
+    setSavingEdit(true); setActionError('');
+    try {
+      const result = await backendJson<CampaignDetail>(`/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify({
+        name: editName.trim(), description: editDescription || null,
+        scheduled_at: editScheduledAt ? new Date(editScheduledAt).toISOString() : null,
+        timezone: editTimezone, calling_window_start: editStart, calling_window_end: editEnd,
+        max_attempts: editAttempts, retry_enabled: editRetry,
+      }) });
+      setCampaign(result); hydrateEditForm(result); setEditing(false);
+    } catch (err) { setActionError(err instanceof Error ? err.message : 'Failed to save campaign.'); }
+    finally { setSavingEdit(false); }
+  };
+  const deleteCampaign = async () => {
+    if (!id || !window.confirm('Delete this campaign? It will be archived and removed from the campaign list.')) return;
+    setActing(true);
+    try { await backendJson(`/campaigns/${id}`, { method: 'DELETE' }); navigate('/campaigns', { replace: true }); }
+    catch (err) { setActionError(err instanceof Error ? err.message : 'Failed to delete campaign.'); }
+    finally { setActing(false); }
   };
 
   const openHistory = async (contact: Contact) => {
@@ -423,6 +464,14 @@ export default function CampaignDetailPage() {
           <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${cfg}`}>
             {campaign.status.charAt(0).toUpperCase() + campaign.status.slice(1)}
           </span>
+          {(isDraft || campaign.status === 'scheduled') && (
+            <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50">
+              <Pencil className="w-3.5 h-3.5" /> Edit
+            </button>
+          )}
+          <button onClick={() => void deleteCampaign()} disabled={acting} className="flex items-center gap-1.5 px-3 py-1.5 border border-rose-200 rounded-lg text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50">
+            <Trash2 className="w-3.5 h-3.5" /> Delete
+          </button>
         </div>
       </div>
 
@@ -430,6 +479,25 @@ export default function CampaignDetailPage() {
         {actionError && (
           <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-sm text-rose-700 flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />{actionError}
+          </div>
+        )}
+
+        {editing && (isDraft || campaign.status === 'scheduled') && (
+          <div className="mb-6 p-5 bg-white border border-violet-200 rounded-xl shadow-sm">
+            <h2 className="text-sm font-semibold text-gray-900 mb-4">Edit campaign</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label className="text-xs font-medium text-gray-600">Campaign name<input value={editName} onChange={e => setEditName(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" /></label>
+              <label className="text-xs font-medium text-gray-600">Schedule<input type="datetime-local" value={editScheduledAt} onChange={e => setEditScheduledAt(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" /></label>
+              <label className="text-xs font-medium text-gray-600 md:col-span-2">Description<textarea value={editDescription} onChange={e => setEditDescription(e.target.value)} rows={2} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none" /></label>
+              <label className="text-xs font-medium text-gray-600">Timezone<input value={editTimezone} onChange={e => setEditTimezone(e.target.value)} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" /></label>
+              <label className="text-xs font-medium text-gray-600">Max attempts<input type="number" min={1} max={10} value={editAttempts} onChange={e => setEditAttempts(Number(e.target.value))} className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" /></label>
+              <label className="text-xs font-medium text-gray-600">Calling window<div className="mt-1 flex gap-2"><input type="time" value={editStart} onChange={e => setEditStart(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" /><input type="time" value={editEnd} onChange={e => setEditEnd(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" /></div></label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 self-end pb-2"><input type="checkbox" checked={editRetry} onChange={e => setEditRetry(e.target.checked)} /> Retry failed calls</label>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => { hydrateEditForm(campaign); setEditing(false); }} className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
+              <button onClick={() => void saveCampaign()} disabled={savingEdit || !editName.trim()} className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm rounded-lg"><Save className="w-3.5 h-3.5" /> {savingEdit ? 'Saving…' : 'Save changes'}</button>
+            </div>
           </div>
         )}
 
