@@ -277,18 +277,24 @@ def dispatch_single_contact(
     # Claim is a single conditional UPDATE. This is the cross-worker idempotency
     # boundary; a worker which loses the race must never reach the provider.
     lease_token = uuid4().hex
+    previous_status = contact.status
     claimed = db.execute(
         update(CampaignContact)
         .where(CampaignContact.id == contact.id, CampaignContact.status.in_([ContactStatus.pending.value, ContactStatus.retry_scheduled.value]))
         .values(status=ContactStatus.dispatching.value, attempt_count=(CampaignContact.attempt_count + 1), last_called_at=utc_now(), claimed_at=utc_now(), attempt_started_at=utc_now(), retry_at=None, lease_token=lease_token)
     ).rowcount
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        logger.exception("[CONTACT_CLAIM_FAILED] campaign_id=%s contact_id=%s reason=database_commit_failed", campaign.id, contact.id)
+        raise
     if claimed != 1:
         logger.info("[CONTACT_CLAIM_SKIPPED] campaign_id=%s contact_id=%s reason=already_claimed", campaign.id, contact.id)
         existing = db.scalar(select(Call).where(Call.campaign_contact_id == contact.id).order_by(Call.created_at.desc()))
         if existing is not None:
             return existing
         raise CampaignExecutionError("Contact is already claimed by another worker.")
+    logger.info("[CONTACT_CLAIMED] campaign_id=%s contact_id=%s previous_status=%s new_status=%s attempt_number=%s", campaign.id, contact.id, previous_status, ContactStatus.dispatching.value, (contact.attempt_count or 0) + 1)
 
     # Duplicate guard — an accepted or active call is never dispatched again.
     existing = db.scalar(
@@ -298,6 +304,7 @@ def dispatch_single_contact(
         )
     )
     if existing is not None:
+        logger.info("[CONTACT_CLAIM_SKIPPED] campaign_id=%s contact_id=%s reason=existing_active_call local_call_id=%s", campaign.id, contact.id, existing.id)
         return existing
 
     call = Call(
@@ -321,8 +328,12 @@ def dispatch_single_contact(
             "provider_agent_id": employee.published_version.provider_agent_id,
         },
     )
-    db.add(call)
-    db.flush()
+    try:
+        db.add(call)
+        db.flush()
+    except Exception:
+        logger.exception("[CALL_CREATE_FAILED] campaign_id=%s contact_id=%s", campaign.id, contact.id)
+        raise
     if slot is not None:
         slot.call_id = call.id
     contact.status = ContactStatus.in_progress.value
@@ -344,11 +355,13 @@ def dispatch_single_contact(
     # destination so dispatch issues can be traced without logging secrets or
     # full customer phone numbers.
     masked_number = contact.phone_number[:3] + "***" + contact.phone_number[-2:] if len(contact.phone_number) > 5 else "***"
+    if not call_context.get("name"):
+        logger.warning("[OMNI_CONTEXT_NAME_MISSING] campaign_id=%s contact_id=%s local_call_id=%s", campaign.id, contact.id, call.id)
     logger.info(
-        "Campaign dispatch prepared campaign_id=%s contact_id=%s local_call_id=%s "
-        "agent_id=%s destination=%s from_number_id=%s context_keys=%s customer_name_present=%s",
-        campaign.id, contact.id, call.id, agent_id, masked_number, from_number_id,
-        sorted(call_context.keys()), bool(call_context.get("name")),
+        "[OMNI_DISPATCH_REQUEST] campaign_id=%s contact_id=%s local_call_id=%s employee_id=%s "
+        "provider_agent_id=%s masked_to_number=%s from_number_id=%s context_keys=%s request_timestamp=%s",
+        campaign.id, contact.id, call.id, employee.id, agent_id, masked_number, from_number_id,
+        sorted(call_context.keys()), utc_now().isoformat(),
     )
 
     settings = get_settings()
@@ -362,6 +375,7 @@ def dispatch_single_contact(
             metadata=metadata,
         )
     except OmniDimensionError:
+        logger.exception("[OMNI_DISPATCH_FAILED] campaign_id=%s contact_id=%s local_call_id=%s", campaign.id, contact.id, call.id)
         call.status = CallStatus.failed.value
         contact.status = ContactStatus.failed.value
         if slot is not None:
@@ -380,8 +394,12 @@ def dispatch_single_contact(
     contact.provider_request_id = provider_request_id
     contact.provider_call_id = result.provider_call_id
     contact.last_call_id = call.id
-    db.commit()
-    logger.info("[CAMPAIGN_CONTACT_UPDATED] campaign_id=%s contact_id=%s status=%s provider_request_id=%s", campaign.id, contact.id, contact.status, provider_request_id or "unknown")
+    try:
+        db.commit()
+    except Exception:
+        logger.exception("[CAMPAIGN_CONTACT_UPDATE_FAILED] campaign_id=%s contact_id=%s local_call_id=%s", campaign.id, contact.id, call.id)
+        raise
+    logger.info("[CAMPAIGN_CONTACT_UPDATED] campaign_id=%s contact_id=%s old_status=%s new_status=%s attempt_count=%s provider_request_id=%s provider_call_id=%s", campaign.id, contact.id, ContactStatus.dispatching.value, contact.status, contact.attempt_count, provider_request_id or "unknown", result.provider_call_id or "unknown")
     db.refresh(call)
     return call
 
@@ -399,6 +417,7 @@ class CampaignExecutionService:
     ) -> Campaign:
         """Transition draft/ready campaign to running and dispatch the first batch."""
         campaign = _require_campaign(db, campaign_id, tenant_id)
+        logger.info("[CAMPAIGN_START_VALIDATION] campaign_id=%s tenant_id=%s employee_id=%s phone_number_id=%s status_before=%s scheduling_mode=%s calling_window=%s-%s timezone=%s", campaign.id, tenant_id, campaign.employee_id, phone_number_id, campaign.status, (campaign.schedule_config or {}).get("type", "immediate"), campaign.calling_window_start, campaign.calling_window_end, campaign.timezone or "UTC")
         if campaign.status not in {CampaignStatus.draft.value, CampaignStatus.scheduled.value}:
             raise CampaignStateError(
                 f"Cannot start a campaign in '{campaign.status}' status. "
@@ -604,16 +623,29 @@ class CampaignExecutionService:
         """
         campaign = _require_campaign(db, campaign_id, tenant_id)
         if campaign.status != CampaignStatus.running.value:
+            logger.info("[SCHEDULER_CAMPAIGN_SKIPPED] campaign_id=%s reason=campaign_not_running status=%s", campaign.id, campaign.status)
             return None
         if campaign.phone_number_id is None:
+            logger.info("[SCHEDULER_CAMPAIGN_SKIPPED] campaign_id=%s reason=phone_missing", campaign.id)
             return None
 
-        employee = _require_published_employee(db, campaign.employee_id, tenant_id)
-        phone = _require_usable_phone(db, campaign.phone_number_id, tenant_id)
+        try:
+            employee = _require_published_employee(db, campaign.employee_id, tenant_id)
+            logger.info("[EMPLOYEE_DISPATCH_VALIDATION] employee_id=%s employee_name=%s published_status=%s published_version_id=%s provider_agent_id=%s", employee.id, employee.name, employee.status, employee.published_version.id if employee.published_version else None, employee.published_version.provider_agent_id if employee.published_version else None)
+        except CampaignExecutionError as exc:
+            logger.warning("[EMPLOYEE_DISPATCH_BLOCKED] campaign_id=%s employee_id=%s reason=%s", campaign.id, campaign.employee_id, str(exc))
+            raise
+        try:
+            phone = _require_usable_phone(db, campaign.phone_number_id, tenant_id)
+            logger.info("[PHONE_DISPATCH_VALIDATION] phone_number_id=%s active_status=%s provider_phone_number_id=%s masked_phone_number=%s employee_association=%s", phone.id, phone.status, phone.provider_phone_number_id, _mask_phone(phone.e164_number or ""), campaign.employee_id)
+        except CampaignExecutionError as exc:
+            logger.warning("[PHONE_DISPATCH_BLOCKED] campaign_id=%s phone_number_id=%s reason=%s", campaign.id, campaign.phone_number_id, str(exc))
+            raise
         agent_id, from_number_id = _parse_provider_ids(employee, phone)
 
         recover_stale_contacts(db)
         if not _within_calling_window(campaign):
+            logger.info("[SCHEDULER_CAMPAIGN_SKIPPED] campaign_id=%s reason=outside_calling_window timezone=%s window=%s-%s", campaign.id, campaign.timezone or "UTC", campaign.calling_window_start, campaign.calling_window_end)
             return None
         contact = db.scalar(
             select(CampaignContact).where(
@@ -623,6 +655,7 @@ class CampaignExecutionService:
             ).order_by(CampaignContact.created_at)
         )
         if contact is None:
+            logger.info("[SCHEDULER_NO_ELIGIBLE_CONTACT] campaign_id=%s reason=no_pending_contacts_or_retry_not_due", campaign.id)
             _update_campaign_progress(db, campaign)
             db.commit()
             return None
@@ -632,10 +665,12 @@ class CampaignExecutionService:
         except InsufficientBalanceError:
             campaign.status = CampaignStatus.paused_credits.value
             db.commit()
+            logger.info("[SCHEDULER_CAMPAIGN_SKIPPED] campaign_id=%s reason=insufficient_balance", campaign.id)
             return None
 
         slot = reserve_campaign_slot(db, campaign, contact)
         if slot is None:
+            logger.info("[SCHEDULER_CAMPAIGN_SKIPPED] campaign_id=%s reason=no_available_execution_slot", campaign.id)
             return None
         return dispatch_single_contact(
             db, campaign, contact, employee, phone, agent_id, from_number_id, slot

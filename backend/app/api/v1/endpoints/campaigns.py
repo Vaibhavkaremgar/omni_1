@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 
 from datetime import datetime
 from uuid import UUID
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
+logger = logging.getLogger(__name__)
 from app.db.base import utc_now
 from app.models.ai_employee import AIEmployee
 from app.models.campaign import Campaign
@@ -441,12 +443,15 @@ def start_campaign(
     db: Session = Depends(get_db),
 ) -> CampaignDetail:
     """Start a draft campaign. Selects the phone number and begins dispatching contacts."""
+    logger.info("[CAMPAIGN_START_REQUEST] campaign_id=%s tenant_id=%s requested_phone_number_id=%s", campaign_id, current_user.tenant.id, payload.phone_number_id)
     try:
         campaign = campaign_execution_service.start(
             db, campaign_id, current_user.tenant.id, payload.phone_number_id
         )
     except CampaignExecutionError as exc:
+        logger.warning("[CAMPAIGN_START_FAILED] campaign_id=%s tenant_id=%s validation_reason=%s", campaign_id, current_user.tenant.id, str(exc))
         raise _execution_error_to_http(exc) from exc
+    logger.info("[CAMPAIGN_START_SUCCESS] campaign_id=%s tenant_id=%s employee_id=%s phone_number_id=%s status_after=%s scheduling_mode=%s calling_window=%s-%s timezone=%s", campaign.id, campaign.tenant_id, campaign.employee_id, campaign.phone_number_id, campaign.status, (campaign.schedule_config or {}).get("type", "immediate"), campaign.calling_window_start, campaign.calling_window_end, campaign.timezone or "UTC")
     return _campaign_detail(campaign, db)
 
 

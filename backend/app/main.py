@@ -1,4 +1,8 @@
 from contextlib import asynccontextmanager
+import logging
+import os
+import socket
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,13 +17,20 @@ from app.services.campaign_scheduler import campaign_scheduler
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
     monitor = InstantLeadMonitor(SessionLocal)
-    campaign_scheduler.start()
+    logger.info("[LIFESPAN_SCHEDULER_STARTING] pid=%s thread=%s environment=%s hostname=%s", os.getpid(), threading.get_ident(), settings.environment, socket.gethostname())
+    try:
+        campaign_scheduler.start()
+    except Exception:
+        logger.exception("[LIFESPAN_SCHEDULER_FAILED] pid=%s thread=%s environment=%s", os.getpid(), threading.get_ident(), settings.environment)
+        raise
+    logger.info("[LIFESPAN_SCHEDULER_STARTED] pid=%s thread=%s environment=%s scheduler_alive=%s", os.getpid(), threading.get_ident(), settings.environment, bool(campaign_scheduler._thread and campaign_scheduler._thread.is_alive()))
     monitor.start()
     yield
     monitor.stop()

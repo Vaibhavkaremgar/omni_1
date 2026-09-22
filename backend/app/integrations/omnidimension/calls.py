@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import time
 from typing import Any
 
 from .client import OmniDimensionClient
@@ -44,14 +45,19 @@ class OmniDimensionCallProvider:
             "[OMNI_DISPATCH_REQUEST] agent_id=%s masked_destination=%s from_number_id=%s context_keys=%s",
             agent_id, masked_number, from_number_id, sorted(call_context.keys()),
         )
-        response = self.client.post(self.endpoint, json=payload)
+        started = time.monotonic()
+        try:
+            response = self.client.post(self.endpoint, json=payload)
+        except Exception:
+            self.logger.exception("[OMNI_DISPATCH_FAILED] campaign_id=%s contact_id=%s local_call_id=%s endpoint=%s", metadata.get("campaign_id"), metadata.get("contact_id"), metadata.get("local_call_id"), self.endpoint)
+            raise
         self.logger.info(
-            "[OMNI_DISPATCH_RESPONSE] endpoint=%s agent_id=%s status=%s request_id=%s "
-            "provider_call_id=%s response_keys=%s",
-            self.endpoint, agent_id, response.get("status") if isinstance(response, dict) else None,
+            "[OMNI_DISPATCH_RESPONSE] campaign_id=%s contact_id=%s local_call_id=%s endpoint=%s agent_id=%s http_status=%s success=%s provider_status=%s request_id=%s "
+            "provider_call_id=%s response_duration_ms=%s response_keys=%s",
+            metadata.get("campaign_id"), metadata.get("contact_id"), metadata.get("local_call_id"), self.endpoint, agent_id, (self.client.last_response or {}).get("status", "unknown"), bool(response.get("success", True)) if isinstance(response, dict) else False, response.get("status") if isinstance(response, dict) else None,
             response.get("requestId") if isinstance(response, dict) else None,
             (response.get("callId") or response.get("call_id") or response.get("call_log_id")) if isinstance(response, dict) else None,
-            sorted(response.keys()) if isinstance(response, dict) else type(response).__name__,
+            round((time.monotonic() - started) * 1000, 1), sorted(response.keys()) if isinstance(response, dict) else type(response).__name__,
         )
         if not isinstance(response, dict) or not response.get("requestId"):
             raise OmniDimensionResponseError("OmniDimension returned an invalid dispatch response.")
