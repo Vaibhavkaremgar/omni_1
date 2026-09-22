@@ -103,14 +103,49 @@ def _find_column(row: dict[str, str], candidates: list[str]) -> str:
     return ""
 
 
+def _header_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _phone_column(raw_rows: list[dict[str, str]]) -> str | None:
+    """Find a phone column without requiring one exact agency header.
+
+    Prefer semantic header matches, then inspect column values so labels such as
+    ``Client Contact`` or ``Primary Reach`` still work when their values are
+    phone numbers.
+    """
+    if not raw_rows:
+        return None
+    keys = list(raw_rows[0].keys())
+    aliases = {
+        "phone", "phone_number", "mobile", "mobile_number", "cell", "cell_number",
+        "telephone", "telephone_number", "number", "contact", "contact_number",
+        "contact_phone", "primary_phone", "primary_contact", "whatsapp", "whatsapp_number",
+    }
+    normalized = {key: _header_key(key) for key in keys}
+    for key, normalized_key in normalized.items():
+        if normalized_key in aliases or normalized_key.endswith("_phone") or normalized_key.endswith("_mobile"):
+            return key
+
+    # Last-resort detection for arbitrary headers: choose the column with the
+    # largest number of values that normalize to valid E.164 phone numbers.
+    best_key, best_count = None, 0
+    for key in keys:
+        count = sum(_is_valid_e164(_normalize_phone(str(row.get(key, "")))) for row in raw_rows if str(row.get(key, "")).strip())
+        if count > best_count:
+            best_key, best_count = key, count
+    return best_key if best_count else None
+
+
 def _process_rows(raw_rows: list[dict[str, str]]) -> dict[str, Any]:
     valid: list[dict[str, str]] = []
     invalid: list[dict[str, Any]] = []
     seen_phones: set[str] = set()
     duplicates = 0
 
+    phone_key = _phone_column(raw_rows)
     for i, row in enumerate(raw_rows):
-        phone_raw = _find_column(row, ["phone", "phone_number", "mobile", "cell", "telephone", "number"])
+        phone_raw = str(row.get(phone_key, "")).strip() if phone_key else ""
         if not phone_raw:
             invalid.append({"row": i + 2, "reason": "Missing phone number", "data": row})
             continue
