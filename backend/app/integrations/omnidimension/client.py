@@ -41,6 +41,7 @@ class OmniDimensionClient:
         if self.timeout <= 0:
             raise OmniDimensionConfigurationError("OmniDimension timeout must be positive.")
         self.client = client or httpx.Client(timeout=self.timeout)
+        self.last_response: dict[str, Any] | None = None
         logger.info(
             "Omni configuration environment=%s omni_base_url=%s omni_auth_configured=%s auth_mechanism=bearer_api_key",
             getattr(self.settings, "environment", "unknown"), self.base_url, bool(self.api_key),
@@ -113,12 +114,21 @@ class OmniDimensionClient:
             raise OmniDimensionNetworkError("Omni provider connection failed", exception_class=type(exc).__name__, exception_message=_safe_exception(exc)) from exc
 
         provider_code, provider_message = self._safe_error_details(response)
+        self.last_response = {
+            "method": method,
+            "path": "/" + path.lstrip("/"),
+            "status": response.status_code,
+            "request_id": response.headers.get("x-request-id") or response.headers.get("request-id"),
+            "body": _redact(_response_value(response)),
+        }
         logger.warning(
             "Omni HTTP diagnostic method=%s path=%s params=%s response_status=%s response_body=%s",
             method, "/" + path.lstrip("/"), _safe_params(kwargs.get("params")), response.status_code, _safe_response_body(response),
         )
+        response_marker = "[OMNI_GET_RESPONSE]" if method == "GET" and path.lstrip("/").startswith("agents/") else "[OMNI_RESPONSE]"
         logger.info(
-            "[OMNI_RAW_RESPONSE] method=%s path=%s status=%s request_id=%s body=%s",
+            "%s method=%s path=%s status=%s request_id=%s body=%s",
+            response_marker,
             method, "/" + path.lstrip("/"), response.status_code,
             response.headers.get("x-request-id") or response.headers.get("request-id") or "unknown",
             _safe_response_body(response, limit=None),
@@ -201,12 +211,16 @@ def _log_provider_warnings(method: str, path: str, response: httpx.Response) -> 
 
 
 def _safe_response_body(response: httpx.Response, *, limit: int | None = 1000) -> str:
-    try:
-        value = response.json()
-    except (ValueError, TypeError):
-        value = response.text
+    value = _response_value(response)
     body = json.dumps(_redact(value), ensure_ascii=False)
     return body if limit is None else body[:limit]
+
+
+def _response_value(response: httpx.Response) -> Any:
+    try:
+        return response.json()
+    except (ValueError, TypeError):
+        return response.text
 
 
 def _redact(value: Any) -> Any:

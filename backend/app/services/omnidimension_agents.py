@@ -131,8 +131,8 @@ class OmniDimensionAgentService:
                 )
                 raise OmniDimensionPostCallConfigurationNotPersistedError(
                     agent_id=provider_agent.provider_id,
-                    webhook_url=verification_summary["webhook_url"],
-                    post_call_config_ids=verification_summary["post_call_config_ids"],
+                    provider_status=provider_agent.metadata.get("http_status") if isinstance(provider_agent.metadata, dict) else None,
+                    verification=verification_summary,
                 )
             sections = readback.get("context_breakdown") if isinstance(readback, dict) else None
             logger.info(
@@ -379,7 +379,8 @@ def _verify_post_call_persistence(*, agent_id: str, expected_webhook: dict[str, 
         "create_or_update_status": 200,
         "configured": matching_config is not None,
         "post_call_config_id": str(matching_config["id"]) if isinstance(matching_config, dict) and matching_config.get("id") is not None else None,
-        "webhook_url": expected_url,
+        "webhook_url": matching_config.get("webhook_url") if matching_config else None,
+        "expected_webhook_url": expected_url,
         "trigger_call_statuses": matching_config.get("trigger_call_statuses") if matching_config else None,
         "post_call_config_ids": sanitized_configs,
     }

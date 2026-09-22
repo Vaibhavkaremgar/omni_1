@@ -53,8 +53,8 @@ class OmniDimensionPostCallConfigurationNotPersistedError(OmniDimensionResponseE
 
     code = "provider_post_call_configuration_not_persisted"
 
-    def __init__(self, *, agent_id: str, webhook_url: str, post_call_config_ids: object):
+    def __init__(self, *, agent_id: str, provider_status: int | None, verification: dict[str, object]):
         self.agent_id = agent_id
-        self.webhook_url = webhook_url
-        self.post_call_config_ids = post_call_config_ids
+        self.provider_status = provider_status
+        self.verification = verification
         super().__init__("OmniDimension did not persist the post-call webhook configuration.")

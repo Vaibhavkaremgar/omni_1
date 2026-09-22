@@ -607,9 +607,11 @@ def publish_employee(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={
-                "code": exc.code,
+                "category": exc.code,
                 "message": "OmniDimension did not persist the post-call webhook configuration.",
                 "agent_id": exc.agent_id,
+                "provider_status": exc.provider_status,
+                "verification": exc.verification,
             },
         ) from exc
     except OmniDimensionError as exc:

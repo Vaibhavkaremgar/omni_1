@@ -21,10 +21,10 @@ class OmniDimensionAgentProvider:
         self.client = client
 
     def create_agent(self, payload: dict[str, Any]) -> ProviderAgent:
-        return self._map_response(self.client.post("/agents/create", json=payload))
+        return self._map_response(self.client.post("/agents/create", json=payload), self.client.last_response)
 
     def update_agent(self, provider_id: str, payload: dict[str, Any]) -> ProviderAgent:
-        return self._map_response(self.client.put(f"/agents/{provider_id}", json=payload))
+        return self._map_response(self.client.put(f"/agents/{provider_id}", json=payload), self.client.last_response)
 
     def get_agent(self, provider_id: str) -> dict[str, Any]:
         response = self.client.get(f"/agents/{provider_id}")
@@ -50,12 +50,15 @@ class OmniDimensionAgentProvider:
         self.client.delete(f"/knowledge-base/files/{file_id}")
 
     @staticmethod
-    def _map_response(payload: Any) -> ProviderAgent:
+    def _map_response(payload: Any, response_metadata: dict[str, Any] | None = None) -> ProviderAgent:
         if not isinstance(payload, dict) or payload.get("id") is None:
             raise OmniDimensionResponseError("OmniDimension returned an invalid agent response.")
         status = payload.get("status") or payload.get("status_of_building_flow") or "unknown"
         return ProviderAgent(
             provider_id=str(payload["id"]),
             status=str(status),
-            metadata={"status": str(status)},
+            metadata={
+                "status": str(status),
+                **({"http_status": response_metadata["status"]} if isinstance(response_metadata, dict) and response_metadata.get("status") is not None else {}),
+            },
         )

@@ -325,6 +325,36 @@ def test_post_call_payload_uses_documented_non_voicemail_statuses():
     assert webhook["trigger_call_statuses"] == ["completed", "failed", "no_answer", "busy"]
 
 
+def test_publish_exposes_safe_post_call_diagnostic_when_get_has_no_configuration(agent_database, monkeypatch):
+    db, _, _ = agent_database
+
+    def handler(request: httpx.Request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 9014, "post_call_config_ids": None})
+        return httpx.Response(200, json={"id": 9014, "status": "Completed"})
+
+    client, service = provider_service(handler)
+    monkeypatch.setattr(employee_endpoint, "agent_service", service)
+    api = authenticated_client(db, "agent-user-a", monkeypatch)
+    try:
+        with api:
+            headers = {"Authorization": "Bearer a"}
+            employee_id = api.post("/api/v1/employees", json=employee_payload(), headers=headers).json()["id"]
+            prepare_publishable_draft(api, employee_id, headers)
+            response = api.post(f"/api/v1/employees/{employee_id}/publish", headers=headers)
+            assert response.status_code == 502
+            detail = response.json()["detail"]
+            assert detail["category"] == "provider_post_call_configuration_not_persisted"
+            assert detail["agent_id"] == "9014"
+            assert detail["provider_status"] == 200
+            assert detail["verification"]["post_call_config_ids"] is None
+            assert detail["verification"]["webhook_url"] is None
+            assert "test-agent-key" not in response.text
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
+
+
 def test_verification_detects_reordered_six_section_prompt(agent_database):
     _, tenant, _ = agent_database
     employee = AIEmployee(
