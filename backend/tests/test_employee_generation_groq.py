@@ -143,7 +143,7 @@ def test_legacy_provider_configuration_cannot_select_employee_generation():
 
 
 def test_production_configuration_reports_missing_fallback_without_exposing_secrets():
-    settings = Settings(GROQ_API_KEY="configured", GROQ_MODEL="openai/gpt-oss-20b", GROQ_BASE_URL="https://api.groq.com/openai/v1", ENVIRONMENT="development")
+    settings = Settings(GROQ_API_KEY="configured", GROQ_MODEL="openai/gpt-oss-20b", GROQ_BASE_URL="https://api.groq.com/openai/v1", GROQ_FALLBACK_MODEL="", ENVIRONMENT="development")
     assert settings.employee_llm_configuration_error == "Employee LLM configuration is incomplete: missing GROQ_FALLBACK_MODEL (or legacy GROQ_MODEL_2)."
     legacy = Settings(GROQ_API_KEY="configured", GROQ_MODEL="openai/gpt-oss-20b", GROQ_MODEL_2="legacy-fallback", ENVIRONMENT="development")
     assert legacy.employee_llm_configuration_error is None

@@ -147,11 +147,14 @@ def render_section(section: Section) -> str:
 def language_rules(language: str) -> str:
     value = language.casefold()
     if value in {"telugu", "te", "te-in", "telugu (india)"}:
-        style = ("Telugu words must use native Telugu Unicode. Mix natural English conversational terms frequently, "
-                 "approximately every three words where grammar permits. No Romanized Telugu, literary/grandhika, "
-                 "Sanskrit-heavy, formal or translation-like phrasing. Use only context-relevant English terms.")
+        style = ("Telugu words must use native Telugu Unicode. Mix natural English conversational terms at roughly one "
+                 "word or short phrase every 5–7 spoken words where grammar permits. Never produce completely Telugu "
+                 "speech. No Romanized Telugu, old/archaic Telugu, literary/grandhika, Sanskrit-heavy, formal or "
+                 "translation-like phrasing. Use only context-relevant English terms and everyday phone language.")
     elif value in {"hindi", "hi", "hi-in", "hindi (india)"}:
-        style = "Use natural Hindi grammar in Devanagari with natural English conversational terms. No Roman Hindi or literary Hindi."
+        style = ("Use natural Indian Hinglish: Hindi grammar and words in Devanagari with roughly one natural English "
+                 "word or short phrase every 5–7 spoken words. Do not produce completely Hindi speech, Roman Hindi, "
+                 "Sanskritized/literary Hindi, or translation-like phrasing.")
     else:
         style = f"Use natural conversational {language}."
     return (f"Selected spoken language: {language}. Internal instructions may be English. {style} "
@@ -164,7 +167,7 @@ def generation_prompt(language: str, call_type: str) -> str:
         "Design an employee-building/agent-configuration prompt from the supplied context. "
         "First produce understanding: organization, actual activity, employee job, audience, information needed/provided, "
         "irrelevant questions, concern/refusal behavior, natural flow, completion conditions, and unknown/prohibited claims. "
-        "Then design exactly six ordered sections. These are persistence slots only: no slot has a predefined business meaning. "
+        "Then design exactly six ordered sections with short English-only titles. These are persistence slots only: no slot has a predefined business meaning. "
         "Derive every title, purpose, objective, question and instruction from the job. Do not use a default sales funnel or domain template. "
         "Only ask for information that is A) explicitly requested by USER_CONTEXT, or B) directly necessary to accomplish its stated purpose. "
         "Do not collect information because it is common in the industry or common in a sales/customer-service script. "
@@ -193,7 +196,7 @@ def generation_prompt(language: str, call_type: str) -> str:
 def realization_prompt(language: str) -> str:
     return (
         "Realize the already-validated canonical employee conversation in the selected customer-facing language. "
-        "This is a translation/rephrasing stage, not a redesign. Preserve exactly the same six sections, titles, order, "
+        "This is a translation/rephrasing stage, not a redesign. Preserve exactly the same six sections, English-only titles, order, "
         "question count, question meaning, support rationale, flow, and business outcome. Change only opening, question text, "
         "spoken_examples, and other customer-facing speech. Do not add questions, remove questions, invent facts, availability, "
         "submission channels, or capabilities. Internal fields remain concise English. "
@@ -269,6 +272,7 @@ def runtime_rules(configuration: dict[str, Any]) -> str:
         "Follow the reviewed employee instructions and the stated job. Ask only necessary context-supported questions, "
         "one at a time, and use already-known variables silently. Perform only explicitly configured actions. "
         "Do not add a sales funnel or infer personal-data requirements. Never invent facts, capabilities or results. "
+        "Do not add follow-up, qualification, objections, payment, appointment, transfer, callback, or CTA behavior unless the reviewed context requires it. "
         "DISPATCH RUNTIME CONTEXT: Each outbound dispatch may include customer-specific runtime values such as {{name}}, location, project, configuration, budget, and status. Treat supplied runtime values as current-call facts: accept and use them naturally when relevant, especially {{name}} to address the customer. Never mention variable names or placeholders aloud. If a runtime value is absent, blank, or no dispatch context is supplied, ignore it; do not invent it, do not ask for it solely because it is absent, and continue with the configured respectful greeting (use అండి in Telugu when no name is available). "
         "When runtime customer details include a name, use {{name}} naturally in the opening and in later relevant references (for Telugu, use {{name}} గారికి where natural). If the name is missing or blank, address the caller naturally and respectfully without a name (use అండి in Telugu or restructure the sentence), do not leave a dangling గారికి, do not speak any placeholder, and do not ask for the customer's name merely because it was not provided. "
         f"Call direction: {configuration.get('call_type', 'inbound')}. "
