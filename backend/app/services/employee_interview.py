@@ -62,6 +62,54 @@ class ConversationVariableSuggestions(BaseModel):
     variables: list[SuggestedConversationVariable] = Field(default_factory=list, max_length=12)
 
 
+def strict_script_response_schema() -> dict[str, Any]:
+    """The exact wire contract used by six-section script generation.
+
+    Keep this deliberately small and provider-compatible.  The validator below
+    remains the source of truth for semantic/size checks and bounded legacy
+    normalization; this schema prevents Groq from being asked for a looser
+    ``json_object`` than the application can consume.
+    """
+    section = {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "minLength": 1},
+            "purpose": {"type": "string", "minLength": 1},
+            "instructions": {"type": "string", "minLength": 1},
+            "questions": {"type": "array", "items": {"type": "string"}},
+            "examples": {"type": "array", "items": {"type": "string"}},
+            "handling": {"type": "string", "minLength": 1},
+        },
+        "required": ["title", "purpose", "instructions", "questions", "examples", "handling"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {"sections": {"type": "array", "minItems": 6, "maxItems": 6, "items": section}},
+        "required": ["sections"],
+        "additionalProperties": False,
+    }
+
+
+def _safe_script_shape(value: Any) -> dict[str, Any]:
+    """Return structural diagnostics without logging model/customer content."""
+    if not isinstance(value, dict):
+        return {"top_level_type": type(value).__name__}
+    sections = value.get("sections")
+    result: dict[str, Any] = {"top_level_type": "dict", "top_level_keys": sorted(str(key) for key in value)}
+    if not isinstance(sections, list):
+        result["sections"] = {"type": type(sections).__name__}
+        return result
+    result["sections"] = {"type": "list", "length": len(sections), "items": []}
+    for index, section in enumerate(sections):
+        item: dict[str, Any] = {"index": index, "type": type(section).__name__}
+        if isinstance(section, dict):
+            item["keys"] = sorted(str(key) for key in section)
+            item["field_types"] = {str(key): type(section[key]).__name__ for key in section}
+        result["sections"]["items"].append(item)
+    return result
+
+
 class InterviewLLMResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -318,6 +366,8 @@ class RealLLMService(LLMService):
         response = self._perform_json_request_with_fallbacks(
             request_id, attempts, system, user,
             validator=lambda value, rid: self._validate_script_response(value, rid, context["language"]),
+            response_schema=strict_script_response_schema(),
+            response_schema_name="employee_script",
         )
         sections = response["sections"]
         configuration["conversation_sections"] = sections
@@ -471,6 +521,10 @@ class RealLLMService(LLMService):
             for schema_attempt in range(1):
                 try:
                     response = self._perform_json_request(llm_attempt.provider, payload)
+                    logger.info(
+                        "LLM script parsed response request_id=%s provider=%s model=%s shape=%s",
+                        request_id, llm_attempt.provider, llm_attempt.model, _safe_script_shape(response),
+                    )
                     if validator:
                         response = validator(response, request_id)
                     return response
@@ -561,14 +615,17 @@ class RealLLMService(LLMService):
         sections = response.get("sections") if isinstance(response, dict) else None
         detail = {"message": "The LLM returned an invalid employee script shape.", "request_id": str(request_id), "failure_category": "llm_schema_failure"}
         if not isinstance(sections, list) or len(sections) != 6:
-            raise HTTPException(status_code=502, detail=detail)
+            raise HTTPException(status_code=502, detail={**detail, "diagnostic": {
+                "path": "sections", "expected": "list[object] with exactly 6 items",
+                "actual_type": type(sections).__name__,
+                "actual_length": len(sections) if isinstance(sections, list) else None,
+            }})
         normalized_sections = []
-        legacy_design = None
-        for section in sections:
+        seen_titles: set[str] = set()
+        for index, section in enumerate(sections):
             # Accept the existing conversation-design field names as a safe
             # equivalent of the newer six-section response contract.
             if isinstance(section, dict) and "instructions" not in section and "content" in section:
-                legacy_design = response
                 section = {
                     **section,
                     "instructions": section.get("content"),
@@ -577,14 +634,25 @@ class RealLLMService(LLMService):
                     "questions": [item.get("text", "") if isinstance(item, dict) else item for item in section.get("questions", [])],
                 }
             if not isinstance(section, dict) or any(not isinstance(section.get(key), str) or not section[key].strip() for key in ("title", "purpose", "instructions", "handling")):
-                raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned an incomplete employee section."})
+                actual = section if isinstance(section, dict) else {"type": type(section).__name__}
+                missing_or_invalid = next((key for key in ("title", "purpose", "instructions", "handling") if not isinstance(section, dict) or not isinstance(section.get(key), str) or not section[key].strip()), "unknown")
+                raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned an incomplete employee section.", "diagnostic": {
+                    "section_index": index, "field": missing_or_invalid,
+                    "expected": "non-empty string", "actual_type": type(actual.get(missing_or_invalid)).__name__ if isinstance(actual, dict) else type(actual).__name__,
+                }})
+            title_key = section["title"].strip().casefold()
+            if title_key in seen_titles:
+                raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned duplicate employee section titles.", "diagnostic": {
+                    "section_index": index, "field": "title", "expected": "unique title", "actual_type": "str",
+                }})
+            seen_titles.add(title_key)
             for key in ("questions", "examples"):
                 if not isinstance(section.get(key), list) or any(not isinstance(item, str) or not item.strip() for item in section[key]):
-                    raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned malformed section content."})
+                    raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned malformed section content.", "diagnostic": {
+                        "section_index": index, "field": key, "expected": "list[string]", "actual_type": type(section.get(key)).__name__,
+                    }})
             normalized_sections.append(section)
         result = {**response, "sections": normalized_sections}
-        if legacy_design is not None:
-            result["_legacy_conversation_design"] = legacy_design
         if language:
             candidate = {
                 section["title"]: "\n".join(

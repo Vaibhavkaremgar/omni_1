@@ -168,13 +168,17 @@ def business_conversation_profile(configuration: dict[str, Any]) -> dict[str, st
 def normalize_business_identity(configuration: dict[str, Any]) -> dict[str, Any]:
     """Return config with a safe business_name/business_description pair."""
     result = dict(configuration)
+    values = result.get("template_values") if isinstance(result.get("template_values"), dict) else {}
     requirement = _text(result.get("business_description")) or _text(
         result.get("original_requirement")
     ) or _text(result.get("direct_prompt"))
-    explicit = _text(result.get("business_name")) or _text(
-        (result.get("template_values") or {}).get("business_name")
-        if isinstance(result.get("template_values"), dict) else ""
-    )
+    # Only fields whose meaning is explicitly an organization/project identity
+    # may populate business_name.  In particular, never mine nouns from the
+    # free-form requirement ("wedding", "customers", etc.).
+    identity_keys = ("business_name", "company_name", "hospital_name", "institution_name", "project_name")
+    explicit = next((_text(result.get(key)) for key in identity_keys if _text(result.get(key))), "")
+    if not explicit:
+        explicit = next((_text(values.get(key)) for key in identity_keys if _text(values.get(key))), "")
     if explicit:
         result["business_name"] = explicit
         result.setdefault("business_description", requirement)

@@ -7,8 +7,8 @@ from fastapi import HTTPException
 
 from app.core.config import Settings
 from app.services.business_research import ensure_business_research
-from app.services.employee_interview import RealLLMService
-from app.services.employee_prompt import compose_employee_configuration
+from app.services.employee_interview import RealLLMService, strict_script_response_schema
+from app.services.employee_prompt import compose_employee_configuration, normalize_business_identity
 
 REQUIREMENT = "You should invite my contact list for my wedding. Vaibhav and Muskan. 31st January 2027, Jalor, Rajasthan."
 
@@ -147,3 +147,49 @@ def test_production_configuration_reports_missing_fallback_without_exposing_secr
     assert settings.employee_llm_configuration_error == "Employee LLM configuration is incomplete: missing GROQ_FALLBACK_MODEL (or legacy GROQ_MODEL_2)."
     legacy = Settings(GROQ_API_KEY="configured", GROQ_MODEL="openai/gpt-oss-20b", GROQ_MODEL_2="legacy-fallback", ENVIRONMENT="development")
     assert legacy.employee_llm_configuration_error is None
+
+
+def test_groq_request_contract_matches_validator_and_prompt():
+    service, calls = service_for()
+    generate(service)
+    body = calls  # model capture remains deliberately secret-free
+    assert body == ["openai/gpt-oss-20b"]
+    schema = strict_script_response_schema()
+    assert schema["properties"]["sections"]["maxItems"] == 6
+    assert schema["properties"]["sections"]["items"]["required"] == [
+        "title", "purpose", "instructions", "questions", "examples", "handling"
+    ]
+
+
+def test_malformed_section_reports_exact_index_field_and_type_without_content():
+    service, _ = service_for()
+    bad = response()
+    bad["sections"][3]["questions"] = {"text": "wrong shape"}
+
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(bad)}}]})
+
+    service = RealLLMService(settings=llm_settings(groq_fallback_model=None, groq_model_2=None, groq_api_key_2=None), client=httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(HTTPException) as error:
+        generate(service)
+    diagnostic = error.value.detail["diagnostic"]
+    assert diagnostic == {"section_index": 3, "field": "questions", "expected": "list[string]", "actual_type": "dict"}
+    assert "wrong shape" not in json.dumps(error.value.detail)
+
+
+def test_legacy_equivalent_section_fields_are_normalized_but_still_require_six_sections():
+    legacy = response()
+    legacy["sections"] = [{
+        "title": item["title"], "purpose": item["purpose"], "objective": item["handling"],
+        "content": item["instructions"], "questions": [{"text": q} for q in item["questions"]],
+        "spoken_examples": item["examples"],
+    } for item in legacy["sections"]]
+    normalized = RealLLMService._validate_script_response(legacy, __import__("uuid").uuid4())
+    assert all(set(("title", "purpose", "instructions", "questions", "examples", "handling")) <= set(section) for section in normalized["sections"])
+
+
+def test_business_name_is_only_taken_from_explicit_identity_fields():
+    wedding = normalize_business_identity({"original_requirement": REQUIREMENT})
+    assert "business_name" not in wedding
+    explicit = normalize_business_identity({"original_requirement": "Call customers of ABC Motors.", "company_name": "ABC Motors"})
+    assert explicit["business_name"] == "ABC Motors"
