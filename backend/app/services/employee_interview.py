@@ -513,7 +513,7 @@ Telugu:
 - Bad:  మీరు 15 జనవరి 2027 న మా వివాహానికి హాజరుకాగలరా?
   Good: January 15th, 2027 న {{HOST_NAME}} గారి wedding ఉంది అండి, మీరు
         తప్పకుండా attend అవ్వండి.
- 
+
 Hindi:
 - Natural Hinglish: Hindi words in Devanagari, English words in Latin script.
   Keep the same list of everyday words in English. At least a third of the

@@ -650,8 +650,21 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
     generated_sections = configuration.get("conversation_sections")
     if outbound and isinstance(generated_sections, list) and len(generated_sections) == 6:
         first_examples = generated_sections[0].get("examples") if isinstance(generated_sections[0], dict) else None
-        if isinstance(first_examples, list) and first_examples and _text(first_examples[0]):
-            return _text(first_examples[0])
+        if isinstance(first_examples, list) and first_examples:
+            candidate = _text(first_examples[0])
+            if _is_valid_outbound_opening(candidate, generated_sections):
+                return candidate
+        return _static_outbound_welcome(
+            configuration,
+            purpose=_safe_purpose(configuration.get("purpose"), employee.purpose),
+            language=language,
+        )
+    if outbound:
+        return _static_outbound_welcome(
+            configuration,
+            purpose=_safe_purpose(configuration.get("purpose"), employee.purpose),
+            language=language,
+        )
     if outbound and not configuration.get("conversation_design"):
         host = _text(configuration.get("host_name"))
         purpose = _safe_purpose(configuration.get("purpose"), employee.purpose)
@@ -677,6 +690,38 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
         "and continue without asking for the caller's name or leaving an awkward gap. "
         f"Then continue naturally with this approved opening: {base}"
     )
+
+
+def _is_valid_outbound_opening(candidate: str, sections: list[Any]) -> bool:
+    """Accept only a safe, unique first Opening example for Omni's greeting."""
+    candidate = _text(candidate)
+    if not candidate or re.search(r"\{\{[^}]+\}\}", candidate) or re.search(r"[?？]$", candidate):
+        return False
+    lowered = candidate.casefold()
+    if any(phrase in lowered for phrase in (
+        "is this a good time", "do you have time", "can i ask", "may i", "are you available",
+    )):
+        return False
+    spoken_lines: list[str] = []
+    for section in sections:
+        if isinstance(section, dict):
+            for field in ("questions", "examples"):
+                spoken_lines.extend(_text(line) for line in section.get(field) or [])
+    normalized = re.sub(r"\s+", " ", candidate).strip().casefold()
+    return sum(re.sub(r"\s+", " ", line).strip().casefold() == normalized for line in spoken_lines) == 1
+
+
+def _static_outbound_welcome(configuration: dict[str, Any], *, purpose: str, language: str) -> str:
+    """Safe non-question fallback used when the generated Opening is unusable."""
+    host = _text(configuration.get("host_name"))
+    if language == "Telugu":
+        behalf = f"{host} gari behalf lo " if host else ""
+        return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, {behalf}AI assistant ga call chestunnanu. {purpose} gurinchi call chesanu \u0c05\u0c02\u0c21\u0c3f."
+    if language == "Hindi":
+        behalf = f"{host} ji ki taraf se " if host else ""
+        return f"\u0928\u092e\u0938\u094d\u0915\u093e\u0930, {behalf}main AI assistant hoon. {purpose} ke baare mein call kiya hai."
+    behalf = f" on behalf of {host}" if host else ""
+    return f"Hello, I am an AI assistant calling{behalf} about {purpose}."
 
 
 def _raw_welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:

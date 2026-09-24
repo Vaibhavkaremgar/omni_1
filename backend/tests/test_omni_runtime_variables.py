@@ -10,6 +10,67 @@ from app.integrations.omnidimension import OmniDimensionCallProvider, OmniDimens
 from app.services.omnidimension_agents import map_employee_configuration
 
 
+def _outbound_sections(first_example: str, *, duplicate_first: bool = False) -> list[dict]:
+    sections = [
+        {"title": f"Section {index}", "purpose": "Purpose", "instructions": "Instructions", "questions": [], "examples": [first_example if index == 0 else f"Line {index}"], "handling": "Handling"}
+        for index in range(6)
+    ]
+    if duplicate_first:
+        sections[1]["examples"] = [first_example]
+    return sections
+
+
+def test_outbound_welcome_uses_only_valid_first_opening_example():
+    employee = SimpleNamespace(name="Assistant", purpose="Invite contacts", language="English", call_type="outbound")
+    opening = "Hello, I am calling about the wedding invitation."
+    payload = map_employee_configuration(employee, {
+        "purpose": employee.purpose, "original_requirement": employee.purpose,
+        "language": "English", "call_type": "outbound", "conversation_sections": _outbound_sections(opening),
+    })
+    assert payload["welcome_message"] == opening
+
+
+def test_outbound_welcome_falls_back_for_placeholder_opening():
+    employee = SimpleNamespace(name="Assistant", purpose="Invite contacts", language="English", call_type="outbound")
+    payload = map_employee_configuration(employee, {
+        "purpose": employee.purpose, "language": "English", "call_type": "outbound",
+        "conversation_sections": _outbound_sections("Hello {{name}}, I am calling about the wedding."),
+    })
+    assert "{{" not in payload["welcome_message"]
+    assert payload["welcome_message"].startswith("Hello, I am an AI assistant")
+
+
+def test_outbound_welcome_falls_back_for_permission_question():
+    employee = SimpleNamespace(name="Assistant", purpose="Invite contacts", language="English", call_type="outbound")
+    payload = map_employee_configuration(employee, {
+        "purpose": employee.purpose, "language": "English", "call_type": "outbound",
+        "conversation_sections": _outbound_sections("Can I ask if this is a good time?"),
+    })
+    assert "Can I ask" not in payload["welcome_message"]
+    assert "?" not in payload["welcome_message"]
+
+
+def test_outbound_welcome_falls_back_for_duplicate_opening():
+    employee = SimpleNamespace(name="Assistant", purpose="Invite contacts", language="English", call_type="outbound")
+    opening = "Hello, I am calling about the wedding invitation."
+    payload = map_employee_configuration(employee, {
+        "purpose": employee.purpose, "language": "English", "call_type": "outbound",
+        "conversation_sections": _outbound_sections(opening, duplicate_first=True),
+    })
+    assert payload["welcome_message"] != opening
+    assert payload["welcome_message"].startswith("Hello, I am an AI assistant")
+
+
+def test_outbound_welcome_does_not_use_company_as_host_when_host_is_empty():
+    employee = SimpleNamespace(name="Assistant", purpose="Invite contacts", language="English", call_type="outbound")
+    payload = map_employee_configuration(employee, {
+        "purpose": employee.purpose, "business_name": "Acme Company", "host_name": "",
+        "language": "English", "call_type": "outbound",
+    })
+    assert "Acme Company" not in payload["welcome_message"]
+    assert "on behalf of" not in payload["welcome_message"]
+
+
 def _provider(handler):
     client = OmniDimensionClient(
         settings=SimpleNamespace(
