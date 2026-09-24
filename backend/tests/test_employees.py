@@ -319,11 +319,33 @@ def test_publish_upgrades_the_legacy_assembled_telugu_fallback(employee_database
     try:
         with client:
             published = client.post(f"/api/v1/employees/{employee.id}/publish", headers={"Authorization": "Bearer a"})
-        assert published.status_code == 200, published.json()
-        assert version.configuration["assembled_script_version"] == 2
-        cards = "\n".join(version.configuration["call_script"].values())
-        assert "gari behalf lo" not in cards.casefold()
-        assert "Vaibhav and Muskan గారి behalf లో" in cards
+        assert published.status_code == 422, published.json()
+        assert "Regenerate" in str(published.json()["detail"])
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_browser_cannot_relabel_an_assembled_draft_as_reviewed(employee_database, monkeypatch):
+    db, tenant_a, _ = employee_database
+    employee = AIEmployee(
+        tenant_id=tenant_a.id, name="Draft", purpose="Explain a request", call_type="outbound",
+        llm_provider="groq", llm_model="test-model", language="English", creation_mode="chat",
+    )
+    db.add(employee)
+    db.flush()
+    from app.services.employee_interview import RealLLMService, render_call_script_sections
+    config = {"name": "Draft", "purpose": "Explain a request", "original_requirement": "Explain a request", "language": "English", "call_type": "outbound", "llm_provider": "groq", "llm_model": "test-model", "script_source": "assembled"}
+    config["call_script"] = render_call_script_sections(RealLLMService._assemble_script_sections(config, "English", "outbound", config))
+    db.add(AIEmployeeVersion(tenant_id=tenant_a.id, employee_id=employee.id, version_number=1, status="draft", configuration=config))
+    db.commit()
+    client = client_for(db, "employee-user-a", monkeypatch)
+    try:
+        with client:
+            response = client.patch(f"/api/v1/employees/{employee.id}", json={"configuration": {"script_source": "reviewed", "script_review_required": False}}, headers={"Authorization": "Bearer a"})
+            assert response.status_code == 200, response.json()
+            assert response.json()["configuration"]["script_source"] == "assembled"
+            blocked = client.post(f"/api/v1/employees/{employee.id}/publish", headers={"Authorization": "Bearer a"})
+            assert blocked.status_code == 422
     finally:
         app.dependency_overrides.clear()
 

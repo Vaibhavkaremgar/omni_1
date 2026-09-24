@@ -1,5 +1,6 @@
 from uuid import UUID
 import logging
+import re
 import base64
 from io import BytesIO
 from pypdf import PdfReader
@@ -114,11 +115,7 @@ def _draft_for(employee: AIEmployee) -> AIEmployeeVersion | None:
 
 
 def _upgrade_legacy_assembled_script(configuration: dict) -> dict:
-    """Refresh only the exact legacy deterministic fallback before publishing.
-
-    It avoids touching reviewed/model-authored scripts while making an old
-    generic fallback render with the current contextual and language rules.
-    """
+    """Replace exact legacy fallback cards with a review-only draft."""
     if configuration.get("final_prompt_overridden"):
         return configuration
     call_script = configuration.get("call_script")
@@ -182,6 +179,14 @@ def _ensure_draft(employee: AIEmployee, current_user: AuthenticatedUser) -> AIEm
 def _validate_publish(employee: AIEmployee, draft: AIEmployeeVersion | None) -> None:
     if draft is None or not isinstance(draft.configuration, dict):
         raise HTTPException(status_code=422, detail="A draft configuration is required before publishing")
+    if draft.configuration.get("script_source") == "assembled" and not draft.configuration.get("final_prompt_overridden"):
+        raise HTTPException(
+            status_code=422,
+            detail="The model could not produce a context-specific call script. Regenerate it or review and complete all six spoken sections before publishing.",
+        )
+    if draft.configuration.get("assembled_source_context") and draft.configuration.get("script_source") == "reviewed":
+        if not _has_six_spoken_examples(draft.configuration):
+            raise HTTPException(status_code=422, detail="Complete a spoken example in each of the six sections before publishing this reviewed draft.")
     required = ("name", "llm_provider", "llm_model", "language", "call_type")
     missing = [field for field in required if not str(draft.configuration.get(field, "")).strip()]
     if not str(draft.configuration.get("purpose", "")).strip() and not str(draft.configuration.get("direct_prompt", "")).strip() and not str(draft.configuration.get("final_prompt", "")).strip():
@@ -226,6 +231,13 @@ def _has_customer_script(configuration: dict) -> bool:
     script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else {}
     return bool(script) or (
         bool(configuration.get("final_prompt_overridden")) and bool(str(configuration.get("final_prompt") or "").strip())
+    )
+
+
+def _has_six_spoken_examples(configuration: dict) -> bool:
+    cards = configuration.get("call_script")
+    return isinstance(cards, dict) and len(cards) == 6 and all(
+        re.search(r"(?m)^Spoken example:\s*\S", str(card)) for card in cards.values()
     )
 
 
@@ -549,16 +561,26 @@ def update_employee(
                 configuration = {**configuration, "website_url": validate_public_research_url(configuration.get("website_url"))}
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+        previous_script = (draft.configuration or {}).get("call_script")
+        configuration = {key: value for key, value in configuration.items() if key not in {
+            "script_source", "script_review_required", "assembled_source_context", "assembled_script_version",
+        }}
         draft.configuration = {
             **(draft.configuration or {}),
             **strip_customer_internal_configuration(configuration),
         }
+        if "call_script" in configuration and configuration["call_script"] != previous_script:
+            draft.configuration["script_source"] = "reviewed"
+            draft.configuration["script_review_required"] = False
+        if draft.configuration.get("script_source") == "reviewed":
+            draft.configuration.pop("conversation_sections", None)
     # Composition creates a fallback six-section prompt from the owner's
     # business brief. That fallback is not generated spoken content and must
     # not be subjected to Telugu/Hindi script validation during a normal edit.
     had_customer_script = _has_customer_script(draft.configuration)
     draft.configuration = compose_employee_configuration(_apply_final_prompt_override_to_call_script(draft.configuration))
-    if had_customer_script:
+    needs_review = bool(draft.configuration.get("assembled_source_context")) and not _has_six_spoken_examples(draft.configuration)
+    if had_customer_script and draft.configuration.get("script_source") != "assembled" and not needs_review:
         _validate_script_language_or_422(draft.configuration)
     normalize_employee_llm_configuration(employee, draft)
     for field in ("name", "purpose", "call_type", "language", "creation_mode"):

@@ -2,7 +2,7 @@ import pytest
 
 from app.services.employee_prompt import SCRIPT_SECTION_NAMES
 from app.services.script_language_validation import validate_customer_facing_script
-from app.api.v1.endpoints.employees import _upgrade_legacy_assembled_script, _validate_script_language_or_422
+from app.api.v1.endpoints.employees import _upgrade_legacy_assembled_script, _validate_publish, _validate_script_language_or_422
 
 
 def script(text: str) -> dict[str, str]:
@@ -124,5 +124,25 @@ def test_publish_upgrades_only_the_known_legacy_assembled_telugu_fallback():
 
     assert upgraded["assembled_script_version"] == 2
     assert "gari behalf lo" not in spoken.casefold()
-    assert "Vaibhav and Muskan గారి behalf లో" in spoken
-    assert validate_customer_facing_script(upgraded["call_script"], "Telugu").valid
+    assert "Vaibhav and Muskan" not in "\n".join(example for section in upgraded["conversation_sections"] for example in section["examples"])
+    assert upgraded["script_review_required"] is True
+    assert not validate_customer_facing_script(upgraded["call_script"], "Telugu").valid
+
+
+def test_review_only_draft_cannot_publish_until_all_six_spoken_examples_are_written():
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+
+    config = {
+        "script_source": "reviewed", "assembled_source_context": "Explain my request",
+        "name": "Agent", "llm_provider": "groq", "llm_model": "test-model",
+        "language": "English", "call_type": "outbound", "purpose": "Explain my request",
+        "call_script": {f"Section {index}": "Purpose: Draft\nInstructions: Write the speech\nHandling: Respect refusal" for index in range(6)},
+    }
+    with pytest.raises(HTTPException) as incomplete:
+        _validate_publish(SimpleNamespace(), SimpleNamespace(configuration=config))
+    assert incomplete.value.status_code == 422
+    assert "spoken example" in incomplete.value.detail
+
+    config["call_script"] = {f"Section {index}": f"Purpose: Call\nSpoken example: This is line {index}.\nHandling: Respect refusal" for index in range(6)}
+    _validate_publish(SimpleNamespace(), SimpleNamespace(configuration=config))
