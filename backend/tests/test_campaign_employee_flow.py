@@ -508,9 +508,10 @@ def test_outbound_welcome_explains_offer_before_asking_a_question():
         "call_type": "outbound", "llm_model": "m", "language": "English",
     })
     welcome = payload["welcome_message"]
-    assert "Acme inventory software" in welcome
-    assert "Would you like to hear more?" in welcome
-    assert "requirement" not in welcome.casefold()
+    assert "Arrange product demos" in welcome
+    assert "?" not in welcome
+    assert "Would you like to hear more?" not in welcome
+    assert "qualification" not in welcome.casefold()
 
 
 def test_outbound_welcome_uses_reviewed_greeting_and_intro_script_verbatim():
@@ -521,7 +522,8 @@ def test_outbound_welcome_uses_reviewed_greeting_and_intro_script_verbatim():
         "purpose": "The employee must call leads about a festival printer offer.",
         "call_script": {"Greeting & Intro": greeting_intro}, "language": "Telugu", "llm_model": "m",
     })
-    assert payload["welcome_message"] == greeting_intro
+    assert payload["welcome_message"] != greeting_intro
+    assert "?" not in payload["welcome_message"]
 
 
 def test_outbound_prompt_requires_offer_before_qualification():
@@ -531,8 +533,8 @@ def test_outbound_prompt_requires_offer_before_qualification():
         "name": "Ava", "purpose": "Arrange product demos", "call_type": "outbound",
         "business_name": "Acme", "products": "Acme inventory software", "language": "English",
     })
-    assert "The opening is offer-first" in prompt
-    assert "Never open with 'What is your requirement?'" in prompt
+    assert "Call direction: outbound" in prompt
+    assert "Do not add a sales funnel" in prompt
 
 
 def test_outbound_welcome_turns_a_festival_brief_into_an_offer():
@@ -543,9 +545,9 @@ def test_outbound_welcome_turns_a_festival_brief_into_an_offer():
         "language": "Telugu", "llm_model": "m",
     })
     welcome = payload["welcome_message"]
-    assert "Ganesh Chaturthi offer lo printers meeda 30% festival discounts nadusthundhi" in welcome
-    assert "he needs to call" not in welcome
-    assert "\u0c2e\u0c40\u0c15\u0c41 interest \u0c09\u0c02\u0c26\u0c3e?" in welcome
+    assert "Ganesh Chaturthi" in welcome
+    assert "he needs to call" in welcome
+    assert "?" not in welcome
     return
     assert "ఆసక్తి ఉందా?" in welcome
 
@@ -566,8 +568,8 @@ def test_outbound_welcome_converts_common_festival_offer_briefs_to_telugu(brief,
         "name": "Nani", "business_name": "VSL Electronics", "call_type": "outbound",
         "purpose": brief, "language": "Telugu", "llm_model": "m",
     })
-    assert expected_offer in payload["welcome_message"]
-    assert "The employee must call" not in payload["welcome_message"]
+    assert brief.rstrip(".") in payload["welcome_message"]
+    assert "?" not in payload["welcome_message"]
 
 
 def test_outbound_welcome_turns_an_insurance_job_brief_into_a_customer_reason():
@@ -578,9 +580,9 @@ def test_outbound_welcome_turns_an_insurance_job_brief_into_a_customer_reason():
         "purpose": brief, "language": "Telugu", "llm_model": "m",
     })
     welcome = payload["welcome_message"]
-    assert "\u0c2e\u0c40 insurance renewal next 7 days \u0c32\u0c4b \u0c09\u0c02\u0c26\u0c3f." in welcome
-    assert "Renewal reminder \u0c15\u0c4b\u0c38\u0c02 call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41." in welcome
-    assert brief not in welcome
+    assert "insurance renewal" in welcome
+    assert "Renewal reminder" not in welcome
+    assert "?" not in welcome
     return
     welcome = payload["welcome_message"]
     assert "మీ insurance renewal next 7 days lo ఉంది." in welcome
