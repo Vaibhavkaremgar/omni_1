@@ -787,11 +787,11 @@ Exactly this shape and these key names:
         elif str(language).casefold() in {"hindi", "hi", "hi-in"}:
             behalf = f"{host} ji ki taraf se " if host else ""
             spoken = [
-                f"नमस्ते जी, {behalf}मैं AI assistant बोल रहा हूँ।",
-                "इस call की details मैं आपको बताता हूँ।",
-                "आपकी बात समझ गया, thank you।",
-                "इस request के लिए please attend कीजिए।",
-                "अगर कोई doubt हो, तो मैं सिर्फ USER_CONTEXT की details बताऊँगा।",
+                f"नमस्ते जी, {behalf}मैं AI assistant के behalf से call कर रहा हूँ।",
+                "इस hospital appointment की details मैं आपको call पर बताता हूँ।",
+                "आपकी बात समझ गया, thank you, I will help।",
+                "इस request के लिए please attend कीजिए, okay।",
+                "अगर कोई doubt हो, तो मैं सिर्फ context की details और support information बताऊँगा, okay।",
                 "Thank you, आपका दिन अच्छा रहे।",
             ]
         else:
