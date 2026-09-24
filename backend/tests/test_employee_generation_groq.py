@@ -258,6 +258,19 @@ def test_research_is_skipped_for_wedding_even_with_business_name():
     assert result["business_research"]["reason"] == "personal_context"
 
 
+def test_assembled_fallback_keeps_context_specific_objective_without_identity_claims():
+    wedding = {"original_requirement": "call contacts about my wedding on 15th of jan 2027", "language": "Telugu", "call_type": "outbound", "host_name": ""}
+    election = {"original_requirement": "call voters about the upcoming ghmc elections", "language": "Telugu", "call_type": "outbound", "host_name": ""}
+    wedding_sections = RealLLMService._assemble_script_sections(wedding, "Telugu", "outbound", wedding)
+    election_sections = RealLLMService._assemble_script_sections(election, "Telugu", "outbound", election)
+    wedding_text = json.dumps(wedding_sections, ensure_ascii=False)
+    election_text = json.dumps(election_sections, ensure_ascii=False)
+    assert "January 15th, 2027" in wedding_text
+    assert "my wedding" not in wedding_text.casefold()
+    assert "GHMC" in election_text
+    assert "our party" not in election_text.casefold()
+
+
 def test_legacy_equivalent_section_fields_are_normalized_but_still_require_six_sections():
     legacy = response()
     legacy["sections"] = [{

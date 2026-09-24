@@ -773,22 +773,55 @@ Exactly this shape and these key names:
         source_context = str(context.get("original_requirement") or context.get("purpose") or "the requested task").strip()
         configuration["assembled_source_context"] = source_context
         purpose = "Deliver the requested call objective using the saved user context."
+        source_lower = source_context.casefold()
+        date_match = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+of\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{4})\b", source_lower)
+        month_names = {"jan": "January", "january": "January", "feb": "February", "february": "February", "mar": "March", "march": "March", "apr": "April", "april": "April", "may": "May", "jun": "June", "june": "June", "jul": "July", "july": "July", "aug": "August", "august": "August", "sep": "September", "sept": "September", "september": "September", "oct": "October", "october": "October", "nov": "November", "november": "November", "dec": "December", "december": "December"}
+        date_text = f"{month_names[date_match.group(2)]} {int(date_match.group(1))}{'th' if int(date_match.group(1)) not in {1, 2, 3} else {1: 'st', 2: 'nd', 3: 'rd'}[int(date_match.group(1))]}, {date_match.group(3)}" if date_match else ""
+        if "wedding" in source_lower:
+            objective = f"the wedding invitation{f' for {date_text}' if date_text else ''}"
+        elif any(marker in source_lower for marker in ("ghmc", "election", "voters", "vote", "party")):
+            objective = "GHMC election voter outreach"
+        elif any(marker in source_lower for marker in ("hospital", "appointment", "patient")):
+            objective = "the hospital appointment reminder"
+        elif any(marker in source_lower for marker in ("mobile store", "support")):
+            objective = "mobile store support"
+        else:
+            objective = "the requested call objective"
         host = str(configuration.get("host_name") or "").strip()
         if str(language).casefold() in {"telugu", "te", "te-in"}:
             behalf = f"{host} gari behalf lo " if host else ""
-            spoken = [
-                f"నమస్కారం అండి, {behalf}AI assistant గా call చేస్తున్నాను.",
-                "ఈ call యొక్క details మీకు చెప్తాను అండి.",
-                "మీ మాట అర్థమైంది, thank you.",
-                "ఈ request కోసం తప్పకుండా attend అవ్వండి అండి.",
-                "మీకు ఏ doubt ఉన్నా, USER_CONTEXT లో ఉన్న details మాత్రమే చెప్తాను అండి.",
-                "Thank you అండి, మీ రోజు బాగుండాలి.",
-            ]
+            if "wedding" in source_lower:
+                spoken = [
+                    f"నమస్కారం అండి, {behalf}AI assistant గా {objective} గురించి call చేస్తున్నాను.",
+                    f"{date_text or 'Wedding details'} గురించి మీకు చెప్తాను అండి.",
+                    "మీ మాట అర్థమైంది, thank you.",
+                    "ఈ wedding కి తప్పకుండా attend అవ్వండి అండి.",
+                    "మీకు ఏ doubt ఉన్నా, context details మరియు support information మాత్రమే చెప్తాను అండి.",
+                    "Thank you అండి, మీ రోజు బాగుండాలి.",
+                ]
+            elif "ghmc" in source_lower or "election" in source_lower or "voters" in source_lower:
+                spoken = [
+                    f"నమస్కారం అండి, AI assistant గా {objective} కోసం call చేస్తున్నాను.",
+                    "GHMC elections మరియు vote గురించి ఈ message చెప్తున్నాను అండి.",
+                    "మీ మాట అర్థమైంది, thank you.",
+                    "the upcoming GHMC elections లో ఈ party కి vote చేయండి అండి.",
+                    "మీకు ఏ doubt ఉన్నా, context details మరియు support information మాత్రమే చెప్తాను అండి.",
+                    "Thank you అండి, మీ రోజు బాగుండాలి.",
+                ]
+            else:
+                spoken = [
+                    f"నమస్కారం అండి, {behalf}AI assistant గా {objective} కోసం call చేస్తున్నాను.",
+                    f"ఈ {objective} యొక్క details మీకు చెప్తాను అండి.",
+                    "మీ మాట అర్థమైంది, thank you.",
+                    "ఈ request కోసం please attend లేదా follow చేయండి అండి.",
+                    "మీకు ఏ doubt ఉన్నా, context details మరియు support information మాత్రమే చెప్తాను అండి.",
+                    "Thank you అండి, మీ రోజు బాగుండాలి.",
+                ]
         elif str(language).casefold() in {"hindi", "hi", "hi-in"}:
             behalf = f"{host} ji ki taraf se " if host else ""
             spoken = [
-                f"नमस्ते जी, {behalf}मैं AI assistant के behalf से call कर रहा हूँ।",
-                "इस hospital appointment की details मैं आपको call पर बताता हूँ।",
+                f"नमस्ते जी, {behalf}मैं AI assistant के behalf से {objective} के लिए call कर रहा हूँ।",
+                f"इस {objective} की details मैं आपको call पर बताता हूँ।",
                 "आपकी बात समझ गया, thank you, I will help।",
                 "इस request के लिए please attend कीजिए, okay।",
                 "अगर कोई doubt हो, तो मैं सिर्फ context की details और support information बताऊँगा, okay।",
@@ -797,10 +830,10 @@ Exactly this shape and these key names:
         else:
             behalf = f" on behalf of {host}" if host else ""
             spoken = [
-                f"Hello, I am an AI assistant calling{behalf}.",
-                "I will share the details of this call.",
+                f"Hello, I am an AI assistant calling{behalf} about {objective}.",
+                f"I will share the details of {objective}.",
                 "I understand, thank you.",
-                "Please follow the requested next step.",
+                "Please tell me the support issue or requested next step.",
                 "I will use only the details provided in the user context.",
                 "Thank you, have a good day.",
             ]
