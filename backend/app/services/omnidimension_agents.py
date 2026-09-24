@@ -761,7 +761,7 @@ def _raw_welcome_message(employee: AIEmployee, configuration: dict[str, Any], la
         business_name = next((_text(values.get(key)) for key in ("business_name", "company_name", "hospital_name", "institution_name", "project_name") if _text(values.get(key))), "")
     if template:
         purpose = f"{business_name} {template['name']}" if business_name else template["name"]
-    name = employee.name
+    name = _text(configuration.get("agent_name")) or "AI assistant"
     business_purpose = _outbound_offer_summary(configuration, purpose)
     if language == "Telugu":
         company = f", {business_name} \u0c28\u0c41\u0c02\u0c1a\u0c3f" if business_name else ""

@@ -606,7 +606,7 @@ Exactly this shape and these key names:
             "tasks", "business_rules", "process_rules", "constraints", "guardrails", "knowledge_files",
         )
         context = {key: configuration[key] for key in context_keys if key in configuration}
-        context["employee_name"] = employee.name
+        context["agent_name"] = str(configuration.get("agent_name") or "")
         context["employee_purpose"] = employee.purpose
         research = configuration.get("business_research") or {}
         system = (
@@ -641,7 +641,7 @@ Exactly this shape and these key names:
             "language", "call_type", "products", "products_services", "business_rules", "process_rules",
             "workflow", "goals", "tasks", "constraints", "guardrails", "conversation_variables",
         ) if key in configuration}
-        context["employee_name"] = employee.name
+        context["agent_name"] = str(configuration.get("agent_name") or "")
         context["employee_role"] = configuration.get("role") or configuration.get("job_role") or employee.purpose
         research = configuration.get("business_research") or {"status": "unavailable"}
         system = (
@@ -1003,7 +1003,6 @@ Exactly this shape and these key names:
             "- Every suggestion must contain a concise question and a concrete reason it matters. Never use a generic static checklist.\n"
             "- Return only valid JSON that matches the schema.\n"
             "\n"
-            f"Employee name: {employee.name}\n"
             f"Purpose: {employee.purpose}\n"
             f"Call type: {employee.call_type}\n"
         )
@@ -1030,7 +1029,6 @@ Exactly this shape and these key names:
         prompt_payload = {
             "interview_stage": "initial" if initial_turn else "follow_up",
             "employee": {
-                "name": employee.name,
                 "purpose": employee.purpose,
                 "call_type": employee.call_type,
             },

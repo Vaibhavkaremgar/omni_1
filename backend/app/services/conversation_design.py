@@ -289,7 +289,7 @@ def employee_prompt(configuration: dict[str, Any]) -> str:
     parts = ["EMPLOYEE INSTRUCTIONS\n" + runtime_rules(configuration)]
     parts.append("REVIEWED SIX SECTIONS\n" + "\n\n".join(f"{i}. {title}\n{body}" for i, (title, body) in enumerate(script.items(), 1)))
     context = {key: configuration[key] for key in (
-        "name", "business_name", "business_description", "purpose", "original_requirement", "website_url",
+        "agent_name", "business_name", "business_description", "purpose", "original_requirement", "website_url",
         "conversation_variables", "knowledge_files", "business_research", "custom_sections", "conversation_design",
         "business_rules", "process_rules", "goals", "tasks", "products", "products_services", "workflow",
         "constraints", "guardrails", "transfer_rules", "additional_information",

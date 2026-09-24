@@ -71,6 +71,17 @@ def test_outbound_welcome_does_not_use_company_as_host_when_host_is_empty():
     assert "on behalf of" not in payload["welcome_message"]
 
 
+def test_display_employee_name_is_not_voice_identity_or_model_context():
+    employee = SimpleNamespace(name="బాబు dark wedding planners", purpose="Invite contacts", language="English", call_type="inbound")
+    payload = map_employee_configuration(employee, {
+        "name": employee.name, "purpose": employee.purpose, "language": "English", "call_type": "inbound",
+    })
+    context = "\n".join(section["body"] for section in payload["context_breakdown"])
+    assert employee.name not in context
+    assert employee.name not in payload["welcome_message"]
+    assert payload["name"] == employee.name
+
+
 def _provider(handler):
     client = OmniDimensionClient(
         settings=SimpleNamespace(
