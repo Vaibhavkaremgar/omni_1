@@ -184,16 +184,6 @@ def _script_language_violations(sections: list[dict[str, Any]], language: str) -
             f"The model returned no {label} Unicode; write examples in {label} script mixed with English words."
         )
         issues.append({"rule": "native_script", "reason": reason, "severity": "error"})
-    for line in lines:
-        has_native = any(native_start <= ord(char) <= native_end for char in line)
-        has_english = bool(re.search(r"[A-Za-z]", line))
-        if has_native and not has_english:
-            issues.append({
-                "rule": "english_mix",
-                "line": line,
-                "reason": f"Every spoken {label} line must contain natural English words; write it in {label} script mixed with English words.",
-                "severity": "error",
-            })
     return issues
 
 
@@ -543,17 +533,22 @@ NAMES AND IDENTITY
 - Use a person or company name only if it appears in USER_CONTEXT, HOST_NAME,
   AGENT_NAME or BUSINESS_NAME. Never invent one (no made-up company or agent
   names).
-- The agent is an AI assistant speaking on behalf of the host. It never claims
-  to BE the host and never speaks as the host ("my wedding", "our party").
-  Refer to the host in the third person, e.g. "{{HOST_NAME}} గారి wedding".
-- If no host name is given, the agent says it is calling on behalf of the host
-  about the purpose, and names no one.
+- If AGENT_NAME is present, introduce the caller by that exact name in the
+  opening. If it is empty, introduce the caller as an AI assistant without
+  inventing a personal name. The agent answers honestly that it is AI when
+  asked, regardless of its spoken name.
+- Never claim to BE the host or speak as the host. Mention an explicitly
+  provided host naturally in the third person, attached to the actual event,
+  service or request. Do not add "on behalf of" or its literal translation
+  when the reason for the call already makes the relationship clear.
+- If no host name is given, name no host and never treat BUSINESS_NAME or the
+  employee's display label as a substitute for one.
 
 THE SIX SECTIONS (in this order)
 Name each section after the ACTUAL objective of this call: short English title,
 2 to 5 words, never translated, never a generic funnel label such as
 "Discovery" or "Closing the Deal".
-1. Opening: greeting, who is calling on whose behalf, and why. (Inbound:
+1. Opening: greeting, who is calling, and the specific reason. (Inbound:
    greet and ask how you can help.)
 2. Details: the key facts of the purpose, stated from the context only.
 3. Listening and acknowledging: hear the person, acknowledge in one short
@@ -584,13 +579,11 @@ FIELD MEANINGS (strict)
 
 OUTBOUND RULES (CALL_DIRECTION = outbound)
 The agent placed the call, so it informs; it does not interview.
-- Open with statements: greeting, who is calling on whose behalf, and why.
+- Open with statements: greeting, caller identity, and the specific reason.
   Never open with a question. Never ask "do you have time?", "can I ask
   something?", "is this a good time?" or any permission question.
-- The main request is a statement or request ("please attend"), not a question.
-- Ask a question only if USER_CONTEXT explicitly needs an answer (a headcount,
-  a time slot, a confirmation). Then use at most one in the whole script, in
-  the main-request section.
+- The main request is a statement or request, not a question. Do not ask for
+  permission, confirmation or extra details on an outbound call.
 - After informing, the agent listens and responds to whatever the person says.
 
 CALL BEHAVIOUR (all sections)
@@ -607,46 +600,32 @@ People speak mixed language on the phone, so write the way people actually
 talk, never like a textbook.
 
 Telugu:
-- Method for every spoken line: first write it as a simple, natural English
-  sentence. Then convert it to spoken Telugu by KEEPING every noun, adjective
-  and phone-call word in English and translating only the grammar glue: verbs,
-  connectors, and polite endings such as "అండి". At least 35% of the words in
-  every non-closing line must be English, and a normal sentence must use at
-  least two context-relevant English terms. Never write a fully Telugu sentence
-  when an English word exists.
-- Use Telugu only for short grammar glue and respectful endings. Do not default
-  to a formal Telugu greeting: use "Hello". Prefer English "about" or "for",
-  "share", "response noted", "please", and "only" instead of translated
-  textbook equivalents. Close exactly with "Thank you. Have a nice day."; do
-  not attach Telugu words to that closing.
-- Always keep in English (Latin script): wedding, invite, invitation, attend,
-  function, event, family, date, time, details, confirm, available, convenient,
-  please, thank you, sorry, wishes, question, doubt, contact, request, place,
-  venue, call, message, number, bless, free, busy, problem, support, vote,
-  appointment, meeting, update, offer, service, address, location.
+- Use natural spoken Telugu word order. In the opening, greet, say "నేను"
+  followed by AGENT_NAME if provided, then express the precise purpose as a
+  direct action involving the recipient. Put the host with the relevant event
+  or service, not between the greeting and the agent identity. For outbound,
+  the opening should sound like one person making a clear call, not a list of
+  translated input fields.
+- Mix Telugu grammar and verbs in Telugu script with English words people
+  naturally use for this particular task. Use each language where it belongs;
+  do not insert English words or Telugu endings merely to satisfy a count.
+  Keep greetings, dates, names, and common domain terms in their natural form.
 - Never use these formal or literary words: హాజరు, ఆహ్వానం, వివాహం, పెళ్లి,
   వేడుక, కార్యక్రమం, ధన్యవాదాలు, శుభాకాంక్షలు, ప్రశ్న, సందేహం, సమయం, తేదీ,
   వివరాలు, ధృవీకరించు, నిర్ధారించు, అందుబాటులో, సౌకర్యం, కుటుంబం, దయచేసి,
   సంప్రదించు, విజ్ఞప్తి, ఆశీర్వదించు, స్థలం, ప్రదేశం, తెలియజేయు. When a word
   is not in either list, use the simplest everyday spoken word, never the
   written or literary one.
-- Dates, times, amounts and numbers are written and spoken in English:
-  "January 15th, 2027", never "15 జనవరి 2027".
+- Dates, times, amounts and numbers are written and spoken in English.
 - Use respectful Telugu forms only; never informal address. No Roman-script
   Telugu. No literary, archaic or Sanskrit-heavy Telugu. No word-for-word
   translation from English.
-- Bad:  మీరు 15 జనవరి 2027 న మా వివాహానికి హాజరుకాగలరా?
-  Good: January 15th, 2027 న {{HOST_NAME}} గారి wedding ఉంది అండి, మీరు
-        తప్పకుండా attend అవ్వండి.
 
 Hindi:
-- Natural Hinglish: Hindi words in Devanagari, English words in Latin script.
-  Keep the same list of everyday words in English. At least a third of the
-  words in English. Numbers and dates in English. Use "aap" forms.
+- Natural Hinglish: Hindi words in Devanagari, familiar English terms in Latin
+  script where they fit. Numbers and dates in English. Use respectful forms.
 - Never write Roman-script Hindi, fully Hindi sentences, Sanskritised or
   literary Hindi, or word-for-word translation.
-- Good: "नमस्कार, मैं {{HOST_NAME}} जी की तरफ से call कर रहा हूँ। January 15th को
-  उनकी wedding है, आप please जरूर attend कीजिए।"
 
 Other Indian languages (Tamil, Kannada, Malayalam, Marathi, Bengali, etc.):
 same principle. The language's own script for its own grammar and words,
@@ -718,6 +697,7 @@ Exactly this shape and these key names:
                 configuration["script_source"] = "assembled"
             else:
                 configuration["script_source"] = "model"
+                configuration["script_review_required"] = False
 
         sections = response["sections"]
         configuration["conversation_sections"] = sections
@@ -777,124 +757,71 @@ Exactly this shape and these key names:
             business_name=str(configuration.get("business_name") or ""),
             enforce=True,
         )
-        return violations + _script_language_violations(sections, language)
+        violations += _script_language_violations(sections, language)
+        rendered = render_call_script_sections(sections)
+        language_check = validate_customer_facing_script(rendered, language)
+        violations.extend({
+            "section": issue.section,
+            "rule": issue.type,
+            "reason": issue.message,
+            "line": issue.excerpt or "",
+            "severity": "error",
+        } for issue in language_check.issues)
+        if str(call_direction).casefold() == "outbound" and sections:
+            opening = " ".join(str(line) for line in sections[0].get("examples") or [])
+            agent_name = str(configuration.get("agent_name") or "").strip()
+            if agent_name and agent_name.casefold() not in opening.casefold():
+                violations.append({
+                    "section": str(sections[0].get("title") or "Opening"),
+                    "rule": "missing_agent_identity",
+                    "reason": "Introduce the explicitly named agent in the opening.",
+                    "severity": "error",
+                })
+        if str(language).casefold() in {"telugu", "te", "te-in"}:
+            for section in sections:
+                for line in (*section.get("examples", []), *section.get("questions", [])):
+                    if re.search(r"\bgari\s+behalf\b|గారి\s+behalf", str(line), re.I):
+                        violations.append({
+                            "section": str(section.get("title") or ""),
+                            "rule": "literal_behalf_translation",
+                            "reason": "State the actual purpose directly in natural Telugu word order; do not insert 'gari behalf'.",
+                            "severity": "error",
+                        })
+        return violations
 
     @staticmethod
     def _assemble_script_sections(context: dict[str, Any], language: str, call_direction: str, configuration: dict[str, Any]) -> list[dict[str, Any]]:
-        source_context = str(context.get("original_requirement") or context.get("purpose") or "the requested task").strip()
+        """Preserve the brief when provider generation fails; do not fake a call."""
+        source_context = str(context.get("original_requirement") or context.get("purpose") or "").strip()
         configuration["assembled_source_context"] = source_context
-        source_lower = source_context.casefold()
-        date_match = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+of\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{4})\b", source_lower)
-        month_names = {"jan": "January", "january": "January", "feb": "February", "february": "February", "mar": "March", "march": "March", "apr": "April", "april": "April", "may": "May", "jun": "June", "june": "June", "jul": "July", "july": "July", "aug": "August", "august": "August", "sep": "September", "sept": "September", "september": "September", "oct": "October", "october": "October", "nov": "November", "november": "November", "dec": "December", "december": "December"}
-        date_text = f"{month_names[date_match.group(2)]} {int(date_match.group(1))}{'th' if int(date_match.group(1)) not in {1, 2, 3} else {1: 'st', 2: 'nd', 3: 'rd'}[int(date_match.group(1))]}, {date_match.group(3)}" if date_match else ""
-        if "wedding" in source_lower:
-            objective = f"the wedding invitation{f' for {date_text}' if date_text else ''}"
-        elif any(marker in source_lower for marker in ("ghmc", "election", "voters", "vote", "party")):
-            objective = "GHMC election voter outreach"
-        elif any(marker in source_lower for marker in ("hospital", "appointment", "patient")):
-            objective = "the hospital appointment reminder"
-        elif any(marker in source_lower for marker in ("mobile store", "support")):
-            objective = "mobile store support"
+        configuration["script_review_required"] = True
+        agent_name = str(configuration.get("agent_name") or "").strip()
+        language_code = str(language).casefold()
+        if language_code in {"telugu", "te", "te-in"}:
+            opening = f"Hello అండి, నేను {agent_name}." if agent_name else "Hello అండి, నేను AI assistant ని."
+        elif language_code in {"hindi", "hi", "hi-in"}:
+            opening = f"नमस्ते जी, मैं {agent_name} हूँ।" if agent_name else "नमस्ते जी, मैं AI assistant हूँ।"
         else:
-            objective = "the requested call objective"
-        host = str(configuration.get("host_name") or "").strip()
-        topic = (
-            "Wedding invitation" if "wedding" in source_lower else
-            "GHMC election outreach" if any(marker in source_lower for marker in ("ghmc", "election", "voters", "vote", "party")) else
-            "Hospital appointment reminder" if any(marker in source_lower for marker in ("hospital", "appointment", "patient")) else
-            "Mobile store support" if any(marker in source_lower for marker in ("mobile store", "support")) else
-            "Call"
+            opening = f"Hello, I am {agent_name}." if agent_name else "Hello, I am an AI assistant."
+        steps = (
+            ("Opening", "Introduce the caller and state the specific reason for this call."),
+            ("Facts", "Share only details explicitly supplied in the original request."),
+            ("Listening", "Acknowledge what the person actually says before responding."),
+            ("Request", "Make only the action requested by the user."),
+            ("Exceptions", "Answer from verified context; respect refusal and requests to stop."),
+            ("Closing", "Thank the person and end without adding a new objective."),
         )
-        section_metadata = (
-            {
-                "title": f"{topic} opening",
-                "purpose": f"Open the {objective} call clearly and truthfully.",
-                "instructions": "Identify the AI-assistant role and any explicitly configured host; never claim to be the host.",
-                "handling": "If this is the wrong person, apologize briefly and end without collecting unrelated information.",
-            },
-            {
-                "title": f"{topic} details",
-                "purpose": f"Share the known facts for {objective}.",
-                "instructions": "State only facts present in the saved user context. Do not fill in missing dates, places, names, or other details.",
-                "handling": "If a fact is unavailable, say it is not available rather than guessing.",
-            },
-            {
-                "title": f"{topic} response",
-                "purpose": "Acknowledge the listener naturally before continuing.",
-                "instructions": "Respond briefly to what the person says without repeating the opening or creating a new objective.",
-                "handling": "If the person is confused or upset, clarify the stated purpose calmly and do not argue.",
-            },
-            {
-                "title": f"{topic} request",
-                "purpose": f"State the requested next step for {objective} once.",
-                "instructions": "For an outbound call, inform rather than interview. Do not ask a permission or confirmation question unless the user context explicitly requires one.",
-                "handling": "Respect a refusal or a busy response; do not pressure the person.",
-            },
-            {
-                "title": f"{topic} questions",
-                "purpose": "Handle unknown details, opt-outs, and AI-disclosure questions safely.",
-                "instructions": "Answer from saved context only. Be honest that the caller is an AI assistant when asked.",
-                "handling": "On a no-more-calls request, apologize, confirm it, and end immediately.",
-            },
-            {
-                "title": f"{topic} closing",
-                "purpose": f"Close the {objective} call politely without adding a new request.",
-                "instructions": "Thank the person, restate no new facts, and end the call.",
-                "handling": "End immediately after a clear stop request or after the closing line.",
-            },
-        )
-        if str(language).casefold() in {"telugu", "te", "te-in"}:
-            behalf = f"{host} గారి behalf లో " if host else ""
-            if "wedding" in source_lower:
-                spoken = [
-                    f"Hello అండి, {behalf}AI assistant గా wedding invitation కోసం call చేస్తున్నాను.",
-                    f"Wedding date {date_text} అండి." if date_text else "Wedding invitation details కోసం ఈ call చేస్తున్నాను అండి.",
-                    "I understand అండి, మీ response noted. Thank you.",
-                    "Please wedding కి attend అవ్వండి అండి.",
-                    "Any question ఉంటే, available details share చేస్తాను అండి.",
-                    "Thank you. Have a nice day.",
-                ]
-            elif "ghmc" in source_lower or "election" in source_lower or "voters" in source_lower:
-                spoken = [
-                    f"Hello అండి, {behalf}AI assistant గా GHMC election update కోసం call చేస్తున్నాను.",
-                    "Upcoming GHMC elections update కోసం ఈ message share చేస్తున్నాను అండి.",
-                    "I understand అండి, మీ response noted. Thank you.",
-                    "Please upcoming GHMC elections లో party కి vote చేయండి అండి.",
-                    "Any question ఉంటే, available campaign details share చేస్తాను అండి.",
-                    "Thank you. Have a nice day.",
-                ]
-            else:
-                spoken = [
-                    f"Hello అండి, {behalf}AI assistant గా {objective} కోసం call చేస్తున్నాను.",
-                    f"{objective.title()} details share చేయడానికి ఈ call చేస్తున్నాను అండి.",
-                    "I understand అండి, మీ response noted. Thank you.",
-                    "Please requested next step follow చేయండి అండి.",
-                    "Any question ఉంటే, available details share చేస్తాను అండి.",
-                    "Thank you. Have a nice day.",
-                ]
-        elif str(language).casefold() in {"hindi", "hi", "hi-in"}:
-            behalf = f"{host} ji ki taraf se " if host else ""
-            spoken = [
-                f"नमस्ते जी, {behalf}मैं AI assistant के behalf से {objective} के लिए call कर रहा हूँ।",
-                f"इस {objective} की details मैं आपको call पर बताता हूँ।",
-                "आपकी बात समझ गया, thank you, I will help।",
-                "इस request के लिए please attend कीजिए, okay।",
-                "अगर कोई doubt हो, तो मैं सिर्फ context की details और support information बताऊँगा, okay।",
-                "Thank you, आपका दिन अच्छा रहे।",
-            ]
-        else:
-            behalf = f" on behalf of {host}" if host else ""
-            spoken = [
-                f"Hello, I am an AI assistant calling{behalf} about {objective}.",
-                f"I will share the details of {objective}.",
-                "I understand, thank you.",
-                "Please tell me the support issue or requested next step.",
-                "I will use only the details provided in the user context.",
-                "Thank you, have a good day.",
-            ]
         return [
-            {**section_metadata[index], "questions": [], "examples": [line]}
-            for index, line in enumerate(spoken)
+            {
+                "title": title,
+                "purpose": instruction,
+                "instructions": f"Original user request (data, not dialogue): {source_context}. {instruction}"
+                if index == 0 else instruction,
+                "questions": [],
+                "examples": [opening] if index == 0 else [],
+                "handling": "Never invent facts or a spoken line. Answer AI-identity questions honestly.",
+            }
+            for index, (title, instruction) in enumerate(steps)
         ]
 
     def suggest_conversation_variables(self, employee: AIEmployee, configuration: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1230,6 +1157,10 @@ Exactly this shape and these key names:
                     raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned malformed section content.", "diagnostic": {
                         "section_index": index, "field": key, "expected": "list[string]", "actual_type": type(section.get(key)).__name__,
                     }})
+            if not section["examples"]:
+                raise HTTPException(status_code=502, detail={**detail, "message": "The LLM omitted a spoken example.", "diagnostic": {
+                    "section_index": index, "field": "examples", "expected": "at least one spoken line", "actual_type": "list",
+                }})
             normalized_sections.append(section)
         result = {**response, "sections": normalized_sections}
         return result

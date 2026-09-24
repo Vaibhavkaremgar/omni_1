@@ -30,6 +30,17 @@ def test_outbound_welcome_uses_only_valid_first_opening_example():
     assert payload["welcome_message"] == opening
 
 
+def test_reviewed_outbound_opening_comes_from_edited_spoken_example():
+    employee = SimpleNamespace(name="Assistant", purpose="Invite contacts", language="Telugu", call_type="outbound")
+    opening = "Hello అండి, నేను Maya. Vaibhav and Muskan wedding కి మిమ్మల్ని invite చేయడానికి call చేశాను."
+    cards = {f"Section {index}": f"Spoken example: {opening if index == 0 else f'Line {index} అండి.'}" for index in range(6)}
+    payload = map_employee_configuration(employee, {
+        "purpose": employee.purpose, "language": "Telugu", "call_type": "outbound",
+        "agent_name": "Maya", "script_source": "reviewed", "call_script": cards,
+    })
+    assert payload["welcome_message"] == opening
+
+
 def test_outbound_welcome_falls_back_for_placeholder_opening():
     employee = SimpleNamespace(name="Assistant", purpose="Invite contacts", language="English", call_type="outbound")
     payload = map_employee_configuration(employee, {
@@ -117,7 +128,7 @@ def test_published_agent_declares_name_slot_and_references_it_in_runtime_prompt(
     assert "no dispatch context is supplied" in runtime
     assert "location, project, configuration, budget, and status" in runtime
     assert "Rahul" not in str(payload)
-    assert "{{name}}" in payload["welcome_message"]
+    assert payload["welcome_message"] == "Hello, I am an AI assistant."
 
 
 def test_campaign_runtime_values_are_sent_per_call_without_leakage():

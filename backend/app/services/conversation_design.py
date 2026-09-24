@@ -147,14 +147,13 @@ def render_section(section: Section) -> str:
 def language_rules(language: str) -> str:
     value = language.casefold()
     if value in {"telugu", "te", "te-in", "telugu (india)"}:
-        style = ("Telugu words must use native Telugu Unicode. Mix natural English conversational terms at roughly one "
-                 "word or short phrase every 5–7 spoken words where grammar permits. Never produce completely Telugu "
-                 "speech. No Romanized Telugu, old/archaic Telugu, literary/grandhika, Sanskrit-heavy, formal or "
-                 "translation-like phrasing. Use only context-relevant English terms and everyday phone language.")
+        style = ("Telugu words must use native Telugu Unicode. Mix context-relevant English terms wherever they "
+                 "sound natural in conversation. Use Telugu word order and complete spoken sentences. No Romanized "
+                 "Telugu, old/archaic Telugu, literary/grandhika, Sanskrit-heavy, formal or translation-like phrasing. "
+                 "Do not force a fixed English word ratio or insert filler words merely to code-switch.")
     elif value in {"hindi", "hi", "hi-in", "hindi (india)"}:
-        style = ("Use natural Indian Hinglish: Hindi grammar and words in Devanagari with roughly one natural English "
-                 "word or short phrase every 5–7 spoken words. Do not produce completely Hindi speech, Roman Hindi, "
-                 "Sanskritized/literary Hindi, or translation-like phrasing.")
+        style = ("Use natural spoken Hindi grammar in Devanagari and English terms wherever they fit the actual call. "
+                 "Do not force a ratio or filler words. Avoid Roman Hindi, formal/literary Hindi, and word-for-word translation.")
     else:
         style = f"Use natural conversational {language}."
     return (f"Selected spoken language: {language}. Internal instructions may be English. {style} "

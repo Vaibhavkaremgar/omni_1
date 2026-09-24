@@ -8,7 +8,6 @@ from app.services.script_validation_constants import (
     ALLOWED_COMMON_ENGLISH,
     HINDI_MONTH_STEMS,
     TELUGU_BANNED_STEMS,
-    TELUGU_OVER_TRANSLATED_STEMS,
     TELUGU_MONTH_STEMS,
 )
 
@@ -37,20 +36,8 @@ def validate_script(
 
     if normalized_language in {"telugu", "te", "te-in", "hindi", "hi", "hi-in"}:
         for index, title, field, line in [(i, str(sections[i].get("title") or ""), f, line) for i, f, line in spoken_lines]:
-            words = re.findall(r"[A-Za-z]+|[\u0900-\u097F\u0C00-\u0C7F]+", line)
-            native_words = len(re.findall(r"[\u0900-\u097F\u0C00-\u0C7F]+", line))
-            if native_words and len(words) >= 4:
-                latin = len(re.findall(r"[A-Za-z]+", line))
-                if latin / len(words) < 0.35:
-                    issues.append(_issue(
-                        index, title, field, line, "english_mix_threshold",
-                        "Latin-script English words are below 35%; use more natural English terms instead of translated Telugu.",
-                        severity="error" if enforce else "warning",
-                    ))
             if _contains_native_date(line, normalized_language):
                 issues.append(_issue(index, title, field, line, "english_dates", "date is written with native-language month words"))
-            if enforce and not re.search(r"[A-Za-z]", line):
-                issues.append(_issue(index, title, field, line, "english_mix_required", "every Telugu/Hindi spoken line must contain natural English words"))
 
     if str(call_direction or "").casefold() == "outbound":
         main_index = 3
@@ -99,11 +86,6 @@ def _validate_line(
 ) -> None:
     if language in {"telugu", "te", "te-in"} and any(line.find(stem) >= 0 for stem in TELUGU_BANNED_STEMS):
         issues.append(_issue(index, title, field, line, "telugu_banned_word", "formal or literary Telugu word stem is banned by the prompt"))
-    if enforce and language in {"telugu", "te", "te-in"} and any(line.find(stem) >= 0 for stem in TELUGU_OVER_TRANSLATED_STEMS):
-        issues.append(_issue(
-            index, title, field, line, "telugu_over_translated_style",
-            "replace the formal or over-translated Telugu phrase with a natural English term or phrase",
-        ))
 
 
 def _contains_native_date(line: str, language: str) -> bool:

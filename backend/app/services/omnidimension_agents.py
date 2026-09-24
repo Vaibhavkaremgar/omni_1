@@ -19,7 +19,7 @@ from app.services.employee_prompt import (
     natural_voice_conversation_behavior,
     normalize_business_identity,
 )
-from app.services.employee_templates import get_template, UNIVERSAL_TELUGU_VOICE_GUIDANCE
+from app.services.employee_templates import UNIVERSAL_TELUGU_VOICE_GUIDANCE
 from app.services.voice_catalog import voice_definition
 from app.core.config import get_settings
 
@@ -647,6 +647,16 @@ def _remove_builder_instruction(text: str) -> str:
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
     """Build the static greeting sent to Omni, excluding builder-only copy."""
     outbound = _text(configuration.get("call_type", employee.call_type)).casefold() == "outbound"
+    if outbound and configuration.get("script_source") == "reviewed":
+        cards = configuration.get("call_script")
+        if isinstance(cards, dict) and len(cards) == 6:
+            reviewed_sections = []
+            for card in cards.values():
+                examples = re.findall(r"(?m)^Spoken example:\s*(.+)$", _text(card))
+                reviewed_sections.append({"examples": examples, "questions": []})
+            first_examples = reviewed_sections[0]["examples"]
+            if first_examples and _is_valid_outbound_opening(first_examples[0], reviewed_sections):
+                return first_examples[0]
     generated_sections = configuration.get("conversation_sections")
     if outbound and isinstance(generated_sections, list) and len(generated_sections) == 6:
         first_examples = generated_sections[0].get("examples") if isinstance(generated_sections[0], dict) else None
@@ -665,15 +675,6 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
             purpose=_safe_purpose(configuration.get("purpose"), employee.purpose),
             language=language,
         )
-    if outbound and not configuration.get("conversation_design"):
-        host = _text(configuration.get("host_name"))
-        purpose = _safe_purpose(configuration.get("purpose"), employee.purpose)
-        if language == "Telugu":
-            return f"నమస్కారం అండి, నేను {host} గారి behalf లో మాట్లాడుతున్నాను. {purpose} గురించి call చేశాను అండి." if host else f"నమస్కారం అండి, నేను AI assistant గా call చేస్తున్నాను. {purpose} గురించి call చేశాను అండి."
-        if language == "Hindi":
-            return f"नमस्कार, मैं {host} की तरफ से call कर रहा हूँ। {purpose} के बारे में call किया है।" if host else f"नमस्कार, मैं AI assistant हूँ। {purpose} के बारे में call किया है।"
-        behalf = f"on behalf of {host}" if host else "on behalf of the configured host"
-        return f"Hello, I am an AI assistant calling {behalf} about {purpose}."
     base = _remove_builder_instruction(_raw_welcome_message(employee, configuration, language))
     if language == "Telugu":
         return (
@@ -713,130 +714,39 @@ def _is_valid_outbound_opening(candidate: str, sections: list[Any]) -> bool:
 
 def _static_outbound_welcome(configuration: dict[str, Any], *, purpose: str, language: str) -> str:
     """Safe non-question fallback used when the generated Opening is unusable."""
-    host = _text(configuration.get("host_name"))
+    agent_name = _text(configuration.get("agent_name"))
     if language == "Telugu":
-        behalf = f"{host} gari behalf lo " if host else ""
-        return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, {behalf}AI assistant ga call chestunnanu. {purpose} gurinchi call chesanu \u0c05\u0c02\u0c21\u0c3f."
+        return f"Hello అండి, నేను {agent_name}." if agent_name else "Hello అండి, నేను AI assistant ని."
     if language == "Hindi":
-        behalf = f"{host} ji ki taraf se " if host else ""
-        return f"\u0928\u092e\u0938\u094d\u0915\u093e\u0930, {behalf}main AI assistant hoon. {purpose} ke baare mein call kiya hai."
-    behalf = f" on behalf of {host}" if host else ""
-    return f"Hello, I am an AI assistant calling{behalf} about {purpose}."
+        return f"नमस्ते जी, मैं {agent_name} हूँ।" if agent_name else "नमस्ते जी, मैं AI assistant हूँ।"
+    return f"Hello, I am {agent_name}." if agent_name else "Hello, I am an AI assistant."
 
 
 def _raw_welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
+    """Use approved inbound speech or a neutral greeting; never speak the brief."""
     if configuration.get("conversation_design"):
         return _text(configuration.get("opening"))
-    configured = _text(configuration.get("greeting"))
-    outbound = _text(configuration.get("call_type", employee.call_type)).casefold() == "outbound"
-    call_script = configuration.get("call_script")
-    script_greeting = (
-        _text(call_script.get("Greeting & Intro"))
-        if isinstance(call_script, dict) else ""
-    )
-    # The reviewed second script section is the caller-facing source of truth.
-    # Omni plays welcome_message before the LLM gets a turn, so it must receive
-    # that exact opening rather than a separately reconstructed version.
-    if script_greeting and not _contains_raw_description(script_greeting, configuration):
-        return script_greeting
-    # A saved generic greeting can otherwise undo the outbound offer-first
-    # contract. Generate this opening from the verified employee configuration.
-    if not outbound and configured and (language in {"English", "English (India)", "English (UK)"} or _contains_language_script(configured, language)):
-        return configured
-    # Hindi's generated six-section Greeting & Intro is the canonical spoken
-    # opening. Reuse it here so OmniDimension does not receive a separately
-    # generated formal-Hindi welcome that conflicts with the reviewed script.
-    if language == "Hindi" and not outbound:
-        call_script = configuration.get("call_script")
-        if isinstance(call_script, dict) and _text(call_script.get("Greeting & Intro")):
-            return _text(call_script["Greeting & Intro"])
-    purpose = _safe_purpose(configuration.get("purpose"), employee.purpose)
-    try:
-        template = get_template(_text(configuration.get("selected_template_id")))
-    except KeyError:
-        template = None
-    values = configuration.get("template_values") if isinstance(configuration.get("template_values"), dict) else {}
-    business_name = next((_text(configuration.get(key)) for key in ("business_name", "company_name", "hospital_name", "institution_name", "project_name") if _text(configuration.get(key))), "")
-    if not business_name:
-        business_name = next((_text(values.get(key)) for key in ("business_name", "company_name", "hospital_name", "institution_name", "project_name") if _text(values.get(key))), "")
-    if template:
-        purpose = f"{business_name} {template['name']}" if business_name else template["name"]
-    name = _text(configuration.get("agent_name")) or "AI assistant"
-    business_purpose = _outbound_offer_summary(configuration, purpose)
+    sections = configuration.get("conversation_sections")
+    if isinstance(sections, list) and len(sections) == 6 and isinstance(sections[0], dict):
+        examples = sections[0].get("examples")
+        if isinstance(examples, list) and examples and _text(examples[0]):
+            return _text(examples[0])
+    greeting = _text(configuration.get("greeting"))
+    if greeting and (language.startswith("English") or _contains_language_script(greeting, language)):
+        return greeting
+    cards = configuration.get("call_script")
+    if isinstance(cards, dict):
+        card = _text(cards.get("Greeting & Intro") or next(iter(cards.values()), ""))
+        match = re.search(r"(?m)^Spoken example:\s*(.+)$", card)
+        candidate = match.group(1).strip() if match else ""
+        if candidate and not _contains_raw_description(candidate, configuration):
+            return candidate
+    name = _text(configuration.get("agent_name"))
     if language == "Telugu":
-        company = f", {business_name} \u0c28\u0c41\u0c02\u0c1a\u0c3f" if business_name else ""
-        if outbound:
-            reason = _telugu_outbound_reason(configuration, purpose) if business_name else f"{business_purpose} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
-            return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 {name}{company} \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. {reason} \u0c2e\u0c30\u0c3f\u0c02\u0c24 details \u0c35\u0c3f\u0c28\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f \u0c2e\u0c40\u0c15\u0c41 interest \u0c09\u0c02\u0c26\u0c3e?"
-        return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, \u0c28\u0c47\u0c28\u0c41 {name}{company} \u0c2e\u0c3e\u0c1f\u0c4d\u0c32\u0c3e\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. \u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 help \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f \u0c05\u0c02\u0c21\u0c3f?"
+        return f"Hello అండి, నేను {name}. మీకు ఎలా help చేయగలను?" if name else "Hello అండి, నేను AI assistant ని. మీకు ఎలా help చేయగలను?"
     if language == "Hindi":
-        company = f", {business_name} \u0938\u0947" if business_name else ""
-        if outbound:
-            return f"\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 {name}{company} \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. {business_purpose} \u0915\u0947 \u092c\u093e\u0930\u0947 \u092e\u0947\u0902 call \u0915\u093f\u092f\u093e \u0939\u0948. \u0915\u094d\u092f\u093e \u0906\u092a details \u0938\u0941\u0928\u0928\u093e \u091a\u093e\u0939\u0947\u0902\u0917\u0947?"
-        return f"\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, \u092e\u0948\u0902 {name}{company} \u092c\u094b\u0932 \u0930\u0939\u093e \u0939\u0942\u0901. \u0906\u092a\u0915\u0940 help \u0915\u0948\u0938\u0947 \u0915\u0930 \u0938\u0915\u0924\u093e \u0939\u0942\u0901?"
-    if language == "Telugu":
-        # Teluglish: conversational Telugu with the English words customers
-        # naturally use for business details.
-        if business_name:
-            if outbound:
-                reason = _telugu_outbound_reason(configuration, purpose)
-                return f"నమస్కారం, నేను {name}. {business_name} తరఫున మాట్లాడుతున్నాను. {reason} దీని గురించి మరింత తెలుసుకోవడానికి మీకు ఆసక్తి ఉందా?"
-            return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {business_name} \u0c24\u0c30\u0c2b\u0c41\u0c28 {((business_purpose + ' gurinchi matladataniki call chesanu.') if outbound else '\u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f.')}"
-        if outbound:
-            return f"Namaskaram, nenu {name}. {business_purpose} gurinchi matladataniki call chesanu. Dini gurinchi meeru inka telusukovalani anukuntunnara?"
-        return f"\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02, \u0c28\u0c47\u0c28\u0c41 {name}. {purpose} \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f \u0c2e\u0c40\u0c15\u0c41 \u0c0f\u0c02 \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c4b \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c02\u0c21\u0c3f."
-    if language == "Hindi":
-        if outbound:
-            return f"Hello ji, main {name}{(' ' + business_name + ' se') if business_name else ''} bol raha hoon. Main {business_purpose} ke baare mein call kar raha hoon. Kya aap iske baare mein aur jaanna chahenge?"
-        return f"Hello ji, main {name} bol raha hoon. Main {purpose} ke regarding aapki help karne ke liye hoon. Aapki requirement kya hai?"
-    if language == "Telugu":
-        return f"నమస్కారం, నేను {name}. {purpose} విషయంలో మీకు సహాయం చేయడానికి ఇక్కడ ఉన్నాను. మీకు ఏ సమాచారం కావాలి?"
-    if language == "Tamil":
-        if outbound:
-            return f"Vanakkam, naan {name}. {business_purpose} patri pesa azhaithen. Idhai patri melum therindhukolla virumbugireergala?"
-        return f"வணக்கம், நான் {name}. {purpose} தொடர்பாக உங்களுக்கு உதவ இங்கே இருக்கிறேன். உங்களுக்கு என்ன தகவல் தேவை?"
-    if outbound:
-        company = f" from {business_name}" if business_name else ""
-        return f"Hello, I'm {name}{company}. I'm calling to tell you about {business_purpose}. Would you like to hear more?"
-    return f"Hello, I'm {name} from {business_name}. How can I help you today?"
-
-
-def _outbound_offer_summary(configuration: dict[str, Any], purpose: str) -> str:
-    """Return the customer-facing offer statement without inventing business facts."""
-    values = configuration.get("template_values")
-    values = values if isinstance(values, dict) else {}
-    product = next((
-        _text(configuration.get(key)) or _text(values.get(key))
-        for key in ("product_or_service", "products", "products_services", "offer", "service")
-        if _text(configuration.get(key)) or _text(values.get(key))
-    ), "")
-    brief = _text(configuration.get("business_description")) or purpose
-    promotion = _promotion_from_brief(brief)
-    if product:
-        return f"{product} {promotion}".strip()
-    if promotion:
-        return promotion
-    # Never speak the owner's workflow instruction (for example, "he needs to
-    # call customers...") to a customer. A neutral fallback is preferable to
-    # exposing internal wording when no specific offer has been configured.
-    if _looks_like_internal_instruction(brief):
-        return "our current printer offer"
-    return brief
-
-
-def _telugu_outbound_reason(configuration: dict[str, Any], purpose: str) -> str:
-    """Turn the owner brief into a short caller-facing Telugu reason to call."""
-    brief = _text(configuration.get("business_description")) or purpose
-    promotion = _promotion_from_brief(brief)
-    if promotion:
-        return f"\u0c2e\u0c3e \u0c26\u0c17\u0c4d\u0c17\u0c30 {promotion} \u0c09\u0c02\u0c26\u0c3f."
-    if "insurance" in brief.casefold() and "renewal" in brief.casefold():
-        days = re.search(r"within\s+(\d+)\s+days?", brief, flags=re.IGNORECASE)
-        timing = f"next {days.group(1)} days \u0c32\u0c4b " if days else ""
-        return f"\u0c2e\u0c40 insurance renewal {timing}\u0c09\u0c02\u0c26\u0c3f. Renewal reminder \u0c15\u0c4b\u0c38\u0c02 call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
-    if _looks_like_internal_instruction(brief):
-        return "\u0c2e\u0c3e current offer \u0c17\u0c41\u0c30\u0c3f\u0c02\u0c1a\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41."
-    return "మీకు relevant details చెప్పడానికి call చేశాను."
+        return f"नमस्ते जी, मैं {name} हूँ। आपकी कैसे help कर सकता हूँ?" if name else "नमस्ते जी, मैं AI assistant हूँ। आपकी कैसे help कर सकता हूँ?"
+    return f"Hello, I am {name}. How can I help?" if name else "Hello, I am an AI assistant. How can I help?"
 
 
 def _contains_raw_description(text: str, configuration: dict[str, Any], minimum_words: int = 16) -> bool:
@@ -859,63 +769,6 @@ def _contains_raw_description(text: str, configuration: dict[str, Any], minimum_
             if " ".join(phrase) in text.casefold():
                 return True
     return False
-    brief = _text(configuration.get("business_description")) or purpose
-    promotion = _promotion_from_brief(brief)
-    if promotion:
-        return f"మా దగ్గర {promotion} ఉంది."
-    if "insurance" in brief.casefold() and "renewal" in brief.casefold():
-        days = re.search(r"within\s+(\d+)\s+days?", brief, flags=re.IGNORECASE)
-        timing = f"next {days.group(1)} days lo " if days else ""
-        return f"మీ insurance renewal {timing}ఉంది. Renewal reminder కోసం call చేశాను."
-    # A job brief is input for generating a welcome, never speech to play as
-    # the welcome. Use a short, neutral business reason if it has no known
-    # customer-facing fact to surface.
-    if _looks_like_internal_instruction(brief):
-        return "మా current offer గురించి మాట్లాడటానికి call చేశాను."
-    return f"{brief} గురించి మాట్లాడటానికి call చేశాను."
-
-
-def _promotion_from_brief(brief: str) -> str:
-    """Extract a customer-facing festival promotion from a free-form brief."""
-    normalized = " ".join(brief.split())
-    patterns = (
-        # "Tell leads the current Vinayaka Chaturthi offer of 30% discount
-        # on printers" -> Telugu-led offer phrase below.
-        r"(?:the\s+)?(?:current\s+)?(?P<festival>(?:[A-Za-z]+\s+)?Chaturthi|festival\s+season)\s+offer\s*"
-        r"(?:of\s+)?(?P<discount>[^.,;]*?(?:discount|off))\s+(?:on|for)\s+(?P<product>[A-Za-z][A-Za-z0-9 &/-]{1,60})",
-        # "printers with 50% off on this festival season"
-        r"(?P<product>printers?|products?|services?)\s+with\s+(?P<discount>[^.,;]*?(?:discount|off))\s+"
-        r"(?:on|for)\s+(?:this\s+)?(?P<festival>[A-Za-z][A-Za-z ]{2,40})",
-        r"(?:buy(?:ing)?\s+(?:the\s+)?)?(?P<product>[A-Za-z][A-Za-z0-9 &/-]{1,60}?)?\s*"
-        r"(?:as\s+)?this\s+(?P<festival>[A-Za-z][A-Za-z ]{2,40}?)\s+"
-        r"(?:we\s+are|we're)\s+(?:giving|offering)\s+(?P<discount>[^.,;]*?(?:discount|offer)[^.,;]*)",
-    )
-    match = next((re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns if re.search(pattern, normalized, flags=re.IGNORECASE)), None)
-    if not match:
-        return ""
-    product = (match.group("product") or "").strip(" -")
-    # The pattern may include workflow words before the product; retain only a
-    # clean final product phrase when it contains a known product noun.
-    product_match = re.search(r"(printers?|products?|services?)\b", product, flags=re.IGNORECASE)
-    product = product_match.group(1) if product_match else ""
-    festival = match.group("festival").strip()
-    discount = match.group("discount").strip().rstrip(".")
-    # Keep the offer terms in English, but let the Telugu welcome own the
-    # sentence structure: "maa daggara Ganesh Chaturthi offer lo printers
-    # meeda 30% discount nadusthundhi."
-    offer = f"{festival} offer lo {product} meeda {discount} nadusthundhi".strip()
-    return re.sub(r"\s+", " ", offer)
-
-
-def _looks_like_internal_instruction(value: str) -> bool:
-    lowered = value.casefold()
-    return any(marker in lowered for marker in (
-        "needs to call", "need to call", "call the customer", "call customers",
-        "explain about", "know if the customer", "know whether the customer",
-        "employee must call", "employee should call", "tell the leads",
-    ))
-
-
 def _default_end_call_message(language: str) -> str:
     if language == "Telugu":
         return "Thank you. Have a nice day."

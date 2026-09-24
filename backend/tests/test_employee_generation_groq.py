@@ -38,11 +38,11 @@ def response(language="English"):
             "Thank you, have a good day.",
         ],
         "Telugu": [
-            "Hello అండి, Vaibhav and Muskan గారి behalf లో AI assistant గా wedding invitation కోసం call చేస్తున్నాను.",
-            "Wedding date 31st January 2027, Jalor, Rajasthan అండి.",
-            "I understand అండి, మీ response noted. Thank you.",
-            "Please wedding కి attend అవ్వండి అండి.",
-            "Any question ఉంటే, available wedding details share చేస్తాను అండి.",
+            "Hello అండి, నేను AI assistant ని. Vaibhav and Muskan wedding కి మిమ్మల్ని invite చేయడానికి call చేశాను.",
+            "Wedding January 31st, 2027 న Jalor, Rajasthan లో ఉంది అండి.",
+            "మీ response అర్థమైంది అండి.",
+            "Wedding కి మీరు రావాలని request చేస్తున్నాను అండి.",
+            "Wedding details గురించి ఏమైనా doubt ఉంటే చెప్పండి అండి.",
             "Thank you. Have a nice day.",
         ],
         "Hindi": [
@@ -239,12 +239,51 @@ def test_no_telugu_unicode_goes_to_repair_instead_of_immediate_502():
     assert config["script_source"] == "model"
 
 
-def test_enforced_validators_reject_outbound_questions_and_missing_english():
+def test_telugu_opening_introduces_explicit_agent_before_purpose_without_literal_behalf():
+    payload = response("Telugu")
+    payload["sections"][0]["examples"] = [
+        "Hello అండి, నేను Maya. Vaibhav and Muskan wedding కి మిమ్మల్ని invite చేయడానికి call చేశాను."
+    ]
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]})
+
+    service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
+    config = {"original_requirement": REQUIREMENT, "language": "Telugu", "call_type": "outbound", "agent_name": "Maya", "host_name": "Vaibhav and Muskan"}
+    result = generate(service, language="Telugu", config=config)
+    assert config["script_source"] == "model"
+    assert calls == ["openai/gpt-oss-120b"]
+    assert payload["sections"][0]["examples"][0] in result["Invitation Step 0"]
+
+
+def test_literal_behalf_opening_is_repaired_before_acceptance():
+    bad = response("Telugu")
+    bad["sections"][0]["examples"] = [
+        "Hello అండి, Vaibhav and Muskan గారి behalf లో AI assistant గా wedding invitation కోసం call చేస్తున్నాను."
+    ]
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["response_format"]["type"])
+        payload = bad if len(calls) == 1 else response("Telugu")
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]})
+
+    service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
+    config = {"original_requirement": REQUIREMENT, "language": "Telugu", "call_type": "outbound"}
+    generate(service, language="Telugu", config=config)
+    assert calls == ["json_schema", "json_schema"]
+    assert config["script_source"] == "model"
+
+
+def test_enforced_validators_reject_outbound_questions_without_forcing_english():
     sections = response("Telugu")["sections"]
     sections[0]["examples"] = ["నమస్కారం అండి"]
     sections[3]["questions"] = ["Can you attend?"]
     issues = validate_script(sections, "Telugu", "outbound", user_context=REQUIREMENT, enforce=True)
-    assert {item["rule"] for item in issues} >= {"outbound_questions", "english_mix_required"}
+    assert "outbound_questions" in {item["rule"] for item in issues}
+    assert "english_mix_required" not in {item["rule"] for item in issues}
 
 
 def test_research_is_skipped_for_wedding_even_with_business_name():
@@ -258,28 +297,26 @@ def test_research_is_skipped_for_wedding_even_with_business_name():
     assert result["business_research"]["reason"] == "personal_context"
 
 
-def test_assembled_fallback_keeps_context_specific_objective_without_identity_claims():
+def test_assembled_fallback_preserves_context_as_review_only_draft_without_invented_speech():
     wedding = {"original_requirement": "call contacts about my wedding on 15th of jan 2027", "language": "Telugu", "call_type": "outbound", "host_name": ""}
     election = {"original_requirement": "call voters about the upcoming ghmc elections", "language": "Telugu", "call_type": "outbound", "host_name": ""}
     wedding_sections = RealLLMService._assemble_script_sections(wedding, "Telugu", "outbound", wedding)
     election_sections = RealLLMService._assemble_script_sections(election, "Telugu", "outbound", election)
     wedding_text = json.dumps(wedding_sections, ensure_ascii=False)
     election_text = json.dumps(election_sections, ensure_ascii=False)
-    assert "January 15th, 2027" in wedding_text
-    assert "my wedding" not in wedding_text.casefold()
-    assert "GHMC" in election_text
-    assert "our party" not in election_text.casefold()
+    assert "15th of jan 2027" in wedding_text
+    assert wedding["script_review_required"] is True
+    assert "ghmc elections" in election_text
+    assert election["script_review_required"] is True
     assert [section["title"] for section in wedding_sections] == [
-        "Wedding invitation opening", "Wedding invitation details", "Wedding invitation response",
-        "Wedding invitation request", "Wedding invitation questions", "Wedding invitation closing",
+        "Opening", "Facts", "Listening", "Request", "Exceptions", "Closing",
     ]
     assert not validate_script(
         wedding_sections, "Telugu", "outbound",
         user_context=wedding["original_requirement"], enforce=True,
     )
     spoken = "\n".join(example for section in wedding_sections for example in section["examples"])
-    for unwanted in ("నమస్కారం", "గురించి", "చెప్ప", "అర్థమ", "తప్పకుండా", "మాత్రమే", "మరియు"):
-        assert unwanted not in spoken
+    assert spoken == "Hello అండి, నేను AI assistant ని."
     assert "gari" not in spoken.casefold() and "behalf lo" not in spoken.casefold()
 
 
