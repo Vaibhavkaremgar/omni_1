@@ -770,7 +770,9 @@ Exactly this shape and these key names:
 
     @staticmethod
     def _assemble_script_sections(context: dict[str, Any], language: str, call_direction: str, configuration: dict[str, Any]) -> list[dict[str, Any]]:
-        purpose = str(context.get("original_requirement") or context.get("purpose") or "the requested task").strip()
+        source_context = str(context.get("original_requirement") or context.get("purpose") or "the requested task").strip()
+        configuration["assembled_source_context"] = source_context
+        purpose = "Deliver the requested call objective using the saved user context."
         host = str(configuration.get("host_name") or "").strip()
         if str(language).casefold() in {"telugu", "te", "te-in"}:
             behalf = f"{host} gari behalf lo " if host else ""
@@ -803,7 +805,7 @@ Exactly this shape and these key names:
                 "Thank you, have a good day.",
             ]
         return [
-            {"title": SCRIPT_SECTION_TITLES[index], "purpose": purpose, "instructions": f"Use only this user context verbatim: {purpose}", "questions": [], "examples": [line], "handling": "Use the configured guardrails, disclose that the caller is an AI assistant when asked, and stop respectfully if asked to stop."}
+            {"title": SCRIPT_SECTION_TITLES[index], "purpose": purpose, "instructions": "Use only the saved user context and approved call rules. Do not invent missing details.", "questions": [], "examples": [line], "handling": "Use the configured guardrails, disclose that the caller is an AI assistant when asked, and stop respectfully if asked to stop."}
             for index, line in enumerate(spoken)
         ]
 

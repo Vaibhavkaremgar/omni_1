@@ -97,6 +97,7 @@ def test_three_failures_use_assembled_script_without_raising():
     config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
     assert len(generate(service, config=config)) == 6
     assert config["script_source"] == "assembled"
+    assert config["assembled_source_context"] == REQUIREMENT
     assert len(calls) == 3
 
 
