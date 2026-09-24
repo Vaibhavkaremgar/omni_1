@@ -290,6 +290,9 @@ class RealLLMService(LLMService):
         attempts = self._configured_llm_attempts()
         request_id = uuid4()
         logger.info("LLM script generation started request_id=%s provider=%s model=%s base_url=%s employee_id=%s", request_id, provider or "<unset>", model or "<unset>", self.settings.effective_llm_base_url or "<default>", getattr(employee, "id", "<unknown>"))
+        configuration_error = getattr(self.settings, "employee_llm_configuration_error", None)
+        if configuration_error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=configuration_error)
         if not attempts:
             logger.error("LLM script generation configuration failure request_id=%s provider_configured=%s model_configured=%s api_key_configured=%s", request_id, bool(provider), bool(model), bool(self.settings.effective_llm_api_key))
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM script generation is not configured.")
@@ -312,18 +315,21 @@ class RealLLMService(LLMService):
         }, ensure_ascii=False)
         language = str(context["language"])
         system = """Return JSON only with exactly this shape: {\"sections\":[{\"title\":\"\",\"purpose\":\"\",\"instructions\":\"\",\"questions\":[\"\"],\"examples\":[\"\"],\"handling\":\"\"}]}. Generate exactly 6 dynamic sections based on USER_CONTEXT; the six sections together are the final employee prompt. Section titles must always be English only and must never be translated. Keep the field labels Purpose, Instructions, Question, Spoken example, and Handling in English exactly as represented by the output structure. For Telugu, write every section body (purpose, instructions, questions, spoken examples, and handling) as natural informal Hyderabad/Telangana Telugu. Telugu words and Telugu grammar MUST be written in Telugu Unicode script; English terms MUST remain in Latin script inside those Telugu sentences. Never transliterate any Telugu word into English letters: never output forms such as lo, meeku, emi, nachindi, kavali, or emenities as Telugu text. For everyday nouns, strongly default to the English word when a Hyderabad/Telangana speaker would naturally use it: time, name, number, address, problem, doctor, hospital, school, college, class, exam, marks, result, interested, busy, free, plan, idea, confirm, details, available, message, call, project, budget, options, features, amenities, price, cost, discount, offer, service, office, meeting, appointment, schedule, form, document, certificate, fees, payment, online, website, email, family, decision, location, area, company, manager, staff, customer, product, quality, delivery, order, process, update, reason, purpose, suggestion, requirement, and experience. Keep verbs, pronouns, particles, connectors, greetings, and sentence endings in natural Telugu, such as మీరు, మీకు, నేను, ఉంది/ఉందా, చేయండి, కావాలి, చెప్పండి, నమస్కారం, ఎలా, ఏమి, ఎప్పుడు, అవును, and కాదు. For example, prefer 'మీకు ఇప్పుడు కొంచెం time ఉంటుందా?' and 'మేము ఇటీవల start చేసిన కొత్త project గురించి మీకు కొన్ని details చెప్పడానికి call చేశాను.' Apply this noun-by-noun choice across every body field; if English is even slightly more natural, use English. Keep common terms such as customer, project, budget, options, timeline, interested, follow-up, details, requirement, available, confirm, appointment, policy, renewal, insurance, location, site visit, booking, schedule, demo, price, quotation, call, payment, and document in English when natural. Use everyday spoken verb endings and rhythm, not grandhika, literary, Sanskrit-heavy, textbook, newsreader, or translated Telugu; avoid stiff formal connectors such as మరియు when a natural spoken alternative works. Do not use fully Roman/Tinglish Telugu, do not force English into every sentence, and keep Telugu body text primarily in Telugu script. Keep Telugu sentences short, simple, and human. Hindi means natural Devanagari Hindi plus English business words (Hinglish), never Roman or overly formal Hindi. English means natural conversational English. Do not invent facts or irrelevant questions and do not force sales, objections, CTA, payment, or appointment behavior unless relevant. Research and knowledge are optional."""
-        response = self._perform_json_request_with_fallbacks(request_id, attempts, system, user)
-        sections = response.get("sections") if isinstance(response, dict) else None
-        if not isinstance(sections, list) or len(sections) != 6:
-            raise HTTPException(status_code=502, detail={"message": "The LLM returned an invalid employee script shape.", "request_id": str(request_id), "failure_category": "malformed_provider_response"})
-        for section in sections:
-            if not isinstance(section, dict) or any(not isinstance(section.get(key), str) or not section[key].strip() for key in ("title", "purpose", "instructions", "handling")):
-                raise HTTPException(status_code=502, detail={"message": "The LLM returned an incomplete employee section.", "request_id": str(request_id), "failure_category": "malformed_provider_response"})
-            for key in ("questions", "examples"):
-                if not isinstance(section.get(key), list) or any(not isinstance(item, str) or not item.strip() for item in section[key]):
-                    raise HTTPException(status_code=502, detail={"message": "The LLM returned malformed section content.", "request_id": str(request_id), "failure_category": "malformed_provider_response"})
+        response = self._perform_json_request_with_fallbacks(
+            request_id, attempts, system, user,
+            validator=lambda value, rid: self._validate_script_response(value, rid, context["language"]),
+        )
+        sections = response["sections"]
         configuration["conversation_sections"] = sections
-        return {section["title"]: "\n".join([f"Purpose: {section['purpose']}", f"Instructions: {section['instructions']}", *[f"Question: {q}" for q in section['questions']], *[f"Spoken example: {e}" for e in section['examples']], f"Handling: {section['handling']}"]) for section in sections}
+        script = {section["title"]: "\n".join([f"Purpose: {section['purpose']}", f"Instructions: {section['instructions']}", *[f"Question: {q}" for q in section['questions']], *[f"Spoken example: {e}" for e in section['examples']], f"Handling: {section['handling']}"]) for section in sections}
+        _validate_generated_script_language(script, context["language"], request_id)
+        if response.get("_legacy_conversation_design"):
+            from app.services.conversation_design import ConversationDesign, GeneratedScript
+            try:
+                return GeneratedScript(ConversationDesign.model_validate(response["_legacy_conversation_design"]))
+            except ValidationError as exc:
+                raise HTTPException(status_code=502, detail={"message": "The LLM returned an invalid conversation design.", "request_id": str(request_id), "failure_category": "llm_schema_failure"}) from exc
+        return script
 
     def suggest_conversation_variables(self, employee: AIEmployee, configuration: dict[str, Any]) -> list[dict[str, Any]]:
         """Suggest optional post-call extraction fields; callers choose what to save."""
@@ -360,6 +366,9 @@ class RealLLMService(LLMService):
     def generate_employee_prompt(self, employee: AIEmployee, configuration: dict[str, Any]) -> str:
         """Generate the new prompt-first artifact; legacy section generation is separate."""
         attempts = self._configured_llm_attempts()
+        configuration_error = getattr(self.settings, "employee_llm_configuration_error", None)
+        if configuration_error:
+            raise HTTPException(status_code=503, detail=configuration_error)
         if not attempts:
             raise HTTPException(status_code=503, detail="LLM script generation is not configured.")
         from app.services.conversation_design import AssistantPrompt, strict_prompt_schema
@@ -382,12 +391,11 @@ class RealLLMService(LLMService):
         )
         user = json.dumps({"USER_CONTEXT": context, "RESEARCH": research if research.get("status") == "success" else {"status": "unavailable"}, "knowledge_base_available": bool(configuration.get("knowledge_files"))}, ensure_ascii=False)
         request_id = uuid4()
-        payload = self._build_request(
-            attempts[0].provider, attempts[0].model, system, user,
-            api_key=attempts[0].api_key, base_url=attempts[0].base_url,
+        response = self._perform_json_request_with_fallbacks(
+            request_id, attempts, system, user,
+            validator=lambda value, rid: self._validate_prompt_response(value, rid, AssistantPrompt),
             response_schema=strict_prompt_schema(), response_schema_name="employee_prompt", max_output_tokens=4000,
         )
-        response = self._perform_json_request(attempts[0].provider, payload)
         prompt = AssistantPrompt.model_validate(response).prompt.strip()
         if not prompt:
             raise HTTPException(status_code=502, detail=f"The LLM returned an empty employee prompt. [request_id={request_id}]")
@@ -405,8 +413,6 @@ class RealLLMService(LLMService):
             try:
                 if provider.casefold() in {"anthropic", "claude"}:
                     text = self._extract_anthropic_text(body)
-                elif provider.casefold() in {"gemini", "google", "google-gemini"}:
-                    text = self._extract_gemini_text(body)
                 else:
                     text = self._extract_openai_text(body)
             except HTTPException as exc:
@@ -416,7 +422,10 @@ class RealLLMService(LLMService):
                 return self._recover_json(text)
             except HTTPException as exc:
                 logger.error("LLM script JSON parsing failed provider=%s detail=%s completion_chars=%s completion_tail=%s", provider, exc.detail, len(text), text[-1200:], exc_info=True)
-                raise
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={"message": "The LLM returned malformed JSON.", "failure_category": "llm_schema_failure"},
+                ) from exc
         except httpx.TimeoutException as exc:
             logger.error("LLM script provider timeout provider=%s url=%s error=%s", provider, payload.get("url"), exc, exc_info=True)
             raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="The LLM provider timed out while generating the call script.") from exc
@@ -447,43 +456,37 @@ class RealLLMService(LLMService):
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The LLM provider could not generate a valid call script.") from exc
 
     def _perform_json_request_with_fallbacks(
-        self, request_id: UUID, attempts: list[LLMAttempt], system: str, user: str
+        self, request_id: UUID, attempts: list[LLMAttempt], system: str, user: str,
+        validator=None, response_schema: dict[str, Any] | None = None,
+        response_schema_name: str = "employee_conversation_design", max_output_tokens: int | None = None,
     ) -> dict[str, Any]:
         last_error: HTTPException | None = None
         for index, llm_attempt in enumerate(attempts):
             payload = self._build_request(
                 llm_attempt.provider, llm_attempt.model, system, user,
                 api_key=llm_attempt.api_key, base_url=llm_attempt.base_url,
+                response_schema=response_schema, response_schema_name=response_schema_name,
+                max_output_tokens=max_output_tokens,
             )
-            for schema_attempt in range(2):
+            for schema_attempt in range(1):
                 try:
-                    return self._perform_json_request(llm_attempt.provider, payload)
+                    response = self._perform_json_request(llm_attempt.provider, payload)
+                    if validator:
+                        response = validator(response, request_id)
+                    return response
                 except HTTPException as exc:
                     last_error = exc
-                    retryable_schema_error = (
-                        schema_attempt == 0
-                        and llm_attempt.provider.casefold() in {"openai", "open-ai", "groq"}
-                        and "HTTP 400" in str(exc.detail)
-                        and "provider_schema_configuration" not in str(exc.detail)
-                    )
-                    if retryable_schema_error:
-                        logger.warning(
-                            "LLM script schema retry request_id=%s provider=%s model=%s attempt=2 correction=required_six_nonempty_sections",
-                            request_id, llm_attempt.provider, llm_attempt.model,
-                        )
-                        correction = (
-                            "\n\nCORRECTION: Your previous response was rejected because sections did not contain six items. "
-                            "Output exactly six objects now, one for each required key/title pair, with non-empty "
-                            "meaningful content in every content field. Do not reason aloud. Output JSON only."
-                        )
-                        payload = self._build_request(
-                            llm_attempt.provider, llm_attempt.model, system + correction, user,
-                            api_key=llm_attempt.api_key, base_url=llm_attempt.base_url,
-                        )
-                        continue
                     if index >= len(attempts) - 1:
                         logger.error("LLM script generation failed request_id=%s status=%s detail=%s", request_id, exc.status_code, exc.detail, exc_info=True)
-                        raise HTTPException(status_code=exc.status_code, detail=f"{exc.detail} [request_id={request_id}]") from exc
+                        detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+                        underlying_category = detail.get("failure_category") or _failure_category(exc)
+                        category = underlying_category
+                        if category not in {"llm_schema_failure", "llm_invalid_response"}:
+                            category = "llm_generation_failed"
+                        raise HTTPException(
+                            status_code=exc.status_code,
+                            detail={**detail, "failure_category": category, "underlying_failure_category": underlying_category, "request_id": str(request_id), "provider": llm_attempt.provider, "model": llm_attempt.model},
+                        ) from exc
                     logger.warning(
                         "LLM script fallback request_id=%s provider=%s model=%s failure_category=%s next_provider=%s next_model=%s",
                         request_id, llm_attempt.provider, llm_attempt.model, _failure_category(exc),
@@ -522,23 +525,75 @@ class RealLLMService(LLMService):
                 return
             attempts.append(LLMAttempt(provider=provider, model=model, api_key=api_key, base_url=base_url))
 
-        add(
-            self.settings.effective_llm_provider,
-            self.settings.effective_llm_model,
-            self.settings.effective_llm_api_key,
-            self.settings.effective_llm_base_url,
-        )
-        groq_model = getattr(self.settings, "groq_model", None) or getattr(self.settings, "effective_llm_model", None)
+        # This is the single provider source of truth for employee generation.
+        # Do not include generic legacy provider settings.
+        groq_model = getattr(self.settings, "groq_model", None)
+        groq_key = getattr(self.settings, "groq_api_key", None)
         groq_base_url = getattr(self.settings, "groq_base_url", None) or "https://api.groq.com/openai/v1"
-        add("groq", groq_model, getattr(self.settings, "groq_api_key", None), groq_base_url)
+        # Backwards compatibility for callers that already resolved Groq but
+        # have not yet migrated to the explicit groq_* settings fields.
+        if not groq_key and str(getattr(self.settings, "effective_llm_provider", "")).casefold() == "groq":
+            groq_key = getattr(self.settings, "effective_llm_api_key", None)
+            groq_model = getattr(self.settings, "effective_llm_model", None)
+            groq_base_url = getattr(self.settings, "effective_llm_base_url", None) or groq_base_url
+        add("groq", groq_model, groq_key, groq_base_url)
+        fallback_model = (
+            getattr(self.settings, "groq_fallback_model", None)
+            or getattr(self.settings, "groq_model_2", None)
+        )
         add(
             "groq",
-            getattr(self.settings, "groq_model_2", None) or groq_model,
-            getattr(self.settings, "groq_api_key_2", None),
+            fallback_model,
+            getattr(self.settings, "groq_api_key_2", None) or groq_key,
             getattr(self.settings, "groq_base_url_2", None) or groq_base_url,
         )
         return attempts
 
+    @staticmethod
+    def _validate_prompt_response(response: dict[str, Any], request_id: UUID, prompt_model) -> dict[str, Any]:
+        try:
+            prompt_model.model_validate(response)
+        except ValidationError as exc:
+            raise HTTPException(status_code=502, detail={"message": "The LLM returned an invalid employee prompt.", "failure_category": "llm_schema_failure", "request_id": str(request_id)}) from exc
+        return response
+    @staticmethod
+    def _validate_script_response(response: dict[str, Any], request_id: UUID, language: str | None = None) -> dict[str, Any]:
+        sections = response.get("sections") if isinstance(response, dict) else None
+        detail = {"message": "The LLM returned an invalid employee script shape.", "request_id": str(request_id), "failure_category": "llm_schema_failure"}
+        if not isinstance(sections, list) or len(sections) != 6:
+            raise HTTPException(status_code=502, detail=detail)
+        normalized_sections = []
+        legacy_design = None
+        for section in sections:
+            # Accept the existing conversation-design field names as a safe
+            # equivalent of the newer six-section response contract.
+            if isinstance(section, dict) and "instructions" not in section and "content" in section:
+                legacy_design = response
+                section = {
+                    **section,
+                    "instructions": section.get("content"),
+                    "handling": section.get("handling") or section.get("objective"),
+                    "examples": section.get("examples") or section.get("spoken_examples") or [],
+                    "questions": [item.get("text", "") if isinstance(item, dict) else item for item in section.get("questions", [])],
+                }
+            if not isinstance(section, dict) or any(not isinstance(section.get(key), str) or not section[key].strip() for key in ("title", "purpose", "instructions", "handling")):
+                raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned an incomplete employee section."})
+            for key in ("questions", "examples"):
+                if not isinstance(section.get(key), list) or any(not isinstance(item, str) or not item.strip() for item in section[key]):
+                    raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned malformed section content."})
+            normalized_sections.append(section)
+        result = {**response, "sections": normalized_sections}
+        if legacy_design is not None:
+            result["_legacy_conversation_design"] = legacy_design
+        if language:
+            candidate = {
+                section["title"]: "\n".join(
+                    [section["purpose"], section["instructions"], *section["questions"], *section["examples"], section["handling"]]
+                )
+                for section in normalized_sections
+            }
+            _validate_generated_script_language(candidate, language, request_id)
+        return result
     def _generate_turn(
         self,
         employee: AIEmployee,
@@ -722,26 +777,6 @@ class RealLLMService(LLMService):
                     "response_format": response_format,
                 },
             }
-        if normalized in {"gemini", "google", "google-gemini"}:
-            api_key = api_key or self.settings.effective_llm_api_key
-            base_url = (base_url or self.settings.effective_llm_base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
-            return {
-                "method": "POST",
-                "url": f"{base_url}/models/{model}:generateContent",
-                "headers": {
-                    "x-goog-api-key": api_key,
-                    "Content-Type": "application/json",
-                },
-                "json": {
-                    "systemInstruction": {"parts": [{"text": system_prompt}]},
-                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.2,
-                        "maxOutputTokens": 5000,
-                        "responseMimeType": "application/json",
-                    },
-                },
-            }
         if normalized in {"anthropic", "claude"}:
             api_key = api_key or self.settings.effective_llm_api_key
             base_url = (base_url or self.settings.effective_llm_base_url or "https://api.anthropic.com/v1").rstrip("/")
@@ -811,8 +846,6 @@ class RealLLMService(LLMService):
 
         if provider.casefold() in {"anthropic", "claude"}:
             text = self._extract_anthropic_text(body)
-        elif provider.casefold() in {"gemini", "google", "google-gemini"}:
-            text = self._extract_gemini_text(body)
         else:
             text = self._extract_openai_text(body)
 
@@ -856,23 +889,6 @@ class RealLLMService(LLMService):
             )
         return "\n".join(text_parts)
 
-    def _extract_gemini_text(self, body: dict[str, Any]) -> str:
-        candidates = body.get("candidates") or []
-        if not candidates:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="The LLM provider returned no completion candidates.",
-            )
-        content = candidates[0].get("content") or {}
-        parts = content.get("parts") or []
-        text = "".join(part.get("text", "") for part in parts if isinstance(part, dict))
-        if not text:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="The LLM provider returned no text content.",
-            )
-        return text
-
     def _recover_json(self, text: str) -> dict[str, Any]:
         cleaned = text.strip()
         if cleaned.startswith("```"):
@@ -909,19 +925,16 @@ def _has_script_chars(value: str, start: int, end: int) -> bool:
 
 
 def _customer_facing_text(script: dict[str, str]) -> str:
-    return "\n".join(
-        script.get(title, "")
-        for title in ("Greeting & Intro", "Qualification", "Handling Objections", "Call to Action", "Closing")
-    )
+    return "\n".join(str(value) for value in script.values())
 
 
 def _validate_generated_script_language(script: dict[str, str], language: str, request_id) -> None:
     normalized = str(language or "").casefold()
     text = _customer_facing_text(script)
     if normalized in {"telugu", "te", "te-in", "telugu (india)"} and not _has_script_chars(text, 0x0C00, 0x0C7F):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned Telugu script without Telugu Unicode. [request_id={request_id}]")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail={"message": "The LLM returned Telugu script without Telugu Unicode.", "failure_category": "llm_schema_failure", "request_id": str(request_id)})
     if normalized in {"hindi", "hi", "hi-in", "hindi (india)"} and not _has_script_chars(text, 0x0900, 0x097F):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"The LLM returned Hindi script without Devanagari Unicode. [request_id={request_id}]")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail={"message": "The LLM returned Hindi script without Devanagari Unicode.", "failure_category": "llm_schema_failure", "request_id": str(request_id)})
 
 
 def _validate_outbound_script(script: dict[str, str], request_id) -> None:

@@ -557,8 +557,6 @@ def generate_employee_script(
         raise HTTPException(status_code=404, detail="Employee draft not found")
     knowledge = db.scalars(select(EmployeeKnowledgeFile).where(EmployeeKnowledgeFile.employee_id == employee_id, EmployeeKnowledgeFile.tenant_id == current_user.tenant.id)).all()
     configuration = {**(draft.configuration or {}), "knowledge_files": [{"filename": item.filename, "status": item.status} for item in knowledge]}
-    if not str(configuration.get("business_name") or "").strip():
-        raise HTTPException(status_code=422, detail="Company name is required before generating an employee script")
     if str(configuration.get("call_type") or employee.call_type) not in {"inbound", "outbound"}:
         raise HTTPException(status_code=422, detail="Call type must be inbound or outbound")
     if str(configuration.get("language") or employee.language).casefold() not in {"english", "hindi", "telugu", "en", "hi", "te", "en-us", "hi-in", "te-in"}:

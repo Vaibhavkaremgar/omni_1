@@ -35,7 +35,9 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None, validation_alias="GROQ_API_KEY")
     groq_api_key_2: str | None = Field(default=None, validation_alias="GROQ_API_KEY_2")
     groq_model: str | None = Field(default=None, validation_alias="GROQ_MODEL")
-    groq_base_url: str | None = Field(default=None, validation_alias="GROQ_BASE_URL")
+    groq_base_url: str | None = Field(default="https://api.groq.com/openai/v1", validation_alias="GROQ_BASE_URL")
+    groq_fallback_model: str | None = Field(default=None, validation_alias="GROQ_FALLBACK_MODEL")
+    # GROQ_MODEL_2 is retained as a backwards-compatible environment alias.
     groq_base_url_2: str | None = Field(default=None, validation_alias="GROQ_BASE_URL_2")
     groq_model_2: str | None = Field(default=None, validation_alias="GROQ_MODEL_2")
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
@@ -45,41 +47,39 @@ class Settings(BaseSettings):
 
     @property
     def effective_llm_provider(self) -> str | None:
-        if self.llm_provider:
-            return self.llm_provider
-        if self.gemini_api_key:
-            return "gemini"
-        if self.groq_api_key:
-            return "groq"
-        return None
+        # Employee generation is intentionally Groq-only. Generic legacy LLM
+        # settings must never select another provider implicitly.
+        return "groq" if self.groq_api_key else None
 
     @property
     def effective_llm_api_key(self) -> str | None:
-        if self.llm_provider and self.llm_provider.casefold() == "groq":
-            return self.groq_api_key
-        if self.llm_provider and self.llm_provider.casefold() in {"gemini", "google", "google-gemini"}:
-            return self.gemini_api_key
-        return self.gemini_api_key or self.llm_api_key or self.groq_api_key
+        return self.groq_api_key
 
     @property
     def effective_llm_model(self) -> str | None:
-        if self.llm_provider and self.llm_provider.casefold() == "groq":
-            return self.groq_model
-        if self.llm_provider and self.llm_provider.casefold() in {"gemini", "google", "google-gemini"}:
-            return self.gemini_model
-        if self.gemini_api_key:
-            return self.gemini_model
-        return self.llm_model or self.groq_model
+        return self.groq_model
 
     @property
     def effective_llm_base_url(self) -> str | None:
-        if self.llm_provider and self.llm_provider.casefold() == "groq":
-            return self.groq_base_url
-        if self.llm_provider and self.llm_provider.casefold() in {"gemini", "google", "google-gemini"}:
-            return self.gemini_base_url
-        if self.gemini_api_key:
-            return self.gemini_base_url
-        return self.llm_base_url or self.groq_base_url
+        return self.groq_base_url
+
+    @property
+    def groq_fallback_model_resolved(self) -> str | None:
+        """Return the new fallback setting, or the legacy compatible alias."""
+        return self.groq_fallback_model or self.groq_model_2
+
+    @property
+    def employee_llm_configuration_error(self) -> str | None:
+        missing = []
+        if not str(self.groq_api_key or "").strip():
+            missing.append("GROQ_API_KEY")
+        if not str(self.groq_base_url or "").strip():
+            missing.append("GROQ_BASE_URL")
+        if not str(self.groq_model or "").strip():
+            missing.append("GROQ_MODEL")
+        if not str(self.groq_fallback_model_resolved or "").strip():
+            missing.append("GROQ_FALLBACK_MODEL (or legacy GROQ_MODEL_2)")
+        return f"Employee LLM configuration is incomplete: missing {', '.join(missing)}." if missing else None
     omnidimension_api_key: str | None = Field(default=None, validation_alias="OMNIDIMENSION_API_KEY")
     omnidimension_base_url: str = Field(
         default="https://backend.omnidim.io/api/v1",
@@ -134,6 +134,8 @@ class Settings(BaseSettings):
     def model_post_init(self, __context) -> None:
         if self.environment.lower() in {"production", "prod"} and not self.auth_secret_key:
             raise ValueError("AUTH_SECRET_KEY must be configured in production")
+        if self.environment.lower() in {"production", "prod"} and self.employee_llm_configuration_error:
+            raise ValueError(self.employee_llm_configuration_error)
         if not self.auth_secret_key:
             self.auth_secret_key = token_urlsafe(32)
 

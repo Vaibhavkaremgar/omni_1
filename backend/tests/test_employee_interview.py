@@ -159,16 +159,15 @@ def test_groq_env_vars_map_to_real_llm_service(monkeypatch):
     assert isinstance(svc, RealLLMService)
 
 
-def test_explicit_llm_provider_can_select_groq_over_gemini(monkeypatch):
+def test_generic_provider_settings_cannot_override_groq(monkeypatch):
     from app.core.config import Settings
     import app.services.employee_interview as svc_module
     settings = Settings(
         LLM_PROVIDER="groq",
-        GEMINI_API_KEY="gemini-test",
-        GEMINI_MODEL="gemini-2.5-flash-lite",
         GROQ_API_KEY="gsk_test",
         GROQ_MODEL="llama-3.3-70b-versatile",
         GROQ_BASE_URL="https://api.groq.com/openai/v1",
+        GROQ_FALLBACK_MODEL="llama-3.1-8b-instant",
     )
     monkeypatch.setattr(svc_module, "get_settings", lambda: settings)
     svc = build_default_llm_service()
@@ -237,32 +236,19 @@ def test_real_llm_uses_groq_base_url_in_request():
     assert "groq.com" in seen_urls[0]
 
 
-def test_real_llm_uses_gemini_generate_content_request():
+def test_non_groq_effective_settings_cannot_select_employee_provider():
     settings = SimpleNamespace(
-        effective_llm_provider="gemini",
-        effective_llm_api_key="gemini-test",
-        effective_llm_model="gemini-2.5-flash-lite",
-        effective_llm_base_url="https://generativelanguage.googleapis.com/v1beta",
+        effective_llm_provider="legacy-provider",
+        effective_llm_api_key="legacy-key",
+        effective_llm_model="legacy-model",
+        effective_llm_base_url="https://legacy.invalid/v1",
+        groq_api_key=None,
+        groq_model=None,
+        groq_base_url="https://api.groq.com/openai/v1",
         llm_timeout_seconds=5.0,
     )
-    seen: dict[str, object] = {}
-
-    def handler(request: httpx.Request):
-        seen["url"] = str(request.url)
-        seen["key"] = request.headers.get("x-goog-api-key")
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": json.dumps({
-            "assistant_message": "Hi", "next_question": "What is the goal?",
-            "configuration_updates": {}, "missing_topics": ["goals"],
-            "progress": 0, "is_complete": False, "ready_to_build": False, "suggestions": [],
-        })}]}}]})
-
-    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
-    employee = SimpleNamespace(name="Demo", purpose="Book appointments", call_type="outbound", language="en-US", llm_provider="Gemini", llm_model="gemini-2.5-flash-lite")
-    service.initial_question(employee)
-    assert "generateContent" in seen["url"]
-    assert seen["key"] == "gemini-test"
-    assert seen["body"]["generationConfig"]["responseMimeType"] == "application/json"
+    service = RealLLMService(settings=settings)
+    assert service._configured_llm_attempts() == []
 
 
 # ---------------------------------------------------------------------------
