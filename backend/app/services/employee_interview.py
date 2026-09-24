@@ -87,7 +87,10 @@ def strict_script_response_schema() -> dict[str, Any]:
     }
     return {
         "type": "object",
-        "properties": {"sections": {"type": "array", "minItems": 6, "maxItems": 6, "items": section}},
+        # Groq's structured-output validator rejects minItems/maxItems for
+        # this model.  Exact cardinality is enforced by _validate_script_response
+        # after the provider returns JSON.
+        "properties": {"sections": {"type": "array", "items": section}},
         "required": ["sections"],
         "additionalProperties": False,
     }

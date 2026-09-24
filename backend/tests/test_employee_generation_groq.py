@@ -155,10 +155,20 @@ def test_groq_request_contract_matches_validator_and_prompt():
     body = calls  # model capture remains deliberately secret-free
     assert body == ["openai/gpt-oss-20b"]
     schema = strict_script_response_schema()
-    assert schema["properties"]["sections"]["maxItems"] == 6
+    assert "minItems" not in schema["properties"]["sections"]
+    assert "maxItems" not in schema["properties"]["sections"]
     assert schema["properties"]["sections"]["items"]["required"] == [
         "title", "purpose", "instructions", "questions", "examples", "handling"
     ]
+
+
+def test_script_validator_enforces_exactly_six_sections_without_wire_cardinality_keywords():
+    service, _ = service_for()
+    too_short = response()
+    too_short["sections"] = too_short["sections"][:5]
+    with pytest.raises(HTTPException) as error:
+        RealLLMService._validate_script_response(too_short, __import__("uuid").uuid4())
+    assert error.value.detail["diagnostic"]["expected"] == "list[object] with exactly 6 items"
 
 
 def test_malformed_section_reports_exact_index_field_and_type_without_content():
