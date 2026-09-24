@@ -27,6 +27,16 @@ from app.services.script_validation import validate_script
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_GROQ_SCRIPT_MODEL = "openai/gpt-oss-120b"
+SCRIPT_SECTION_TITLES = (
+    "Opening",
+    "Details",
+    "Listening and acknowledging",
+    "Main request",
+    "Questions and exceptions",
+    "Closing",
+)
+
 
 def _failure_category(error: HTTPException) -> str:
     detail = str(error.detail).lower()
@@ -127,6 +137,102 @@ def _safe_script_shape(value: Any) -> dict[str, Any]:
             item["field_types"] = {str(key): type(section[key]).__name__ for key in section}
         result["sections"]["items"].append(item)
     return result
+
+
+def _script_spoken_lines(sections: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(line).strip()
+        for section in sections
+        if isinstance(section, dict)
+        for field in ("questions", "examples")
+        for line in section.get(field) or []
+        if str(line).strip()
+    ]
+
+
+def _script_language_violations(sections: list[dict[str, Any]], language: str) -> list[dict[str, str]]:
+    normalized = str(language or "").casefold()
+    if normalized in {"telugu", "te", "te-in", "telugu (india)"}:
+        native_start, native_end, label = 0x0C00, 0x0C7F, "Telugu"
+        roman_markers = {"nenu", "mee", "meeru", "meeku", "gurinchi", "chesanu", "andi", "namaskaram"}
+    elif normalized in {"hindi", "hi", "hi-in", "hindi (india)"}:
+        native_start, native_end, label = 0x0900, 0x097F, "Hindi"
+        roman_markers = {"namaste", "main", "mein", "aap", "aapki", "se", "bol", "raha", "hai", "kya"}
+    else:
+        return []
+    lines = _script_spoken_lines(sections)
+    issues: list[dict[str, str]] = []
+    if not any(any(native_start <= ord(char) <= native_end for char in line) for line in lines):
+        roman = any(marker in {word.casefold() for word in re.findall(r"[A-Za-z]+", line)} for line in lines for marker in roman_markers)
+        reason = (
+            f"The model returned Roman-script {label}; write examples in {label} script mixed with English words."
+            if roman else
+            f"The model returned no {label} Unicode; write examples in {label} script mixed with English words."
+        )
+        issues.append({"rule": "native_script", "reason": reason, "severity": "error"})
+    for line in lines:
+        has_native = any(native_start <= ord(char) <= native_end for char in line)
+        has_english = bool(re.search(r"[A-Za-z]", line))
+        if has_native and not has_english:
+            issues.append({
+                "rule": "english_mix",
+                "line": line,
+                "reason": f"Every spoken {label} line must contain natural English words; write it in {label} script mixed with English words.",
+                "severity": "error",
+            })
+    return issues
+
+
+def _repair_feedback(issues: list[dict[str, str]]) -> str:
+    return "\n".join(
+        f"- {item.get('rule', 'script_rule')}: {item.get('reason', 'Correct the script rule.')}; "
+        f"line={item.get('line', '')[:240]}"
+        for item in issues
+    )
+
+
+def _normalise_json_object_script(value: Any) -> dict[str, Any]:
+    """Convert permissive json_object output into the six-section contract."""
+    if not isinstance(value, dict):
+        return {"sections": []}
+    raw_sections = value.get("sections")
+    if isinstance(raw_sections, list):
+        sections = raw_sections
+    else:
+        sections = [{"title": key, "content": item} for key, item in value.items() if key not in {"source", "metadata"}]
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(sections[:6]):
+        if not isinstance(item, dict):
+            item = {"content": item}
+        title = str(item.get("title") or SCRIPT_SECTION_TITLES[index]).strip()
+        content = str(item.get("instructions") or item.get("content") or "").strip()
+        purpose = str(item.get("purpose") or f"Complete the {title.lower()} part of the call.").strip()
+        instructions = content or "Use only the stated user context and the approved call rules."
+        questions = item.get("questions") if isinstance(item.get("questions"), list) else []
+        examples = item.get("examples") if isinstance(item.get("examples"), list) else []
+        handling = str(item.get("handling") or "If the person is busy, confused, or asks to stop, respond respectfully and end when appropriate.").strip()
+        if not examples and content:
+            matches = re.findall(r"(?:Spoken example|Example):\s*(.+?)(?=\s+(?:Handling|Purpose|Instructions|Question):|$)", content, re.IGNORECASE)
+            examples = [match.strip() for match in matches if match.strip()]
+        normalized.append({
+            "title": title,
+            "purpose": purpose,
+            "instructions": instructions,
+            "questions": [str(item).strip() for item in questions if str(item).strip()],
+            "examples": [str(item).strip() for item in examples if str(item).strip()],
+            "handling": handling,
+        })
+    while len(normalized) < 6:
+        index = len(normalized)
+        normalized.append({
+            "title": SCRIPT_SECTION_TITLES[index],
+            "purpose": f"Complete the {SCRIPT_SECTION_TITLES[index].lower()} part of the call.",
+            "instructions": "Use only the stated user context and the approved call rules.",
+            "questions": [],
+            "examples": [],
+            "handling": "If the person is busy, confused, or asks to stop, respond respectfully and end when appropriate.",
+        })
+    return {"sections": normalized}
 
 
 class InterviewLLMResponse(BaseModel):
@@ -359,10 +465,9 @@ class RealLLMService(LLMService):
         logger.info("LLM script generation started request_id=%s provider=%s model=%s base_url=%s employee_id=%s", request_id, provider or "<unset>", model or "<unset>", self.settings.effective_llm_base_url or "<default>", getattr(employee, "id", "<unknown>"))
         configuration_error = getattr(self.settings, "employee_llm_configuration_error", None)
         if configuration_error:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=configuration_error)
-        if not attempts:
-            logger.error("LLM script generation configuration failure request_id=%s provider_configured=%s model_configured=%s api_key_configured=%s", request_id, bool(provider), bool(model), bool(self.settings.effective_llm_api_key))
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM script generation is not configured.")
+            logger.warning("LLM script generation will use deterministic assembly request_id=%s reason=%s", request_id, configuration_error)
+        elif not attempts:
+            logger.warning("LLM script generation will use deterministic assembly request_id=%s provider_configured=%s model_configured=%s api_key_configured=%s", request_id, bool(provider), bool(model), bool(self.settings.effective_llm_api_key))
         # One small, provider-compatible response.  Semantic correctness belongs
         # to the generation prompt; the server only checks shape and limits.
         # Generated defaults and previous scripts must never become the source brief.
@@ -560,33 +665,52 @@ Exactly this shape and these key names:
             "LLM script prompt request_id=%s prompt_sha256=%s prompt_chars=%d model=%s language=%s call_direction=%s",
             request_id, hashlib.sha256(system.encode("utf-8")).hexdigest()[:12], len(system), model, language, call_direction,
         )
-        response = self._perform_json_request_with_fallbacks(
-            request_id, attempts, system, user,
-            validator=lambda value, rid: self._validate_script_response(value, rid, context["language"]),
-            response_schema=strict_script_response_schema(),
-            response_schema_name="employee_script",
-        )
-        violations = validate_script(
-            response["sections"], language, call_direction,
-            user_context=json.dumps(context, ensure_ascii=False),
-            host_name=str(configuration.get("host_name") or ""),
-            agent_name=str(configuration.get("agent_name") or ""),
-            business_name=str(configuration.get("business_name") or ""),
-        )
-        if violations:
-            repaired = self._repair_script_once(
-                request_id, attempts[:1], system, user, violations, language, call_direction,
-                json.dumps(context, ensure_ascii=False), str(configuration.get("host_name") or ""),
-                str(configuration.get("agent_name") or ""), str(configuration.get("business_name") or ""),
-            )
-            if repaired is not None:
-                response = repaired
+        if not attempts:
+            configuration["script_source"] = "assembled"
+            response = {"sections": self._assemble_script_sections(context, language, call_direction, configuration)}
+        else:
+            # Script generation has one primary model and a hard three-request
+            # ceiling: strict -> repair -> permissive json_object. A provider
+            # fallback model is deliberately not used for this ladder.
+            primary = attempts[0]
+            response = None
+            feedback: list[dict[str, str]] = []
+            for mode in ("strict", "strict", "json_object"):
+                if response is not None:
+                    break
+                try:
+                    response = self._request_script_attempt(
+                        request_id, primary, system, user, language, mode,
+                        feedback if feedback else None,
+                    )
+                    feedback = self._script_violations(
+                        response["sections"], language, call_direction, context, configuration,
+                    )
+                    if feedback:
+                        response = None
+                except HTTPException as exc:
+                    response = None
+                    feedback = [{"rule": "provider_or_schema", "reason": self._script_error_feedback(exc)}]
+                if response is None and mode == "strict" and not feedback:
+                    feedback = [{"rule": "script_contract", "reason": "Return exactly six valid sections in the requested JSON contract."}]
+            if response is None:
+                response = {"sections": self._assemble_script_sections(context, language, call_direction, configuration)}
+                configuration["script_source"] = "assembled"
             else:
-                _log_script_violations(request_id, violations)
+                configuration["script_source"] = "model"
+
         sections = response["sections"]
         configuration["conversation_sections"] = sections
-        script = {section["title"]: "\n".join([f"Purpose: {section['purpose']}", f"Instructions: {section['instructions']}", *[f"Question: {q}" for q in section['questions']], *[f"Spoken example: {e}" for e in section['examples']], f"Handling: {section['handling']}"]) for section in sections}
-        _validate_generated_script_language(script, context["language"], request_id)
+        script = {
+            section["title"]: "\n".join([
+                f"Purpose: {section['purpose']}",
+                f"Instructions: {section['instructions']}",
+                *[f"Question: {q}" for q in section["questions"]],
+                *[f"Spoken example: {e}" for e in section["examples"]],
+                f"Handling: {section['handling']}",
+            ])
+            for section in sections
+        }
         if response.get("_legacy_conversation_design"):
             from app.services.conversation_design import ConversationDesign, GeneratedScript
             try:
@@ -594,6 +718,94 @@ Exactly this shape and these key names:
             except ValidationError as exc:
                 raise HTTPException(status_code=502, detail={"message": "The LLM returned an invalid conversation design.", "request_id": str(request_id), "failure_category": "llm_schema_failure"}) from exc
         return script
+
+    def _request_script_attempt(
+        self, request_id: UUID, attempt: LLMAttempt, system: str, user: str,
+        language: str, mode: str, feedback: list[dict[str, str]] | None,
+    ) -> dict[str, Any]:
+        prompt = system
+        if feedback:
+            prompt += (
+                "\n\nREPAIR REQUEST\n"
+                "The previous response failed these checks. Correct every item and return only the exact JSON contract.\n"
+                + _repair_feedback(feedback)
+            )
+        payload = self._build_request(
+            attempt.provider, attempt.model, prompt, user,
+            api_key=attempt.api_key, base_url=attempt.base_url,
+            response_schema=strict_script_response_schema() if mode != "json_object" else None,
+            response_schema_name="employee_script",
+            max_output_tokens=4000,
+        )
+        if mode == "json_object":
+            payload["json"]["response_format"] = {"type": "json_object"}
+        response = self._perform_json_request(attempt.provider, payload)
+        if mode == "json_object":
+            response = _normalise_json_object_script(response)
+        return self._validate_script_response(response, request_id)
+
+    @staticmethod
+    def _script_error_feedback(error: HTTPException) -> str:
+        detail = error.detail if isinstance(error.detail, dict) else {"message": str(error.detail)}
+        message = detail.get("provider_message") or detail.get("message") or str(error.detail)
+        failed = detail.get("failed_generation")
+        if failed:
+            return f"Groq schema/output error: {message}; failed_generation={str(failed)[:500]}"
+        return f"Groq schema/output error: {message}"
+
+    @staticmethod
+    def _script_violations(
+        sections: list[dict[str, Any]], language: str, call_direction: str,
+        context: dict[str, Any], configuration: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        violations = validate_script(
+            sections, language, call_direction,
+            user_context=json.dumps(context, ensure_ascii=False),
+            host_name=str(configuration.get("host_name") or ""),
+            agent_name=str(configuration.get("agent_name") or ""),
+            business_name=str(configuration.get("business_name") or ""),
+            enforce=True,
+        )
+        return violations + _script_language_violations(sections, language)
+
+    @staticmethod
+    def _assemble_script_sections(context: dict[str, Any], language: str, call_direction: str, configuration: dict[str, Any]) -> list[dict[str, Any]]:
+        purpose = str(context.get("original_requirement") or context.get("purpose") or "the requested task").strip()
+        host = str(configuration.get("host_name") or "").strip()
+        if str(language).casefold() in {"telugu", "te", "te-in"}:
+            behalf = f"{host} gari behalf lo " if host else ""
+            spoken = [
+                f"నమస్కారం అండి, {behalf}AI assistant గా call చేస్తున్నాను.",
+                "ఈ call యొక్క details మీకు చెప్తాను అండి.",
+                "మీ మాట అర్థమైంది, thank you.",
+                "ఈ request కోసం తప్పకుండా attend అవ్వండి అండి.",
+                "మీకు ఏ doubt ఉన్నా, USER_CONTEXT లో ఉన్న details మాత్రమే చెప్తాను అండి.",
+                "Thank you అండి, మీ రోజు బాగుండాలి.",
+            ]
+        elif str(language).casefold() in {"hindi", "hi", "hi-in"}:
+            behalf = f"{host} ji ki taraf se " if host else ""
+            spoken = [
+                f"नमस्ते जी, {behalf}मैं AI assistant बोल रहा हूँ।",
+                "इस call की details मैं आपको बताता हूँ।",
+                "आपकी बात समझ गया, thank you।",
+                "इस request के लिए please attend कीजिए।",
+                "अगर कोई doubt हो, तो मैं सिर्फ USER_CONTEXT की details बताऊँगा।",
+                "Thank you, आपका दिन अच्छा रहे।",
+            ]
+        else:
+            behalf = f" on behalf of {host}" if host else ""
+            spoken = [
+                f"Hello, I am an AI assistant calling{behalf}.",
+                "I will share the details of this call.",
+                "I understand, thank you.",
+                "Please follow the requested next step.",
+                "I will use only the details provided in the user context.",
+                "Thank you, have a good day.",
+            ]
+        return [
+            {"title": SCRIPT_SECTION_TITLES[index], "purpose": purpose, "instructions": f"Use only this user context verbatim: {purpose}", "questions": [], "examples": [line], "handling": "Use the configured guardrails, disclose that the caller is an AI assistant when asked, and stop respectfully if asked to stop."}
+            for index, line in enumerate(spoken)
+        ]
 
     def suggest_conversation_variables(self, employee: AIEmployee, configuration: dict[str, Any]) -> list[dict[str, Any]]:
         """Suggest optional post-call extraction fields; callers choose what to save."""
@@ -697,13 +909,30 @@ Exactly this shape and these key names:
             # Keep the access-log status useful without exposing the API key or
             # the full provider response (which can contain sensitive prompts).
             provider_status = exc.response.status_code
-            provider_body = re.sub(r"\s+", " ", exc.response.text or "")[:240]
+            provider_body = re.sub(r"\s+", " ", exc.response.text or "")[:500]
+            try:
+                provider_json = exc.response.json()
+            except ValueError:
+                provider_json = {}
+            provider_error = provider_json.get("error") if isinstance(provider_json, dict) else {}
+            provider_error = provider_error if isinstance(provider_error, dict) else {}
+            provider_message = str(provider_error.get("message") or provider_body)[:500]
+            failed_generation = str(provider_error.get("failed_generation") or "")[:1000]
+            rate_headers = {
+                key: exc.response.headers.get(key)
+                for key in (
+                    "retry-after", "x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens",
+                    "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens",
+                )
+                if exc.response.headers.get(key) is not None
+            }
             schema_path_match = re.search(r"(?:jsonschema|schema)[^\"']{0,80}[\"']([^\"']+)[\"']", exc.response.text or "", re.IGNORECASE)
             logger.error(
                 "LLM script request failed provider=%s model=%s status=%s failure_category=%s schema_failure_path=%s body=%s",
                 provider, payload.get("json", {}).get("model"), provider_status,
                 "provider_rate_limit_or_quota" if provider_status == 429 else "provider_unavailable" if provider_status in {502, 503, 504} else "provider_request_rejected",
-                schema_path_match.group(1)[:160] if schema_path_match else None, provider_body,
+                schema_path_match.group(1)[:160] if schema_path_match else None,
+                f"message={provider_message} failed_generation={failed_generation or '<none>'} body={provider_body} rate_headers={rate_headers}",
             )
             provider_category = (
                 "provider_schema_configuration" if re.search(r"invalid json schema|schema.*required.*array|response_format", exc.response.text or "", re.IGNORECASE)
@@ -713,7 +942,13 @@ Exactly this shape and these key names:
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"The LLM provider rejected the script request (HTTP {provider_status}; category={provider_category}).",
+                detail={
+                    "message": f"The LLM provider rejected the script request (HTTP {provider_status}; category={provider_category}).",
+                    "provider_status": provider_status,
+                    "provider_message": provider_message,
+                    "failed_generation": failed_generation or None,
+                    "failure_category": provider_category,
+                },
             ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             logger.exception("LLM script generation failed provider=%s", provider)
@@ -788,15 +1023,14 @@ Exactly this shape and these key names:
             base_url = (base_url or "").strip() or None
             if not provider or not model or not api_key:
                 return
-            fingerprint = (provider.casefold(), model, api_key, base_url or "")
-            if any((item.provider.casefold(), item.model, item.api_key, item.base_url or "") == fingerprint for item in attempts):
+            if any(item.provider.casefold() == provider.casefold() and item.model == model for item in attempts):
                 return
             attempts.append(LLMAttempt(provider=provider, model=model, api_key=api_key, base_url=base_url))
 
         # This is the single provider source of truth for employee generation.
         # Do not include generic legacy provider settings.
         groq_model = getattr(self.settings, "groq_script_model", None) if script_generation else None
-        groq_model = groq_model or getattr(self.settings, "groq_model", None)
+        groq_model = groq_model or (DEFAULT_GROQ_SCRIPT_MODEL if script_generation else None) or getattr(self.settings, "groq_model", None)
         groq_key = getattr(self.settings, "groq_api_key", None)
         groq_base_url = getattr(self.settings, "groq_base_url", None) or "https://api.groq.com/openai/v1"
         # Backwards compatibility for callers that already resolved Groq but
@@ -908,14 +1142,6 @@ Exactly this shape and these key names:
                     }})
             normalized_sections.append(section)
         result = {**response, "sections": normalized_sections}
-        if language:
-            candidate = {
-                section["title"]: "\n".join(
-                    [section["purpose"], section["instructions"], *section["questions"], *section["examples"], section["handling"]]
-                )
-                for section in normalized_sections
-            }
-            _validate_generated_script_language(candidate, language, request_id)
         return result
     def _generate_turn(
         self,

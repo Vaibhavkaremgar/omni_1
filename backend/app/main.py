@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     logger.info("[LIFESPAN_ENTER] pid=%s thread=%s environment=%s hostname=%s", os.getpid(), threading.get_ident(), settings.environment, socket.gethostname())
+    if settings.groq_fallback_model_resolved and settings.groq_fallback_model_resolved == settings.groq_model:
+        logger.warning("[GROQ_CONFIG_WARNING] GROQ_MODEL_2/GROQ_FALLBACK_MODEL matches GROQ_MODEL; same-model fallback is skipped")
     init_db()
     monitor = InstantLeadMonitor(SessionLocal)
     logger.info("[LIFESPAN_SCHEDULER_STARTING] pid=%s thread=%s environment=%s hostname=%s", os.getpid(), threading.get_ident(), settings.environment, socket.gethostname())

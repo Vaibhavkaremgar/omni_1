@@ -151,7 +151,7 @@ def test_groq_env_vars_map_to_real_llm_service(monkeypatch):
     from app.core.config import Settings
     import app.services.employee_interview as svc_module
     monkeypatch.setattr(svc_module, "get_settings", lambda: Settings(
-        GROQ_API_KEY="gsk_test",
+        GROQ_API_KEY="configured-groq-test",
         GROQ_MODEL="llama-3.3-70b-versatile",
         GROQ_BASE_URL="https://api.groq.com/openai/v1",
     ))
@@ -164,7 +164,7 @@ def test_generic_provider_settings_cannot_override_groq(monkeypatch):
     import app.services.employee_interview as svc_module
     settings = Settings(
         LLM_PROVIDER="groq",
-        GROQ_API_KEY="gsk_test",
+        GROQ_API_KEY="configured-groq-test",
         GROQ_MODEL="llama-3.3-70b-versatile",
         GROQ_BASE_URL="https://api.groq.com/openai/v1",
         GROQ_FALLBACK_MODEL="llama-3.1-8b-instant",
@@ -173,7 +173,7 @@ def test_generic_provider_settings_cannot_override_groq(monkeypatch):
     svc = build_default_llm_service()
     assert isinstance(svc, RealLLMService)
     assert settings.effective_llm_provider == "groq"
-    assert settings.effective_llm_api_key == "gsk_test"
+    assert settings.effective_llm_api_key == "configured-groq-test"
     assert settings.effective_llm_model == "llama-3.3-70b-versatile"
 
 
@@ -215,7 +215,7 @@ def test_missing_llm_credentials_use_development_service(monkeypatch):
 def test_real_llm_uses_groq_base_url_in_request():
     settings = SimpleNamespace(
         effective_llm_provider="openai",
-        effective_llm_api_key="gsk_test",
+        effective_llm_api_key="configured-groq-test",
         effective_llm_model="llama-3.3-70b-versatile",
         effective_llm_base_url="https://api.groq.com/openai/v1",
         llm_timeout_seconds=5.0,

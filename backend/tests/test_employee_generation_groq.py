@@ -9,6 +9,7 @@ from app.core.config import Settings
 from app.services.business_research import ensure_business_research
 from app.services.employee_interview import RealLLMService, strict_script_response_schema
 from app.services.employee_prompt import compose_employee_configuration, normalize_business_identity
+from app.services.script_validation import validate_script
 
 REQUIREMENT = "You should invite my contact list for my wedding. Vaibhav and Muskan. 31st January 2027, Jalor, Rajasthan."
 
@@ -16,7 +17,7 @@ REQUIREMENT = "You should invite my contact list for my wedding. Vaibhav and Mus
 def llm_settings(**overrides):
     values = {
         "groq_api_key": "test-key", "groq_base_url": "https://api.groq.com/openai/v1",
-        "groq_model": "openai/gpt-oss-20b", "groq_fallback_model": "llama-3.3-70b-versatile",
+        "groq_model": "openai/gpt-oss-20b", "groq_script_model": "openai/gpt-oss-120b", "groq_fallback_model": "llama-3.3-70b-versatile",
         "groq_api_key_2": None, "groq_base_url_2": None,
         "effective_llm_provider": "groq", "effective_llm_api_key": "test-key",
         "effective_llm_model": "openai/gpt-oss-20b", "effective_llm_base_url": "https://api.groq.com/openai/v1",
@@ -28,15 +29,36 @@ def llm_settings(**overrides):
 
 def response(language="English"):
     speech = {
-        "English": "Hello, I am calling to invite you to Vaibhav and Muskan's wedding on 31st January 2027 in Jalor, Rajasthan.",
-        "Telugu": "\u0c28\u0c2e\u0c38\u0c4d\u0c15\u0c3e\u0c30\u0c02 \u0c05\u0c02\u0c21\u0c3f, Vaibhav \u0c2e\u0c30\u0c3f\u0c2f\u0c41 Muskan wedding \u0c15\u0c3f invite \u0c1a\u0c47\u0c2f\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f call \u0c1a\u0c47\u0c36\u0c3e\u0c28\u0c41.",
-        "Hindi": "\u0928\u092e\u0938\u094d\u0924\u0947 \u091c\u0940, Vaibhav \u0914\u0930 Muskan \u0915\u0940 wedding \u0915\u0947 \u0932\u093f\u090f invite \u0915\u0930\u0928\u0947 \u0915\u0947 \u0932\u093f\u090f call \u0915\u093f\u092f\u093e \u0939\u0948.",
+        "English": [
+            "Hello, I am calling about Vaibhav and Muskan's wedding invitation.",
+            "The wedding date is 31st January 2027 in Jalor, Rajasthan.",
+            "I understand your response, thank you.",
+            "Please attend the wedding if you are available.",
+            "I will answer only questions covered by the provided context.",
+            "Thank you, have a good day.",
+        ],
+        "Telugu": [
+            "నమస్కారం అండి, Vaibhav మరియు Muskan wedding invitation గురించి call చేస్తున్నాను.",
+            "Wedding date 31st January 2027, Jalor, Rajasthan లో ఉంది.",
+            "మీ మాట అర్థమైంది, thank you.",
+            "మీరు available అయితే wedding కి attend అవ్వండి అండి.",
+            "the context లో ఉన్న details మాత్రమే చెప్తాను అండి.",
+            "Thank you అండి, మీ రోజు బాగుండాలి.",
+        ],
+        "Hindi": [
+            "नमस्ते जी, Vaibhav और Muskan की wedding invitation के बारे में call है।",
+            "Wedding date 31st January 2027, Jalor, Rajasthan है।",
+            "आपकी बात समझ गया, thank you।",
+            "अगर आप available हों तो wedding attend कीजिए।",
+            "Provided context की details ही बताऊँगा।",
+            "Thank you, आपका दिन अच्छा रहे।",
+        ],
     }[language]
     return {"sections": [{
         "title": f"Invitation Step {index}", "purpose": "Invite contacts to Vaibhav and Muskan's wedding",
         "instructions": "Use only the stated wedding facts and do not invent event details.",
-        "questions": ["Can you confirm whether you can attend?"] if index == 3 else [],
-        "examples": [speech], "handling": "Respect uncertainty or refusal and do not add unrelated qualification questions.",
+        "questions": [],
+        "examples": [speech[index]], "handling": "Respect uncertainty or refusal and do not add unrelated qualification questions.",
     } for index in range(6)]}
 
 
@@ -61,21 +83,21 @@ def generate(service, language="English", config=None):
 def test_groq_primary_success_does_not_call_fallback():
     service, calls = service_for()
     assert len(generate(service)) == 6
-    assert calls == ["openai/gpt-oss-20b"]
+    assert calls == ["openai/gpt-oss-120b"]
 
 
-def test_primary_failure_calls_configured_groq_fallback_once():
+def test_primary_failure_repairs_with_same_model_once():
     service, calls = service_for((503, 200))
     generate(service)
-    assert calls == ["openai/gpt-oss-20b", "llama-3.3-70b-versatile"]
+    assert calls == ["openai/gpt-oss-120b", "openai/gpt-oss-120b"]
 
 
-def test_both_groq_models_fail_with_generation_error():
+def test_three_failures_use_assembled_script_without_raising():
     service, calls = service_for((503, 503))
-    with pytest.raises(HTTPException) as error:
-        generate(service)
-    assert error.value.detail["failure_category"] == "llm_generation_failed"
-    assert len(calls) == 2
+    config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
+    assert len(generate(service, config=config)) == 6
+    assert config["script_source"] == "assembled"
+    assert len(calls) == 3
 
 
 def test_wedding_generation_is_context_first_and_persistable_shape():
@@ -93,7 +115,7 @@ def test_wedding_generation_is_context_first_and_persistable_shape():
 @pytest.mark.parametrize("status", [400, 429, 500])
 def test_research_skips_missing_company_and_failure_is_non_fatal(status):
     no_company = ensure_business_research({"original_requirement": REQUIREMENT})
-    assert no_company["business_research"]["reason"] == "business_name_missing"
+    assert no_company["business_research"]["reason"] == "personal_context"
     client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status, json={"error": "down"})))
     failed = ensure_business_research({"business_name": "ABC Motors", "original_requirement": "Call customers of ABC Motors and explain the new service."}, client)
     assert failed["business_research"]["status"] == "failed"
@@ -101,7 +123,7 @@ def test_research_skips_missing_company_and_failure_is_non_fatal(status):
     assert len(generate(service, config={**failed, "language": "English", "call_type": "outbound"})) == 6
 
 
-def test_malformed_json_is_reported_as_schema_failure_after_bounded_attempts():
+def test_malformed_json_uses_assembled_script_after_bounded_attempts():
     calls = []
 
     def handler(request):
@@ -109,10 +131,10 @@ def test_malformed_json_is_reported_as_schema_failure_after_bounded_attempts():
         return httpx.Response(200, json={"choices": [{"message": {"content": "not json"}}]})
 
     service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
-    with pytest.raises(HTTPException) as error:
-        generate(service)
-    assert error.value.detail["failure_category"] == "llm_schema_failure"
-    assert calls == ["openai/gpt-oss-20b", "llama-3.3-70b-versatile"]
+    config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
+    assert len(generate(service, config=config)) == 6
+    assert config["script_source"] == "assembled"
+    assert len(calls) == 3
 
 
 def test_invalid_primary_language_uses_bounded_fallback_correction():
@@ -127,7 +149,7 @@ def test_invalid_primary_language_uses_bounded_fallback_correction():
     service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
     config = {"original_requirement": REQUIREMENT, "language": "Telugu", "call_type": "outbound"}
     result = service.generate_call_script(SimpleNamespace(name="Invite Assistant", purpose=REQUIREMENT, call_type="outbound", language="Telugu"), config)
-    assert len(result) == 6 and calls == ["openai/gpt-oss-20b", "llama-3.3-70b-versatile"]
+    assert len(result) == 6 and calls == ["openai/gpt-oss-120b", "openai/gpt-oss-120b"]
 
 
 @pytest.mark.parametrize("language,codepoint", [("Telugu", 0x0C00), ("Hindi", 0x0900)])
@@ -153,7 +175,7 @@ def test_groq_request_contract_matches_validator_and_prompt():
     service, calls = service_for()
     generate(service)
     body = calls  # model capture remains deliberately secret-free
-    assert body == ["openai/gpt-oss-20b"]
+    assert body == ["openai/gpt-oss-120b"]
     schema = strict_script_response_schema()
     assert "minItems" not in schema["properties"]["sections"]
     assert "maxItems" not in schema["properties"]["sections"]
@@ -180,11 +202,59 @@ def test_malformed_section_reports_exact_index_field_and_type_without_content():
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(bad)}}]})
 
     service = RealLLMService(settings=llm_settings(groq_fallback_model=None, groq_model_2=None, groq_api_key_2=None), client=httpx.Client(transport=httpx.MockTransport(handler)))
-    with pytest.raises(HTTPException) as error:
-        generate(service)
-    diagnostic = error.value.detail["diagnostic"]
-    assert diagnostic == {"section_index": 3, "field": "questions", "expected": "list[string]", "actual_type": "dict"}
-    assert "wrong shape" not in json.dumps(error.value.detail)
+    config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
+    assert len(generate(service, config=config)) == 6
+    assert config["script_source"] == "model"
+
+
+def test_schema_400_repair_then_json_object_then_assembled_ladder():
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["response_format"]["type"])
+        if len(calls) < 3:
+            return httpx.Response(400, json={"error": {"message": "does not match expected schema", "failed_generation": "missing sections"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(response("English"))}}]})
+
+    service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
+    config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
+    assert len(generate(service, config=config)) == 6
+    assert calls == ["json_schema", "json_schema", "json_object"]
+    assert config["script_source"] == "model"
+
+
+def test_no_telugu_unicode_goes_to_repair_instead_of_immediate_502():
+    calls = []
+
+    def handler(request):
+        calls.append(len(calls) + 1)
+        payload = response("English") if len(calls) == 1 else response("Telugu")
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]})
+
+    service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
+    config = {"original_requirement": REQUIREMENT, "language": "Telugu", "call_type": "outbound"}
+    assert len(generate(service, language="Telugu", config=config)) == 6
+    assert calls == [1, 2]
+    assert config["script_source"] == "model"
+
+
+def test_enforced_validators_reject_outbound_questions_and_missing_english():
+    sections = response("Telugu")["sections"]
+    sections[0]["examples"] = ["నమస్కారం అండి"]
+    sections[3]["questions"] = ["Can you attend?"]
+    issues = validate_script(sections, "Telugu", "outbound", user_context=REQUIREMENT, enforce=True)
+    assert {item["rule"] for item in issues} >= {"outbound_questions", "english_mix_required"}
+
+
+def test_research_is_skipped_for_wedding_even_with_business_name():
+    def fail_if_called(request):
+        raise AssertionError("research provider must not be called for personal wedding context")
+
+    result = ensure_business_research(
+        {"business_name": "Explicit Company", "original_requirement": REQUIREMENT},
+        httpx.Client(transport=httpx.MockTransport(fail_if_called)),
+    )
+    assert result["business_research"]["reason"] == "personal_context"
 
 
 def test_legacy_equivalent_section_fields_are_normalized_but_still_require_six_sections():

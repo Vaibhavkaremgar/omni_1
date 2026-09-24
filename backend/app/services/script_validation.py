@@ -21,6 +21,7 @@ def validate_script(
     host_name: str = "",
     agent_name: str = "",
     business_name: str = "",
+    enforce: bool = False,
 ) -> list[dict[str, str]]:
     """Return generated-script violations without mutating model output."""
     issues: list[dict[str, str]] = []
@@ -42,12 +43,14 @@ def validate_script(
                     issues.append(_issue(index, title, field, line, "english_mix_threshold", "Latin-script English words are below 30%"))
             if _contains_native_date(line, normalized_language):
                 issues.append(_issue(index, title, field, line, "english_dates", "date is written with native-language month words"))
+            if enforce and not re.search(r"[A-Za-z]", line):
+                issues.append(_issue(index, title, field, line, "english_mix_required", "every Telugu/Hindi spoken line must contain natural English words"))
 
     if str(call_direction or "").casefold() == "outbound":
         main_index = 3
         question_count = sum(len(section.get("questions") or []) for section in sections)
-        if question_count > 1:
-            issues.append(_issue(main_index, str(sections[main_index].get("title") if len(sections) > main_index else ""), "questions", "", "outbound_questions", "outbound scripts may contain at most one question"))
+        if question_count > (0 if enforce else 1):
+            issues.append(_issue(main_index, str(sections[main_index].get("title") if len(sections) > main_index else ""), "questions", "", "outbound_questions", "outbound scripts must not ask customer questions"))
         for index, section in enumerate(sections):
             if index != main_index and section.get("questions"):
                 issues.append(_issue(index, str(section.get("title") or ""), "questions", str(section.get("questions")), "outbound_questions", "outbound questions belong only in the main-request section"))
@@ -71,11 +74,16 @@ def validate_script(
                     issues.append(_issue(index, str(section.get("title") or ""), field, str(line), "meta_line", "spoken example contains meta instructions"))
 
     allowed = " ".join((user_context, host_name, agent_name, business_name)).casefold()
+    context_dates = _date_keys(user_context)
     for index, section in enumerate(sections):
         for line in section.get("examples") or []:
+            if enforce and context_dates:
+                for date_key in _date_keys(str(line)):
+                    if date_key not in context_dates:
+                        issues.append(_issue(index, str(section.get("title") or ""), "examples", str(line), "invented_date", f"date {date_key} is not present in user context"))
             for candidate in re.findall(r"\b[A-Z][a-z]{2,}\b", str(line)):
                 if candidate.casefold() not in allowed and candidate.casefold() not in ALLOWED_COMMON_ENGLISH:
-                    issues.append(_issue(index, str(section.get("title") or ""), "examples", str(line), "invented_name", f"possible invented name: {candidate}", severity="warning"))
+                    issues.append(_issue(index, str(section.get("title") or ""), "examples", str(line), "invented_name", f"possible invented name: {candidate}", severity="error" if enforce else "warning"))
     return issues
 
 
@@ -87,6 +95,29 @@ def _validate_line(issues: list[dict[str, str]], index: int, title: str, field: 
 def _contains_native_date(line: str, language: str) -> bool:
     months = TELUGU_MONTH_STEMS if language in {"telugu", "te", "te-in"} else HINDI_MONTH_STEMS
     return any(re.search(rf"\d{{1,2}}\s*{re.escape(month)}\s*\d{{2,4}}", line, re.IGNORECASE) for month in months)
+
+
+_ENGLISH_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
+def _date_keys(text: str) -> set[str]:
+    keys: set[str] = set()
+    month_pattern = "|".join(_ENGLISH_MONTHS)
+    for match in re.finditer(
+        rf"\b(?:(?P<month>{month_pattern})\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s*(?P<year>\d{{4}}))?|(?P<day2>\d{{1,2}})(?:st|nd|rd|th)?(?:\s+of)?\s+(?P<month2>{month_pattern})(?:\s+(?P<year2>\d{{4}}))?)\b",
+        text.casefold(),
+    ):
+        month = _ENGLISH_MONTHS.get(match.group("month") or match.group("month2"))
+        day = match.group("day") or match.group("day2")
+        year = match.group("year") or match.group("year2") or ""
+        if month and day:
+            keys.add(f"{month:02d}-{int(day):02d}-{year}")
+    return keys
 
 
 def _permission_question(line: str) -> bool:

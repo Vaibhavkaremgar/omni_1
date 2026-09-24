@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 RESEARCH_CONTEXT_KEYS = ("business_name", "business_description", "purpose", "original_requirement", "website_url", "products", "products_services")
+PERSONAL_CONTEXT_MARKERS = (
+    "wedding", "birthday", "anniversary", "family event", "family function",
+    "community event", "personal event", "housewarming", "engagement",
+)
 
 
 def research_fingerprint(configuration: dict[str, Any]) -> str:
@@ -55,6 +59,11 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
     business_name = str(config.get("business_name") or "").strip()
     description = str(config.get("business_description") or "").strip()
     website_url = validate_public_research_url(config.get("website_url"))
+    personal_text = " ".join(str(config.get(key) or "") for key in ("purpose", "original_requirement", "business_description")).casefold()
+    if any(marker in personal_text for marker in PERSONAL_CONTEXT_MARKERS):
+        config["business_research"] = {"status": "unavailable", "reason": "personal_context", "fingerprint": fingerprint}
+        logger.info("Business research skipped reason=personal_context")
+        return config
     if not business_name:
         config["business_research"] = {"status": "unavailable", "reason": "business_name_missing", "fingerprint": fingerprint}
         return config
@@ -118,9 +127,12 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
         return {**config, "business_research": snapshot}
     except Exception as exc:
         status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        provider_body = ""
+        if isinstance(exc, httpx.HTTPStatusError):
+            provider_body = re.sub(r"\s+", " ", exc.response.text or "")[:500]
         logger.warning(
-            "Business research failed business_name=%s exception_class=%s status_code=%s",
-            business_name[:120], type(exc).__name__, status_code,
+            "Business research failed business_name=%s exception_class=%s status_code=%s body=%s",
+            business_name[:120], type(exc).__name__, status_code, provider_body,
         )
         return {**config, "business_research": {"status": "failed", "reason": "provider_error", "fingerprint": fingerprint, **({"status_code": status_code} if status_code else {})}}
     finally:
