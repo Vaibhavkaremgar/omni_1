@@ -267,6 +267,67 @@ def test_manual_telugu_roman_script_save_is_blocked(employee_database, monkeypat
         app.dependency_overrides.clear()
 
 
+def test_publish_upgrades_the_legacy_assembled_telugu_fallback(employee_database, monkeypatch):
+    db, tenant_a, _ = employee_database
+    employee = AIEmployee(
+        tenant_id=tenant_a.id,
+        name="Wedding Assistant",
+        purpose="Call contacts about a wedding.",
+        call_type="outbound",
+        llm_provider="internal",
+        llm_model="default",
+        language="Telugu",
+        creation_mode="chat",
+    )
+    db.add(employee)
+    db.flush()
+    legacy_card = "\n".join((
+        "Purpose: Deliver the requested call objective using the saved user context.",
+        "Instructions: Use only the saved user context and approved call rules. Do not invent missing details.",
+        "Spoken example: నమస్కారం అండి, Vaibhav and Muskan gari behalf lo AI assistant గా wedding గురించి call చేస్తున్నాను.",
+        "Handling: Use the configured guardrails, disclose that the caller is an AI assistant when asked, and stop respectfully if asked to stop.",
+    ))
+    version = AIEmployeeVersion(
+        tenant_id=tenant_a.id,
+        employee_id=employee.id,
+        version_number=1,
+        status="draft",
+        configuration={
+            "name": employee.name,
+            "purpose": employee.purpose,
+            "original_requirement": "call contacts about my wedding on 15th of jan 2027",
+            "host_name": "Vaibhav and Muskan",
+            "language": "Telugu",
+            "call_type": "outbound",
+            "llm_provider": "internal",
+            "llm_model": "default",
+            "script_source": "assembled",
+            "call_script": {section: legacy_card for section in (
+                "Identity & Purpose", "Greeting & Intro", "Qualification",
+                "Handling Objections", "Call to Action", "Closing",
+            )},
+        },
+    )
+    db.add(version)
+    db.commit()
+    monkeypatch.setattr(
+        employee_endpoint,
+        "agent_service",
+        SimpleNamespace(synchronize=lambda *_: SimpleNamespace(provider_id="wedding-agent", status="Completed", metadata={})),
+    )
+    client = client_for(db, "employee-user-a", monkeypatch)
+    try:
+        with client:
+            published = client.post(f"/api/v1/employees/{employee.id}/publish", headers={"Authorization": "Bearer a"})
+        assert published.status_code == 200, published.json()
+        assert version.configuration["assembled_script_version"] == 2
+        cards = "\n".join(version.configuration["call_script"].values())
+        assert "gari behalf lo" not in cards.casefold()
+        assert "Vaibhav and Muskan గారి behalf లో" in cards
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_publish_blocks_invalid_hindi_script_before_provider_sync(employee_database, monkeypatch):
     db, tenant_a, _ = employee_database
     employee = AIEmployee(

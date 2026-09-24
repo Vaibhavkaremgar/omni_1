@@ -43,7 +43,7 @@ from app.services.script_language_validation import (
 
 
 MAX_KNOWLEDGE_FILE_SIZE = 4 * 1024 * 1024
-from app.services.employee_interview import RealLLMService
+from app.services.employee_interview import RealLLMService, render_call_script_sections
 from app.services.business_research import ensure_business_research, validate_public_research_url
 from app.services.knowledge_base_files import to_pdf
 
@@ -51,6 +51,10 @@ from app.services.knowledge_base_files import to_pdf
 router = APIRouter(prefix="/employees", tags=["employees"])
 logger = logging.getLogger(__name__)
 agent_service: OmniDimensionAgentService | None = None
+
+_LEGACY_ASSEMBLED_PURPOSE = "Purpose: Deliver the requested call objective using the saved user context."
+_LEGACY_ASSEMBLED_INSTRUCTIONS = "Instructions: Use only the saved user context and approved call rules. Do not invent missing details."
+_LEGACY_ASSEMBLED_HANDLING = "Handling: Use the configured guardrails, disclose that the caller is an AI assistant when asked, and stop respectfully if asked to stop."
 
 
 def employee_response(employee: AIEmployee) -> AIEmployeeRead:
@@ -107,6 +111,50 @@ def _copy_configuration(version: AIEmployeeVersion | None, employee: AIEmployee)
 
 def _draft_for(employee: AIEmployee) -> AIEmployeeVersion | None:
     return next((version for version in employee.versions if version.status == VersionStatus.draft.value), None)
+
+
+def _upgrade_legacy_assembled_script(configuration: dict) -> dict:
+    """Refresh only the exact legacy deterministic fallback before publishing.
+
+    It avoids touching reviewed/model-authored scripts while making an old
+    generic fallback render with the current contextual and language rules.
+    """
+    if configuration.get("final_prompt_overridden"):
+        return configuration
+    call_script = configuration.get("call_script")
+    if not isinstance(call_script, dict) or len(call_script) != 6:
+        return configuration
+    legacy_cards = all(
+        _LEGACY_ASSEMBLED_PURPOSE in str(card)
+        and _LEGACY_ASSEMBLED_INSTRUCTIONS in str(card)
+        and _LEGACY_ASSEMBLED_HANDLING in str(card)
+        and "Spoken example:" in str(card)
+        for card in call_script.values()
+    )
+    if not legacy_cards or configuration.get("script_source") not in {"assembled", None}:
+        return configuration
+    source_context = str(
+        configuration.get("assembled_source_context")
+        or configuration.get("original_requirement")
+        or configuration.get("purpose")
+        or ""
+    ).strip()
+    if not source_context:
+        return configuration
+    upgraded = dict(configuration)
+    context = {
+        "original_requirement": source_context,
+        "purpose": str(upgraded.get("purpose") or source_context),
+    }
+    language = str(upgraded.get("language") or "English")
+    call_direction = str(upgraded.get("call_type") or "inbound")
+    sections = RealLLMService._assemble_script_sections(context, language, call_direction, upgraded)
+    upgraded["conversation_sections"] = sections
+    upgraded["call_script"] = render_call_script_sections(sections)
+    upgraded["script_source"] = "assembled"
+    upgraded["assembled_script_version"] = 2
+    logger.info("Upgraded legacy assembled employee script before publish")
+    return upgraded
 
 
 def _ensure_draft(employee: AIEmployee, current_user: AuthenticatedUser) -> AIEmployeeVersion:
@@ -625,6 +673,7 @@ def publish_employee(
             "creation_mode": employee.creation_mode,
             **(version.configuration or {}),
         }
+        version.configuration = _upgrade_legacy_assembled_script(version.configuration)
         version.configuration = compose_employee_configuration(_apply_final_prompt_override_to_call_script(version.configuration or {}))
         normalize_employee_llm_configuration(employee, version)
         version.configuration = ensure_business_research(version.configuration)

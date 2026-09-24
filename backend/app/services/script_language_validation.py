@@ -11,6 +11,14 @@ CUSTOMER_FACING_SECTIONS = SCRIPT_SECTION_NAMES
 TELUGU_RANGE = (0x0C00, 0x0C7F)
 DEVANAGARI_RANGE = (0x0900, 0x097F)
 
+# Generated scripts are stored as readable section cards.  Those cards contain
+# English-only Purpose / Instructions / Handling metadata as well as the words
+# an agent actually says.  Language validation must inspect the latter only.
+_SPOKEN_LABEL_RE = re.compile(
+    r"(?ims)^\s*(?:spoken(?:\s+example)?|question)\s*:\s*(.+?)"
+    r"(?=^\s*(?:purpose|objective|instructions|handling|spoken(?:\s+example)?|question|reason|support\s+type|requirement\s+basis)\s*:|\Z)"
+)
+
 BUSINESS_ENGLISH_WORDS = {
     "insurance", "policy", "renewal", "product", "service", "offer", "discount",
     "location", "budget", "site", "visit", "appointment", "booking", "details",
@@ -25,6 +33,7 @@ TELUGU_ROMAN_MARKERS = {
     "nenu", "mee", "meeru", "meeku", "maatladutunnanu", "maatladataniki",
     "gurinchi", "chesanu", "chesaru", "chesi", "cheyali", "kavala", "unda",
     "andi", "namaskaram", "sare", "avunu", "ledu", "inka", "mariyu",
+    "gari", "lo", "kosam", "ki", "ga", "unnanu", "chestunnanu", "cheptanu", "avvandi",
 }
 HINDI_ROMAN_MARKERS = {
     "namaste", "main", "mein", "aap", "aapki", "aapka", "se", "bol", "raha",
@@ -69,14 +78,16 @@ def validate_customer_facing_script(script: dict[str, Any], language: str, *, re
     if require_six and len(script) != 6:
         issues.append(ScriptLanguageIssue("Sections", "missing_section", "Exactly six populated sections are required."))
     for section in script:
-        text = _text(script.get(section))
-        if not text:
+        entries = _customer_facing_entries(script.get(section))
+        if not entries:
             issues.append(ScriptLanguageIssue(section, "missing_section", f"{section} must contain customer-facing script content."))
             continue
-        if normalized == "te":
-            issues.extend(_validate_native_section(section, text, TELUGU_RANGE, TELUGU_ROMAN_MARKERS, "Telugu", "Telugu Unicode", "Roman/Tinglish Telugu"))
-        elif normalized == "hi":
-            issues.extend(_validate_native_section(section, text, DEVANAGARI_RANGE, HINDI_ROMAN_MARKERS, "Hindi", "Devanagari", "Roman Hindi"))
+        for index, text in enumerate(entries, 1):
+            entry_name = section if len(entries) == 1 else f"{section} / {index}"
+            if normalized == "te":
+                issues.extend(_validate_native_section(entry_name, text, TELUGU_RANGE, TELUGU_ROMAN_MARKERS, "Telugu", "Telugu Unicode", "Roman/Tinglish Telugu"))
+            elif normalized == "hi":
+                issues.extend(_validate_native_section(entry_name, text, DEVANAGARI_RANGE, HINDI_ROMAN_MARKERS, "Hindi", "Devanagari", "Roman Hindi"))
     return ScriptLanguageValidation(not issues, normalized, issues)
 
 
@@ -121,6 +132,37 @@ def validation_summary(configuration: dict[str, Any]) -> dict[str, Any]:
     script = spoken_script(configuration)
     validation = validate_customer_facing_script(script, _text(configuration.get("language")) or "English", require_six=not bool(configuration.get("conversation_design")))
     return validation.as_dict()
+
+
+def _customer_facing_entries(value: Any) -> list[str]:
+    """Extract labelled agent speech from a rendered section card.
+
+    Older manually-authored scripts have no labels, so their complete value is
+    still treated as customer-facing text.  A generated card that contains
+    labels but no actual speech is intentionally rejected as missing content.
+    """
+    text = _text(value)
+    if not text:
+        return []
+    matches = list(_SPOKEN_LABEL_RE.finditer(text))
+    if not matches:
+        return [text]
+    entries: list[str] = []
+    for match in matches:
+        candidate = match.group(1).strip()
+        # Conversation-design cards store quoted JSON strings.  Decode those
+        # when possible so surrounding quotes are never part of validation.
+        if candidate.startswith('"') and candidate.endswith('"'):
+            try:
+                import json
+                decoded = json.loads(candidate)
+                if isinstance(decoded, str):
+                    candidate = decoded.strip()
+            except (ValueError, TypeError):
+                pass
+        if candidate:
+            entries.append(candidate)
+    return entries
 
 
 def _validate_native_section(

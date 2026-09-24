@@ -38,12 +38,12 @@ def response(language="English"):
             "Thank you, have a good day.",
         ],
         "Telugu": [
-            "నమస్కారం అండి, Vaibhav మరియు Muskan wedding invitation గురించి call చేస్తున్నాను.",
-            "Wedding date 31st January 2027, Jalor, Rajasthan లో ఉంది.",
-            "మీ మాట అర్థమైంది, thank you.",
-            "మీరు available అయితే wedding కి attend అవ్వండి అండి.",
-            "the context లో ఉన్న details మాత్రమే చెప్తాను అండి.",
-            "Thank you అండి, మీ రోజు బాగుండాలి.",
+            "Hello అండి, Vaibhav and Muskan గారి behalf లో AI assistant గా wedding invitation కోసం call చేస్తున్నాను.",
+            "Wedding date 31st January 2027, Jalor, Rajasthan అండి.",
+            "I understand అండి, మీ response noted. Thank you.",
+            "Please wedding కి attend అవ్వండి అండి.",
+            "Any question ఉంటే, available wedding details share చేస్తాను అండి.",
+            "Thank you. Have a nice day.",
         ],
         "Hindi": [
             "नमस्ते जी, Vaibhav और Muskan की wedding invitation के बारे में call है।",
@@ -269,6 +269,18 @@ def test_assembled_fallback_keeps_context_specific_objective_without_identity_cl
     assert "my wedding" not in wedding_text.casefold()
     assert "GHMC" in election_text
     assert "our party" not in election_text.casefold()
+    assert [section["title"] for section in wedding_sections] == [
+        "Wedding invitation opening", "Wedding invitation details", "Wedding invitation response",
+        "Wedding invitation request", "Wedding invitation questions", "Wedding invitation closing",
+    ]
+    assert not validate_script(
+        wedding_sections, "Telugu", "outbound",
+        user_context=wedding["original_requirement"], enforce=True,
+    )
+    spoken = "\n".join(example for section in wedding_sections for example in section["examples"])
+    for unwanted in ("నమస్కారం", "గురించి", "చెప్ప", "అర్థమ", "తప్పకుండా", "మాత్రమే", "మరియు"):
+        assert unwanted not in spoken
+    assert "gari" not in spoken.casefold() and "behalf lo" not in spoken.casefold()
 
 
 def test_legacy_equivalent_section_fields_are_normalized_but_still_require_six_sections():

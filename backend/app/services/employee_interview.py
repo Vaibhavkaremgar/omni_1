@@ -38,6 +38,20 @@ SCRIPT_SECTION_TITLES = (
 )
 
 
+def render_call_script_sections(sections: list[dict[str, Any]]) -> dict[str, str]:
+    """Render the validated section model into the editable six-card format."""
+    return {
+        str(section["title"]): "\n".join([
+            f"Purpose: {section['purpose']}",
+            f"Instructions: {section['instructions']}",
+            *[f"Question: {question}" for question in section["questions"]],
+            *[f"Spoken example: {example}" for example in section["examples"]],
+            f"Handling: {section['handling']}",
+        ])
+        for section in sections
+    }
+
+
 def _failure_category(error: HTTPException) -> str:
     detail = str(error.detail).lower()
     if "http 429" in detail or "rate limit" in detail or "quota" in detail or "resource exhausted" in detail or "too many requests" in detail:
@@ -596,9 +610,15 @@ Telugu:
 - Method for every spoken line: first write it as a simple, natural English
   sentence. Then convert it to spoken Telugu by KEEPING every noun, adjective
   and phone-call word in English and translating only the grammar glue: verbs,
-  connectors, and polite endings such as "అండి". At least a third of the
-  words must be English. Never write a fully Telugu sentence when an English
-  word exists.
+  connectors, and polite endings such as "అండి". At least 35% of the words in
+  every non-closing line must be English, and a normal sentence must use at
+  least two context-relevant English terms. Never write a fully Telugu sentence
+  when an English word exists.
+- Use Telugu only for short grammar glue and respectful endings. Do not default
+  to a formal Telugu greeting: use "Hello". Prefer English "about" or "for",
+  "share", "response noted", "please", and "only" instead of translated
+  textbook equivalents. Close exactly with "Thank you. Have a nice day."; do
+  not attach Telugu words to that closing.
 - Always keep in English (Latin script): wedding, invite, invitation, attend,
   function, event, family, date, time, details, confirm, available, convenient,
   please, thank you, sorry, wishes, question, doubt, contact, request, place,
@@ -612,7 +632,7 @@ Telugu:
   written or literary one.
 - Dates, times, amounts and numbers are written and spoken in English:
   "January 15th, 2027", never "15 జనవరి 2027".
-- Respectful forms only ("meeru", "andi"); never "nuvvu". No Roman-script
+- Use respectful Telugu forms only; never informal address. No Roman-script
   Telugu. No literary, archaic or Sanskrit-heavy Telugu. No word-for-word
   translation from English.
 - Bad:  మీరు 15 జనవరి 2027 న మా వివాహానికి హాజరుకాగలరా?
@@ -701,16 +721,7 @@ Exactly this shape and these key names:
 
         sections = response["sections"]
         configuration["conversation_sections"] = sections
-        script = {
-            section["title"]: "\n".join([
-                f"Purpose: {section['purpose']}",
-                f"Instructions: {section['instructions']}",
-                *[f"Question: {q}" for q in section["questions"]],
-                *[f"Spoken example: {e}" for e in section["examples"]],
-                f"Handling: {section['handling']}",
-            ])
-            for section in sections
-        }
+        script = render_call_script_sections(sections)
         if response.get("_legacy_conversation_design"):
             from app.services.conversation_design import ConversationDesign, GeneratedScript
             try:
@@ -772,7 +783,6 @@ Exactly this shape and these key names:
     def _assemble_script_sections(context: dict[str, Any], language: str, call_direction: str, configuration: dict[str, Any]) -> list[dict[str, Any]]:
         source_context = str(context.get("original_requirement") or context.get("purpose") or "the requested task").strip()
         configuration["assembled_source_context"] = source_context
-        purpose = "Deliver the requested call objective using the saved user context."
         source_lower = source_context.casefold()
         date_match = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+of\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{4})\b", source_lower)
         month_names = {"jan": "January", "january": "January", "feb": "February", "february": "February", "mar": "March", "march": "March", "apr": "April", "april": "April", "may": "May", "jun": "June", "june": "June", "jul": "July", "july": "July", "aug": "August", "august": "August", "sep": "September", "sept": "September", "september": "September", "oct": "October", "october": "October", "nov": "November", "november": "November", "dec": "December", "december": "December"}
@@ -788,34 +798,79 @@ Exactly this shape and these key names:
         else:
             objective = "the requested call objective"
         host = str(configuration.get("host_name") or "").strip()
+        topic = (
+            "Wedding invitation" if "wedding" in source_lower else
+            "GHMC election outreach" if any(marker in source_lower for marker in ("ghmc", "election", "voters", "vote", "party")) else
+            "Hospital appointment reminder" if any(marker in source_lower for marker in ("hospital", "appointment", "patient")) else
+            "Mobile store support" if any(marker in source_lower for marker in ("mobile store", "support")) else
+            "Call"
+        )
+        section_metadata = (
+            {
+                "title": f"{topic} opening",
+                "purpose": f"Open the {objective} call clearly and truthfully.",
+                "instructions": "Identify the AI-assistant role and any explicitly configured host; never claim to be the host.",
+                "handling": "If this is the wrong person, apologize briefly and end without collecting unrelated information.",
+            },
+            {
+                "title": f"{topic} details",
+                "purpose": f"Share the known facts for {objective}.",
+                "instructions": "State only facts present in the saved user context. Do not fill in missing dates, places, names, or other details.",
+                "handling": "If a fact is unavailable, say it is not available rather than guessing.",
+            },
+            {
+                "title": f"{topic} response",
+                "purpose": "Acknowledge the listener naturally before continuing.",
+                "instructions": "Respond briefly to what the person says without repeating the opening or creating a new objective.",
+                "handling": "If the person is confused or upset, clarify the stated purpose calmly and do not argue.",
+            },
+            {
+                "title": f"{topic} request",
+                "purpose": f"State the requested next step for {objective} once.",
+                "instructions": "For an outbound call, inform rather than interview. Do not ask a permission or confirmation question unless the user context explicitly requires one.",
+                "handling": "Respect a refusal or a busy response; do not pressure the person.",
+            },
+            {
+                "title": f"{topic} questions",
+                "purpose": "Handle unknown details, opt-outs, and AI-disclosure questions safely.",
+                "instructions": "Answer from saved context only. Be honest that the caller is an AI assistant when asked.",
+                "handling": "On a no-more-calls request, apologize, confirm it, and end immediately.",
+            },
+            {
+                "title": f"{topic} closing",
+                "purpose": f"Close the {objective} call politely without adding a new request.",
+                "instructions": "Thank the person, restate no new facts, and end the call.",
+                "handling": "End immediately after a clear stop request or after the closing line.",
+            },
+        )
         if str(language).casefold() in {"telugu", "te", "te-in"}:
-            behalf = f"{host} gari behalf lo " if host else ""
+            behalf = f"{host} గారి behalf లో " if host else ""
             if "wedding" in source_lower:
                 spoken = [
-                    f"నమస్కారం అండి, {behalf}AI assistant గా {objective} గురించి call చేస్తున్నాను.",
-                    f"{date_text or 'Wedding details'} గురించి మీకు చెప్తాను అండి.",
-                    "మీ మాట అర్థమైంది, thank you.",
-                    "ఈ wedding కి తప్పకుండా attend అవ్వండి అండి.",
-                    "మీకు ఏ doubt ఉన్నా, context details మరియు support information మాత్రమే చెప్తాను అండి.",
-                    "Thank you అండి, మీ రోజు బాగుండాలి.",
+                    f"Hello అండి, {behalf}AI assistant గా wedding invitation కోసం call చేస్తున్నాను.",
+                    f"Wedding date {date_text} అండి." if date_text else "Wedding invitation details కోసం ఈ call చేస్తున్నాను అండి.",
+                    "I understand అండి, మీ response noted. Thank you.",
+                    "Please wedding కి attend అవ్వండి అండి.",
+                    "Any question ఉంటే, available details share చేస్తాను అండి.",
+                    "Thank you. Have a nice day.",
                 ]
             elif "ghmc" in source_lower or "election" in source_lower or "voters" in source_lower:
                 spoken = [
-                    f"నమస్కారం అండి, AI assistant గా {objective} కోసం call చేస్తున్నాను.",
-                    "GHMC elections మరియు vote గురించి ఈ message చెప్తున్నాను అండి.",
-                    "మీ మాట అర్థమైంది, thank you.",
-                    "the upcoming GHMC elections లో ఈ party కి vote చేయండి అండి.",
-                    "మీకు ఏ doubt ఉన్నా, context details మరియు support information మాత్రమే చెప్తాను అండి.",
-                    "Thank you అండి, మీ రోజు బాగుండాలి.",
+                    f"Hello అండి, {behalf}AI assistant గా GHMC election update కోసం call చేస్తున్నాను.",
+                    "Upcoming GHMC elections update కోసం ఈ message share చేస్తున్నాను అండి.",
+                    "I understand అండి, మీ response noted. Thank you.",
+                    "Please upcoming GHMC elections లో party కి vote చేయండి అండి.",
+                    "Any question ఉంటే, available campaign details share చేస్తాను అండి.",
+                    "Thank you. Have a nice day.",
                 ]
             else:
                 spoken = [
-                    f"నమస్కారం అండి, {behalf}AI assistant గా {objective} కోసం call చేస్తున్నాను.",
-                    f"ఈ {objective} యొక్క details మీకు చెప్తాను అండి.",
-                    "మీ మాట అర్థమైంది, thank you.",
-                    "ఈ request కోసం please attend లేదా follow చేయండి అండి.",
-                    "మీకు ఏ doubt ఉన్నా, context details మరియు support information మాత్రమే చెప్తాను అండి.",
-                    "Thank you అండి, మీ రోజు బాగుండాలి.",
+                    f"Hello అండి, {behalf}AI assistant గా {objective} కోసం call చేస్తున్నాను.",
+                    f"{objective.title()} details share చేయడానికి ఈ call చేస్తున్నాను అండి.",
+                    "I understand అండి, మీ response noted. Thank you.",
+                    "Please requested next step follow చేయండి అండి.",
+                    "Any question ఉంటే, available details share చేస్తాను అండి.",
+                    "Thank you. Have a nice day.",
                 ]
         elif str(language).casefold() in {"hindi", "hi", "hi-in"}:
             behalf = f"{host} ji ki taraf se " if host else ""
@@ -838,7 +893,7 @@ Exactly this shape and these key names:
                 "Thank you, have a good day.",
             ]
         return [
-            {"title": SCRIPT_SECTION_TITLES[index], "purpose": purpose, "instructions": "Use only the saved user context and approved call rules. Do not invent missing details.", "questions": [], "examples": [line], "handling": "Use the configured guardrails, disclose that the caller is an AI assistant when asked, and stop respectfully if asked to stop."}
+            {**section_metadata[index], "questions": [], "examples": [line]}
             for index, line in enumerate(spoken)
         ]
 
