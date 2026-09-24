@@ -100,7 +100,7 @@ def _render_script_system_prompt(template: str, **values: str) -> str:
     """Fill every script-prompt placeholder; no unresolved token reaches Groq."""
     rendered = template
     for key in ("USER_CONTEXT", "LANGUAGE", "CALL_DIRECTION", "HOST_NAME", "AGENT_NAME", "BUSINESS_NAME", "KNOWLEDGE"):
-        rendered = rendered.replace("{{" + key + "}}", values.get(key, "") or "")
+        rendered = rendered.replace("{{" + key + "}}", values.get(key, "") or values.get(key.lower(), "") or "")
     return rendered
 
 
@@ -513,7 +513,7 @@ Telugu:
 - Bad:  మీరు 15 జనవరి 2027 న మా వివాహానికి హాజరుకాగలరా?
   Good: January 15th, 2027 న {{HOST_NAME}} గారి wedding ఉంది అండి, మీరు
         తప్పకుండా attend అవ్వండి.
-
+ 
 Hindi:
 - Natural Hinglish: Hindi words in Devanagari, English words in Latin script.
   Keep the same list of everyday words in English. At least a third of the
