@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None, validation_alias="GROQ_API_KEY")
     groq_api_key_2: str | None = Field(default=None, validation_alias="GROQ_API_KEY_2")
     groq_model: str | None = Field(default=None, validation_alias="GROQ_MODEL")
+    groq_script_model: str | None = Field(default=None, validation_alias="GROQ_SCRIPT_MODEL")
     groq_base_url: str | None = Field(default="https://api.groq.com/openai/v1", validation_alias="GROQ_BASE_URL")
     groq_fallback_model: str | None = Field(default=None, validation_alias="GROQ_FALLBACK_MODEL")
     # GROQ_MODEL_2 is retained as a backwards-compatible environment alias.
@@ -58,6 +59,10 @@ class Settings(BaseSettings):
     @property
     def effective_llm_model(self) -> str | None:
         return self.groq_model
+
+    @property
+    def effective_script_model(self) -> str | None:
+        return self.groq_script_model or self.groq_model
 
     @property
     def effective_llm_base_url(self) -> str | None:

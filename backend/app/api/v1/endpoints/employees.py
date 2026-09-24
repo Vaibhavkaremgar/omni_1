@@ -424,6 +424,7 @@ def create_employee(
                 "llm_model": employee.llm_model,
                 "language": employee.language,
                 "creation_mode": employee.creation_mode,
+                **({"host_name": payload.host_name.strip()} if payload.host_name and payload.host_name.strip() else {}),
                 **({"selected_template_id": template["id"], "selected_template_version": template["template_version"], "template_values": payload.template_values or {}} if template else {}),
                 **({"direct_prompt": payload.direct_prompt} if payload.direct_prompt else {}),
             }),

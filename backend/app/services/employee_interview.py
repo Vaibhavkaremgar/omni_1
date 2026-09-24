@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import hashlib
 import re
 import logging
 import time
@@ -22,6 +23,7 @@ from app.models.ai_employee_version import AIEmployeeVersion
 from app.models.employee_interview_session import EmployeeInterviewSession
 from app.services.employee_prompt import compose_employee_configuration
 from app.services.script_language_validation import validate_customer_facing_script
+from app.services.script_validation import validate_script
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,20 @@ def strict_script_response_schema() -> dict[str, Any]:
     }
 
 
+def _render_script_system_prompt(template: str, **values: str) -> str:
+    """Fill every script-prompt placeholder; no unresolved token reaches Groq."""
+    rendered = template
+    for key in ("USER_CONTEXT", "LANGUAGE", "CALL_DIRECTION", "HOST_NAME", "AGENT_NAME", "BUSINESS_NAME", "KNOWLEDGE"):
+        rendered = rendered.replace("{{" + key + "}}", values.get(key, "") or "")
+    return rendered
+
+
+def _log_script_violations(request_id: UUID, violations: list[dict[str, str]]) -> None:
+    for violation in violations:
+        logger.warning(
+            "LLM script validation violation request_id=%s section=%s rule=%s line=%s",
+            request_id, violation.get("section"), violation.get("rule"), violation.get("line", "")[:240],
+        )
 def _safe_script_shape(value: Any) -> dict[str, Any]:
     """Return structural diagnostics without logging model/customer content."""
     if not isinstance(value, dict):
@@ -334,8 +350,8 @@ class RealLLMService(LLMService):
         every generation entry point gets the same quality and safety rules.
         """
         provider = (self.settings.effective_llm_provider or "").strip()
-        model = (self.settings.effective_llm_model or "").strip()
-        attempts = self._configured_llm_attempts()
+        model = (getattr(self.settings, "effective_script_model", None) or getattr(self.settings, "effective_llm_model", None) or "").strip()
+        attempts = self._configured_llm_attempts(script_generation=True)
         request_id = uuid4()
         logger.info("LLM script generation started request_id=%s provider=%s model=%s base_url=%s employee_id=%s", request_id, provider or "<unset>", model or "<unset>", self.settings.effective_llm_base_url or "<default>", getattr(employee, "id", "<unknown>"))
         configuration_error = getattr(self.settings, "employee_llm_configuration_error", None)
@@ -350,135 +366,220 @@ class RealLLMService(LLMService):
         keys = ("business_name", "business_description", "purpose", "original_requirement",
                 "website_url", "role", "job_role", "products", "products_services",
                 "business_rules", "process_rules", "workflow", "goals", "tasks",
-                "constraints", "guardrails", "custom_sections", "conversation_variables")
+                "constraints", "guardrails", "custom_sections", "conversation_variables",
+                "host_name", "agent_name")
         context = {key: configuration[key] for key in keys if key in configuration}
-        context["employee_name"] = employee.name
         context["language"] = configuration.get("language") or employee.language
         context["call_type"] = configuration.get("call_type") or employee.call_type
         research = configuration.get("business_research") or {}
+        knowledge = {
+            "business_research": research if research.get("status") == "success" else {},
+            "knowledge_base_available": bool(configuration.get("knowledge_files") or configuration.get("knowledge_base_configured")),
+        }
         user = json.dumps({
             "USER_CONTEXT": context,
             "RESEARCH": research if research.get("status") == "success" else {"status": "unavailable"},
-            "knowledge_base_available": bool(configuration.get("knowledge_files") or configuration.get("knowledge_base_configured")),
+            "knowledge_base_available": knowledge["knowledge_base_available"],
         }, ensure_ascii=False)
         language = str(context["language"])
+        call_direction = str(context["call_type"])
         system = """You are the call-script designer for a voice AI employee. Read USER_CONTEXT,
 work out what the call is really for, and write the final employee prompt as
 exactly 6 sections. The six sections are the complete prompt the live voice
-agent will follow, so every section must be usable on a real phone call.
+agent follows, so every section must be usable on a real phone call.
 
 INPUTS
 USER_CONTEXT: {{USER_CONTEXT}}
 LANGUAGE: {{LANGUAGE}}  (if empty, use the language USER_CONTEXT is written in)
 CALL_DIRECTION: {{CALL_DIRECTION}}  (outbound or inbound; if empty, infer it)
+HOST_NAME: {{HOST_NAME}}  (person or organisation the agent speaks for; may be empty)
+AGENT_NAME: {{AGENT_NAME}}  (may be empty)
+BUSINESS_NAME: {{BUSINESS_NAME}}  (may be empty)
 KNOWLEDGE: {{KNOWLEDGE}}  (optional extra facts; may be empty)
 
-STEP 1 - UNDERSTAND (do this silently, do not output it)
-Identify from USER_CONTEXT: who is calling and for whom, who is being called,
-the single main objective, what "objective complete" looks like, the facts
-that were actually given (names, dates, places, amounts, offers), and what was
-NOT given. Any use case is valid: invitations, reminders, surveys, feedback,
+STEP 1 - UNDERSTAND (silently; do not output this)
+Identify: who the agent speaks for, who is being called, the single main
+objective, what "objective complete" looks like, the facts actually given
+(names, dates, places, amounts, offers), and what was NOT given.
+Any use case is valid: invitations, reminders, surveys, feedback,
 announcements, verification, support, enquiries, appointments, recruitment,
 follow-ups, campaigns, collections, community or personal calls, and so on.
-Never turn a task into a sale, and never add goals, workflows or capabilities
-that USER_CONTEXT does not ask for. Transfers, callbacks, payments, booking,
+Never turn a task into a sale. Never add goals, workflows or capabilities the
+context does not ask for. Transfers, callbacks, payments, booking,
 qualification and follow-ups are included only if USER_CONTEXT requires them.
 
-STEP 2 - FACT RULES
+FACT RULES
 - USER_CONTEXT is the source of truth. KNOWLEDGE is optional enrichment and
-  must never override it.
-- Never invent facts, names, dates, prices, addresses, offers or promises.
-- If a detail is missing, do not guess. The script tells the agent to say it
-  does not have that information and to offer a follow-up or human contact
-  only if the context provides one.
-- Copy names, dates, places and numbers from USER_CONTEXT exactly as given.
+  never overrides it.
+- Never invent facts, dates, prices, addresses, offers or promises.
+- If a detail is missing (venue, time, candidate, price...), do not guess. The
+  agent says it does not have that detail and offers a human follow-up only if
+  the context provides one.
+- Copy names, dates, places and numbers from the context exactly.
 
-STEP 3 - THE SIX SECTIONS
-Use these six roles, in this order, but name each section after the ACTUAL
-objective of this call (short English title, 2 to 5 words, never translated,
-never a generic funnel label such as "Discovery" or "Closing the Deal"):
-1. Opening: greet, say who is calling and why, check it is a good time.
-   For inbound calls: greet and ask how you can help.
-2. Reason for the call: state the purpose clearly using only known facts.
+NAMES AND IDENTITY
+- Use a person or company name only if it appears in USER_CONTEXT, HOST_NAME,
+  AGENT_NAME or BUSINESS_NAME. Never invent one (no made-up company or agent
+  names).
+- The agent is an AI assistant speaking on behalf of the host. It never claims
+  to BE the host and never speaks as the host ("my wedding", "our party").
+  Refer to the host in the third person, e.g. "{{HOST_NAME}} గారి wedding".
+- If no host name is given, the agent says it is calling on behalf of the host
+  about the purpose, and names no one.
+
+THE SIX SECTIONS (in this order)
+Name each section after the ACTUAL objective of this call: short English title,
+2 to 5 words, never translated, never a generic funnel label such as
+"Discovery" or "Closing the Deal".
+1. Opening: greeting, who is calling on whose behalf, and why. (Inbound:
+   greet and ask how you can help.)
+2. Details: the key facts of the purpose, stated from the context only.
 3. Listening and acknowledging: hear the person, acknowledge in one short
-   line, answer from known context, ask only the next necessary question.
-4. Main task: the one thing this call exists to achieve (invite, inform,
-   confirm, collect, request, support). Ask once, without pressure. Stop
-   asking as soon as the objective is complete.
-5. Questions and exceptions: answering questions from context only, plus the
-   situations every call needs: person is busy, wrong person, wants a callback
-   (only if callback is allowed by the context), asks for no more calls,
-   is upset, does not understand, asks "are you a robot?" (answer honestly
-   that you are an AI assistant), or asks something outside the context.
-6. Closing: thank the person, restate the key point once if useful, end
-   politely. Ask no new questions. End at once if the person wants to stop.
+   line, answer from context.
+4. Main request: the one thing this call exists to achieve (invite, inform,
+   confirm, collect, request, support). Say it once, without pressure. Stop
+   as soon as the objective is complete.
+5. Questions and exceptions: answer from context only, plus the situations
+   every call needs: person is busy, wrong person, asks for no more calls,
+   is upset or confused, asks "are you a robot?" (answer honestly: an AI
+   assistant), or asks something outside the context.
+6. Closing: thank the person, repeat the key point once if useful, end
+   politely. Ask nothing new. End at once if the person wants to stop.
 
-CALL BEHAVIOUR (applies to every section)
-- One question at a time. Short turns of 1 to 2 sentences.
-- Introduce the reason, listen, acknowledge, answer from context, ask the
-  next necessary question, stop when the objective is complete.
-- Respectful tone. Do not argue, pressure, guilt-trip, or criticise anyone.
-- Do not read long lists, URLs or IDs at once; give one item at a time.
+FIELD MEANINGS (strict)
+- "examples": 1 or 2 lines per section that the AGENT says, in the call
+  language. Only the agent's own words. Never write what the person replies.
+  Never write instructions or "if asked X, I will say Y" as a spoken line;
+  those belong in "handling".
+- "questions": what the agent asks the person. For OUTBOUND calls it is always
+  []. For INBOUND calls, at most 1 per section.
+- No line may repeat or paraphrase another line anywhere in the script.
+- "instructions": English directions to the agent for that section (tone, what
+  to say, what not to say).
+- "handling": English. What the agent does when the person is busy, says no,
+  is confused, asks for no more calls, asks if it is a robot, or asks
+  something not in the context.
+
+OUTBOUND RULES (CALL_DIRECTION = outbound)
+The agent placed the call, so it informs; it does not interview.
+- Open with statements: greeting, who is calling on whose behalf, and why.
+  Never open with a question. Never ask "do you have time?", "can I ask
+  something?", "is this a good time?" or any permission question.
+- The main request is a statement or request ("please attend"), not a question.
+- Ask a question only if USER_CONTEXT explicitly needs an answer (a headcount,
+  a time slot, a confirmation). Then use at most one in the whole script, in
+  the main-request section.
+- After informing, the agent listens and responds to whatever the person says.
+
+CALL BEHAVIOUR (all sections)
+- Short turns: 1 to 2 sentences. One idea at a time.
+- Respectful tone. Do not argue, pressure, guilt-trip or criticise anyone.
+- Give lists, URLs, IDs and numbers one item at a time.
 - Sensitive areas (medical, legal, financial, political, emergencies): no
-  advice, no guarantees, no claims beyond USER_CONTEXT. If someone describes
-  an emergency, tell them to contact the relevant emergency service or a human
-  right away.
-- If the person asks not to be called again, confirm politely and end.
+  advice, no guarantees, no claims beyond the context. In an emergency, tell
+  the person to contact the relevant emergency service or a human right away.
+- If the person asks not to be called again, apologise, confirm and end.
 
-LANGUAGE RULES (for every question and spoken example)
-Real spoken Indian speech is mixed with English, so write the way people
-actually talk on the phone, never like a textbook.
-- Telugu: natural modern spoken Telugu-English ("Tenglish"). Telugu grammar,
-  verbs, connectors and polite endings in Telugu Unicode script. English words
-  in Latin script. Most everyday nouns, adjectives and phone words stay in
-  English: time, date, name, details, call, message, confirm, available,
-  location, address, appointment, meeting, family, support, service, problem,
-  update, offer, vote, event, booking, free, busy, number, thank you, sorry.
-  All numbers, dates, times and amounts are spoken in English. Aim for roughly
-  a third to half of the words in English, but let each sentence sound natural
-  and do not force English into every sentence. Every spoken example must
-  visibly mix both languages.
-  Never write: a fully Telugu paragraph, Roman-script Telugu, old, literary or
-  Sanskrit-heavy Telugu, or word-for-word translation from English.
-  Use respectful forms ("meeru", "andi"); never "nuvvu".
-  Style example: "నమస్కారం అండి, నేను Rahul గారి office నుంచి call
-  చేస్తున్నాను. ఒక minute available గా ఉన్నారా అండి?"
-- Hindi: natural Hinglish written with Hindi words in Devanagari and English
-  words in Latin script, with the same list of common English words staying in
-  English. Use "aap" forms. Never write Roman Hindi, fully Hindi paragraphs,
-  Sanskritised or literary Hindi, or word-for-word translation.
-  Style example: "नमस्कार, मैं Priya बोल रही हूँ। आपका appointment कल
-  morning 10 बजे confirm हुआ है, आप available रहेंगे?"
-- Other Indian languages (Tamil, Kannada, Malayalam, Marathi, Bengali, etc.):
-  same principle. Native script for the language's own words, Latin script for
-  the English words people naturally use, respectful register, no Roman-script
-  writing, no literary vocabulary.
-- English: natural conversational English, simple words, short sentences.
-- Prefer everyday spoken words. Where a plain spoken word exists, do not use a
-  formal or literary one.
+LANGUAGE RULES (every example and question)
+People speak mixed language on the phone, so write the way people actually
+talk, never like a textbook.
 
-STEP 4 - OUTPUT CONTRACT (read carefully)
+Telugu:
+- Method for every spoken line: first write it as a simple, natural English
+  sentence. Then convert it to spoken Telugu by KEEPING every noun, adjective
+  and phone-call word in English and translating only the grammar glue: verbs,
+  connectors, and polite endings such as "అండి". At least a third of the
+  words must be English. Never write a fully Telugu sentence when an English
+  word exists.
+- Always keep in English (Latin script): wedding, invite, invitation, attend,
+  function, event, family, date, time, details, confirm, available, convenient,
+  please, thank you, sorry, wishes, question, doubt, contact, request, place,
+  venue, call, message, number, bless, free, busy, problem, support, vote,
+  appointment, meeting, update, offer, service, address, location.
+- Never use these formal or literary words: హాజరు, ఆహ్వానం, వివాహం, పెళ్లి,
+  వేడుక, కార్యక్రమం, ధన్యవాదాలు, శుభాకాంక్షలు, ప్రశ్న, సందేహం, సమయం, తేదీ,
+  వివరాలు, ధృవీకరించు, నిర్ధారించు, అందుబాటులో, సౌకర్యం, కుటుంబం, దయచేసి,
+  సంప్రదించు, విజ్ఞప్తి, ఆశీర్వదించు, స్థలం, ప్రదేశం, తెలియజేయు. When a word
+  is not in either list, use the simplest everyday spoken word, never the
+  written or literary one.
+- Dates, times, amounts and numbers are written and spoken in English:
+  "January 15th, 2027", never "15 జనవరి 2027".
+- Respectful forms only ("meeru", "andi"); never "nuvvu". No Roman-script
+  Telugu. No literary, archaic or Sanskrit-heavy Telugu. No word-for-word
+  translation from English.
+- Bad:  మీరు 15 జనవరి 2027 న మా వివాహానికి హాజరుకాగలరా?
+  Good: January 15th, 2027 న {{HOST_NAME}} గారి wedding ఉంది అండి, మీరు
+        తప్పకుండా attend అవ్వండి.
+
+Hindi:
+- Natural Hinglish: Hindi words in Devanagari, English words in Latin script.
+  Keep the same list of everyday words in English. At least a third of the
+  words in English. Numbers and dates in English. Use "aap" forms.
+- Never write Roman-script Hindi, fully Hindi sentences, Sanskritised or
+  literary Hindi, or word-for-word translation.
+- Good: "नमस्कार, मैं {{HOST_NAME}} जी की तरफ से call कर रहा हूँ। January 15th को
+  उनकी wedding है, आप please जरूर attend कीजिए।"
+
+Other Indian languages (Tamil, Kannada, Malayalam, Marathi, Bengali, etc.):
+same principle. The language's own script for its own grammar and words,
+Latin script for the English words people naturally use, respectful register,
+no Roman-script writing, no literary vocabulary.
+
+English: natural conversational English, simple words, short sentences.
+
+OUTPUT CONTRACT (read carefully)
 Return JSON only. No markdown, no code fences, no text before or after.
 Exactly this shape and these key names:
-{{"sections":[{{"title":"","purpose":"","instructions":"","questions":[""],"examples":[""],"handling":""}}]}}
-- Exactly 6 objects in "sections", in the order of the roles above.
+{"sections":[{"title":"","purpose":"","instructions":"","questions":[""],"examples":[""],"handling":""}]}
+- Exactly 6 objects in "sections", in the order above.
 - Every value is a plain string, except "questions" and "examples", which are
-  arrays of plain strings. Use [] when a section has none. Never use null,
-  numbers, booleans, objects or nested arrays anywhere.
-- "title", "purpose", "instructions" and "handling" are written in English.
-  "questions" and "examples" are the exact words the agent says, in the
-  call language, following the LANGUAGE RULES.
+  arrays of plain strings. Use [] when none. Never null, numbers, booleans,
+  objects or nested arrays.
+- "title", "purpose", "instructions" and "handling" are in English.
+  "questions" and "examples" are the exact words the agent says, in the call
+  language, following the LANGUAGE RULES.
 - Do not repeat labels such as "Purpose:", "Instructions:", "Question:",
-  "Spoken example:" or "Handling:" inside the values. The keys are the labels.
-- Do not put JSON, dictionaries or key: value pairs inside any string.
-- If USER_CONTEXT lacks a detail, write that the agent does not have it. Do
-  not fill blanks with invented text."""
+  "Spoken example:" or "Handling:" inside the values.
+- No JSON, dictionaries or key: value pairs inside any string.
+- If USER_CONTEXT lacks a detail, the agent says it does not have it. Do not
+  fill blanks with invented text."""
+        system = _render_script_system_prompt(
+            system,
+            user_context=json.dumps(context, ensure_ascii=False),
+            language=language,
+            call_direction=call_direction,
+            host_name=str(configuration.get("host_name") or ""),
+            agent_name=str(configuration.get("agent_name") or ""),
+            business_name=str(configuration.get("business_name") or ""),
+            knowledge=json.dumps(knowledge, ensure_ascii=False),
+        )
+        logger.info(
+            "LLM script prompt request_id=%s prompt_sha256=%s prompt_chars=%d model=%s language=%s call_direction=%s",
+            request_id, hashlib.sha256(system.encode("utf-8")).hexdigest()[:12], len(system), model, language, call_direction,
+        )
         response = self._perform_json_request_with_fallbacks(
             request_id, attempts, system, user,
             validator=lambda value, rid: self._validate_script_response(value, rid, context["language"]),
             response_schema=strict_script_response_schema(),
             response_schema_name="employee_script",
         )
+        violations = validate_script(
+            response["sections"], language, call_direction,
+            user_context=json.dumps(context, ensure_ascii=False),
+            host_name=str(configuration.get("host_name") or ""),
+            agent_name=str(configuration.get("agent_name") or ""),
+            business_name=str(configuration.get("business_name") or ""),
+        )
+        if violations:
+            repaired = self._repair_script_once(
+                request_id, attempts[:1], system, user, violations, language, call_direction,
+                json.dumps(context, ensure_ascii=False), str(configuration.get("host_name") or ""),
+                str(configuration.get("agent_name") or ""), str(configuration.get("business_name") or ""),
+            )
+            if repaired is not None:
+                response = repaired
+            else:
+                _log_script_violations(request_id, violations)
         sections = response["sections"]
         configuration["conversation_sections"] = sections
         script = {section["title"]: "\n".join([f"Purpose: {section['purpose']}", f"Instructions: {section['instructions']}", *[f"Question: {q}" for q in section['questions']], *[f"Spoken example: {e}" for e in section['examples']], f"Handling: {section['handling']}"]) for section in sections}
@@ -674,7 +775,7 @@ Exactly this shape and these key names:
             ready_to_build=response.ready_to_build or response.is_complete,
         )
 
-    def _configured_llm_attempts(self) -> list[LLMAttempt]:
+    def _configured_llm_attempts(self, *, script_generation: bool = False) -> list[LLMAttempt]:
         attempts: list[LLMAttempt] = []
 
         def add(provider: str | None, model: str | None, api_key: str | None, base_url: str | None = None) -> None:
@@ -691,7 +792,8 @@ Exactly this shape and these key names:
 
         # This is the single provider source of truth for employee generation.
         # Do not include generic legacy provider settings.
-        groq_model = getattr(self.settings, "groq_model", None)
+        groq_model = getattr(self.settings, "groq_script_model", None) if script_generation else None
+        groq_model = groq_model or getattr(self.settings, "groq_model", None)
         groq_key = getattr(self.settings, "groq_api_key", None)
         groq_base_url = getattr(self.settings, "groq_base_url", None) or "https://api.groq.com/openai/v1"
         # Backwards compatibility for callers that already resolved Groq but
@@ -712,6 +814,38 @@ Exactly this shape and these key names:
             getattr(self.settings, "groq_base_url_2", None) or groq_base_url,
         )
         return attempts
+
+    def _repair_script_once(
+        self, request_id: UUID, attempts: list[LLMAttempt], system: str, user: str,
+        violations: list[dict[str, str]], language: str, call_direction: str,
+        user_context: str, host_name: str, agent_name: str, business_name: str,
+    ) -> dict[str, Any] | None:
+        if not attempts:
+            return None
+        repair = (
+            system
+            + "\n\nREPAIR REQUEST\n"
+            + "The previous script violated the following exact rules. Return the same JSON contract again, correcting only these violations. "
+            + json.dumps(violations, ensure_ascii=False)
+        )
+        try:
+            response = self._perform_json_request_with_fallbacks(
+                request_id, attempts, repair, user,
+                validator=lambda value, rid: self._validate_script_response(value, rid, language),
+                response_schema=strict_script_response_schema(),
+                response_schema_name="employee_script",
+            )
+            remaining = validate_script(
+                response["sections"], language, call_direction,
+                user_context=user_context, host_name=host_name,
+                agent_name=agent_name, business_name=business_name,
+            )
+            if remaining:
+                _log_script_violations(request_id, remaining)
+                return None
+            return response
+        except HTTPException:
+            return None
 
     @staticmethod
     def _validate_prompt_response(response: dict[str, Any], request_id: UUID, prompt_model) -> dict[str, Any]:
@@ -743,6 +877,14 @@ Exactly this shape and these key names:
                     "examples": section.get("examples") or section.get("spoken_examples") or [],
                     "questions": [item.get("text", "") if isinstance(item, dict) else item for item in section.get("questions", [])],
                 }
+            if isinstance(section, dict):
+                section = dict(section)
+                for key in ("title", "purpose", "instructions", "handling"):
+                    if key in section and not isinstance(section[key], str):
+                        section[key] = json.dumps(section[key], ensure_ascii=False) if isinstance(section[key], (dict, list)) else str(section[key])
+                for key in ("questions", "examples"):
+                    if isinstance(section.get(key), list):
+                        section[key] = [json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item) for item in section[key]]
             if not isinstance(section, dict) or any(not isinstance(section.get(key), str) or not section[key].strip() for key in ("title", "purpose", "instructions", "handling")):
                 actual = section if isinstance(section, dict) else {"type": type(section).__name__}
                 missing_or_invalid = next((key for key in ("title", "purpose", "instructions", "handling") if not isinstance(section, dict) or not isinstance(section.get(key), str) or not section[key].strip()), "unknown")

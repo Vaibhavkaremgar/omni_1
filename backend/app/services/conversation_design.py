@@ -279,6 +279,7 @@ def runtime_rules(configuration: dict[str, Any]) -> str:
         "The welcome has already been spoken; listen and respond to the person's actual words without repeating it. "
         "Yield immediately on interruption. A short answer, hesitation or silence is not permission to hang up. "
         "Respect a clear refusal or request to stop. Continue on genuine questions and end only on clear completion intent. "
+        "If the caller asks whether you are a robot or AI, answer honestly that you are an AI assistant speaking on behalf of the configured host; never claim to be human or to be the host. "
         + language_rules(str(configuration.get("language") or "English"))
     )
 

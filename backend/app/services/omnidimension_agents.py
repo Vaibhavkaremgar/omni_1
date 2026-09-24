@@ -646,6 +646,21 @@ def _remove_builder_instruction(text: str) -> str:
 
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
     """Build the static greeting sent to Omni, excluding builder-only copy."""
+    outbound = _text(configuration.get("call_type", employee.call_type)).casefold() == "outbound"
+    generated_sections = configuration.get("conversation_sections")
+    if outbound and isinstance(generated_sections, list) and len(generated_sections) == 6:
+        first_examples = generated_sections[0].get("examples") if isinstance(generated_sections[0], dict) else None
+        if isinstance(first_examples, list) and first_examples and _text(first_examples[0]):
+            return _text(first_examples[0])
+    if outbound and not configuration.get("conversation_design"):
+        host = _text(configuration.get("host_name"))
+        purpose = _safe_purpose(configuration.get("purpose"), employee.purpose)
+        if language == "Telugu":
+            return f"నమస్కారం అండి, నేను {host} గారి behalf లో మాట్లాడుతున్నాను. {purpose} గురించి call చేశాను అండి." if host else f"నమస్కారం అండి, నేను AI assistant గా call చేస్తున్నాను. {purpose} గురించి call చేశాను అండి."
+        if language == "Hindi":
+            return f"नमस्कार, मैं {host} की तरफ से call कर रहा हूँ। {purpose} के बारे में call किया है।" if host else f"नमस्कार, मैं AI assistant हूँ। {purpose} के बारे में call किया है।"
+        behalf = f"on behalf of {host}" if host else "on behalf of the configured host"
+        return f"Hello, I am an AI assistant calling {behalf} about {purpose}."
     base = _remove_builder_instruction(_raw_welcome_message(employee, configuration, language))
     if language == "Telugu":
         return (

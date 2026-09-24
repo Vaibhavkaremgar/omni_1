@@ -12,7 +12,7 @@ type Session = { messages: Array<{ role: string; content: string }>; current_que
 
 function NewEmployeeChat() {
   const navigate = useNavigate();
-  const [requirement, setRequirement] = useState('');
+  const [requirement, setRequirement] = useState(''); const [hostName, setHostName] = useState('');
   const [companyName, setCompanyName] = useState(''); const [callType, setCallType] = useState<'inbound' | 'outbound'>('outbound');
   const [name, setName] = useState('');
   const [language, setLanguage] = useState('Telugu');
@@ -31,8 +31,8 @@ function NewEmployeeChat() {
     if (!requirement.trim()) { setError('Describe what the employee should do before building it.'); return; }
     setGenerating(true); setError('');
     try {
-      const employee = await backendJson<Employee>('/employees', { method: 'POST', body: JSON.stringify({ name: name.trim() || 'AI Employee', purpose: requirement.trim(), language, creation_mode: 'chat', call_type: callType }) });
-      await backendJson(`/employees/${employee.id}`, { method: 'PATCH', body: JSON.stringify({ configuration: { name: name.trim() || 'AI Employee', business_name: companyName.trim(), business_description: requirement.trim(), purpose: requirement.trim(), original_requirement: requirement.trim(), language, call_type: callType, creation_mode: 'chat', ...(voiceId ? { voice: { id: voiceId, name: voices.find(v => v.id === voiceId)?.name } } : {}) } }) });
+      const employee = await backendJson<Employee>('/employees', { method: 'POST', body: JSON.stringify({ name: name.trim() || 'AI Employee', purpose: requirement.trim(), language, creation_mode: 'chat', call_type: callType, host_name: hostName.trim() || companyName.trim() || null }) });
+      await backendJson(`/employees/${employee.id}`, { method: 'PATCH', body: JSON.stringify({ configuration: { name: name.trim() || 'AI Employee', business_name: companyName.trim(), host_name: hostName.trim() || companyName.trim(), business_description: requirement.trim(), purpose: requirement.trim(), original_requirement: requirement.trim(), language, call_type: callType, creation_mode: 'chat', ...(voiceId ? { voice: { id: voiceId, name: voices.find(v => v.id === voiceId)?.name } } : {}) } }) });
       await backendJson(`/employees/${employee.id}/generate-script`, { method: 'POST' });
       navigate(`/employees/${employee.id}`);
     } catch (e) { setError(e instanceof Error ? e.message : 'Shabdha could not build the employee. Your requirement is still here—please try again.'); setGenerating(false); }
