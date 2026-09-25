@@ -231,7 +231,7 @@ def test_gemini_is_primary_and_receives_only_system_and_user_prompts(caplog):
     assert "UNIVERSAL OUTBOUND VOICE AGENT" in system_prompt
     assert "{{USER_CONTEXT}}" not in system_prompt
     assert json.loads(user_prompt)["USER_CONTEXT"]["original_requirement"] == REQUIREMENT
-    assert body["generationConfig"]["responseFormat"]["text"]["mimeType"] == "application/json"
+    assert body["generationConfig"]["responseFormat"]["text"]["mimeType"] == "APPLICATION_JSON"
     assert "schema" in body["generationConfig"]["responseFormat"]["text"]
     assert "input_tokens=6226 output_tokens=716 thinking_tokens=384 cached_tokens=0 total_tokens=7326" in caplog.text
     assert "request_count=1 retry_count=0" in caplog.text

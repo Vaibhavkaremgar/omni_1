@@ -896,7 +896,7 @@ class RealLLMService(LLMService):
             schema_path_match = re.search(r"(?:jsonschema|schema)[^\"']{0,80}[\"']([^\"']+)[\"']", exc.response.text or "", re.IGNORECASE)
             logger.error(
                 "LLM script request failed provider=%s model=%s status=%s failure_category=%s schema_failure_path=%s body=%s",
-                provider, payload.get("json", {}).get("model"), provider_status,
+                provider, _request_model(payload), provider_status,
                 "provider_rate_limit_or_quota" if provider_status == 429 else "provider_unavailable" if provider_status in {502, 503, 504} else "provider_request_rejected",
                 schema_path_match.group(1)[:160] if schema_path_match else None,
                 f"message={provider_message} failed_generation={failed_generation or '<none>'} body={provider_body} rate_headers={rate_headers}",
@@ -1288,7 +1288,9 @@ class RealLLMService(LLMService):
         if normalized in {"gemini", "google", "google-gemini"}:
             api_key = api_key or self.settings.gemini_api_key
             base_url = (base_url or self.settings.gemini_base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
-            output: dict[str, Any] = {"mimeType": "application/json"}
+            # responseFormat uses the REST enum value. The deprecated
+            # responseMimeType field is the one that accepts "application/json".
+            output: dict[str, Any] = {"mimeType": "APPLICATION_JSON"}
             if response_schema:
                 output["schema"] = _gemini_schema(response_schema)
             return {
