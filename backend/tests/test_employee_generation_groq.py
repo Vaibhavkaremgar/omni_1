@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from app.core.config import Settings
 from app.services.business_research import ensure_business_research
-from app.services.employee_interview import RealLLMService, strict_script_response_schema
+from app.services.employee_interview import RealLLMService, _gemini_schema, strict_script_response_schema
 from app.services.employee_prompt import compose_employee_configuration, normalize_business_identity
 from app.services.script_validation import validate_script
 
@@ -279,6 +279,15 @@ def test_groq_request_contract_matches_validator_and_prompt():
     assert schema["properties"]["sections"]["items"]["required"] == [
         "title", "purpose", "instructions", "questions", "examples", "handling"
     ]
+
+
+def test_gemini_schema_preserves_required_application_field_names():
+    schema = _gemini_schema(strict_script_response_schema())
+    section = schema["properties"]["sections"]["items"]
+
+    assert "examples" in section["properties"]
+    assert set(section["required"]).issubset(section["properties"])
+    assert "minLength" not in section["properties"]["title"]
 
 
 def test_script_validator_enforces_exactly_six_sections_without_wire_cardinality_keywords():
