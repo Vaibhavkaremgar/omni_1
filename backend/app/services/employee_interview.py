@@ -22,6 +22,7 @@ from app.models.ai_employee import AIEmployee
 from app.models.ai_employee_version import AIEmployeeVersion
 from app.models.employee_interview_session import EmployeeInterviewSession
 from app.services.employee_prompt import compose_employee_configuration
+from app.services.call_script_master_prompt import CALL_SCRIPT_MASTER_SYSTEM_PROMPT
 from app.services.script_language_validation import validate_customer_facing_script
 from app.services.script_validation import validate_script
 
@@ -120,8 +121,22 @@ def strict_script_response_schema() -> dict[str, Any]:
     }
 
 
+def _gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Keep only JSON Schema keywords supported by Gemini structured output."""
+    unsupported = {"minLength", "maxLength", "pattern", "default", "examples"}
+
+    def normalize(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: normalize(item) for key, item in value.items() if key not in unsupported}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        return value
+
+    return normalize(schema)
+
+
 def _render_script_system_prompt(template: str, **values: str) -> str:
-    """Fill every script-prompt placeholder; no unresolved token reaches Groq."""
+    """Fill every script-prompt placeholder before any provider request."""
     rendered = template
     for key in ("USER_CONTEXT", "LANGUAGE", "CALL_DIRECTION", "HOST_NAME", "AGENT_NAME", "BUSINESS_NAME", "KNOWLEDGE"):
         rendered = rendered.replace("{{" + key + "}}", values.get(key, "") or values.get(key.lower(), "") or "")
@@ -151,6 +166,47 @@ def _safe_script_shape(value: Any) -> dict[str, Any]:
             item["field_types"] = {str(key): type(section[key]).__name__ for key in section}
         result["sections"]["items"].append(item)
     return result
+
+
+def _provider_token_usage(body: dict[str, Any]) -> dict[str, int | None]:
+    """Normalize Gemini, OpenAI/Groq, and Anthropic usage metadata for logs."""
+    usage = body.get("usageMetadata") or body.get("usage") or {}
+    if not isinstance(usage, dict):
+        usage = {}
+    completion_details = usage.get("completion_tokens_details") or {}
+    prompt_details = usage.get("prompt_tokens_details") or {}
+    completion_details = completion_details if isinstance(completion_details, dict) else {}
+    prompt_details = prompt_details if isinstance(prompt_details, dict) else {}
+
+    def first(*keys: str) -> int | None:
+        for key in keys:
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        return None
+
+    reasoning_tokens = completion_details.get("reasoning_tokens")
+    cached_tokens = prompt_details.get("cached_tokens")
+
+    return {
+        "input": first("promptTokenCount", "inputTokenCount", "total_input_tokens", "prompt_tokens", "input_tokens"),
+        "output": first("candidatesTokenCount", "outputTokenCount", "total_output_tokens", "completion_tokens", "output_tokens"),
+        "thinking": first("thoughtsTokenCount", "total_thought_tokens")
+        if first("thoughtsTokenCount", "total_thought_tokens") is not None
+        else (reasoning_tokens if isinstance(reasoning_tokens, int) and not isinstance(reasoning_tokens, bool) else None),
+        "cached": first("cachedContentTokenCount", "total_cached_tokens")
+        if first("cachedContentTokenCount", "total_cached_tokens") is not None
+        else (cached_tokens if isinstance(cached_tokens, int) and not isinstance(cached_tokens, bool) else None),
+        "total": first("totalTokenCount", "total_tokens"),
+    }
+
+
+def _request_model(payload: dict[str, Any]) -> str | None:
+    model = payload.get("json", {}).get("model")
+    if model:
+        return str(model)
+    match = re.search(r"/models/([^/:]+)", str(payload.get("url") or ""))
+    return match.group(1) if match else None
 
 
 def _script_spoken_lines(sections: list[dict[str, Any]]) -> list[str]:
@@ -495,161 +551,7 @@ class RealLLMService(LLMService):
         }, ensure_ascii=False)
         language = str(context["language"])
         call_direction = str(context["call_type"])
-        system = """You are the call-script designer for a voice AI employee. Read USER_CONTEXT,
-work out what the call is really for, and write the final employee prompt as
-exactly 6 sections. The six sections are the complete prompt the live voice
-agent follows, so every section must be usable on a real phone call.
-
-INPUTS
-USER_CONTEXT: {{USER_CONTEXT}}
-LANGUAGE: {{LANGUAGE}}  (if empty, use the language USER_CONTEXT is written in)
-CALL_DIRECTION: {{CALL_DIRECTION}}  (outbound or inbound; if empty, infer it)
-HOST_NAME: {{HOST_NAME}}  (person or organisation the agent speaks for; may be empty)
-AGENT_NAME: {{AGENT_NAME}}  (may be empty)
-BUSINESS_NAME: {{BUSINESS_NAME}}  (may be empty)
-KNOWLEDGE: {{KNOWLEDGE}}  (optional extra facts; may be empty)
-
-STEP 1 - UNDERSTAND (silently; do not output this)
-Identify: who the agent speaks for, who is being called, the single main
-objective, what "objective complete" looks like, the facts actually given
-(names, dates, places, amounts, offers), and what was NOT given.
-Any use case is valid: invitations, reminders, surveys, feedback,
-announcements, verification, support, enquiries, appointments, recruitment,
-follow-ups, campaigns, collections, community or personal calls, and so on.
-Never turn a task into a sale. Never add goals, workflows or capabilities the
-context does not ask for. Transfers, callbacks, payments, booking,
-qualification and follow-ups are included only if USER_CONTEXT requires them.
-
-FACT RULES
-- USER_CONTEXT is the source of truth. KNOWLEDGE is optional enrichment and
-  never overrides it.
-- Never invent facts, dates, prices, addresses, offers or promises.
-- If a detail is missing (venue, time, candidate, price...), do not guess. The
-  agent says it does not have that detail and offers a human follow-up only if
-  the context provides one.
-- Copy names, dates, places and numbers from the context exactly.
-
-NAMES AND IDENTITY
-- Use a person or company name only if it appears in USER_CONTEXT, HOST_NAME,
-  AGENT_NAME or BUSINESS_NAME. Never invent one (no made-up company or agent
-  names).
-- If AGENT_NAME is present, introduce the caller by that exact name in the
-  opening. If it is empty, introduce the caller as an AI assistant without
-  inventing a personal name. The agent answers honestly that it is AI when
-  asked, regardless of its spoken name.
-- Never claim to BE the host or speak as the host. Mention an explicitly
-  provided host naturally in the third person, attached to the actual event,
-  service or request. Do not add "on behalf of" or its literal translation
-  when the reason for the call already makes the relationship clear.
-- If no host name is given, name no host and never treat BUSINESS_NAME or the
-  employee's display label as a substitute for one.
-
-THE SIX SECTIONS (in this order)
-Name each section after the ACTUAL objective of this call: short English title,
-2 to 5 words, never translated, never a generic funnel label such as
-"Discovery" or "Closing the Deal".
-1. Opening: greeting, who is calling, and the specific reason. (Inbound:
-   greet and ask how you can help.)
-2. Details: the key facts of the purpose, stated from the context only.
-3. Listening and acknowledging: hear the person, acknowledge in one short
-   line, answer from context.
-4. Main request: the one thing this call exists to achieve (invite, inform,
-   confirm, collect, request, support). Say it once, without pressure. Stop
-   as soon as the objective is complete.
-5. Questions and exceptions: answer from context only, plus the situations
-   every call needs: person is busy, wrong person, asks for no more calls,
-   is upset or confused, asks "are you a robot?" (answer honestly: an AI
-   assistant), or asks something outside the context.
-6. Closing: thank the person, repeat the key point once if useful, end
-   politely. Ask nothing new. End at once if the person wants to stop.
-
-FIELD MEANINGS (strict)
-- "examples": 1 or 2 lines per section that the AGENT says, in the call
-  language. Only the agent's own words. Never write what the person replies.
-  Never write instructions or "if asked X, I will say Y" as a spoken line;
-  those belong in "handling".
-- "questions": what the agent asks the person. For OUTBOUND calls it is always
-  []. For INBOUND calls, at most 1 per section.
-- No line may repeat or paraphrase another line anywhere in the script.
-- "instructions": English directions to the agent for that section (tone, what
-  to say, what not to say).
-- "handling": English. What the agent does when the person is busy, says no,
-  is confused, asks for no more calls, asks if it is a robot, or asks
-  something not in the context.
-
-OUTBOUND RULES (CALL_DIRECTION = outbound)
-The agent placed the call, so it informs; it does not interview.
-- Open with statements: greeting, caller identity, and the specific reason.
-  Never open with a question. Never ask "do you have time?", "can I ask
-  something?", "is this a good time?" or any permission question.
-- The main request is a statement or request, not a question. Do not ask for
-  permission, confirmation or extra details on an outbound call.
-- After informing, the agent listens and responds to whatever the person says.
-
-CALL BEHAVIOUR (all sections)
-- Short turns: 1 to 2 sentences. One idea at a time.
-- Respectful tone. Do not argue, pressure, guilt-trip or criticise anyone.
-- Give lists, URLs, IDs and numbers one item at a time.
-- Sensitive areas (medical, legal, financial, political, emergencies): no
-  advice, no guarantees, no claims beyond the context. In an emergency, tell
-  the person to contact the relevant emergency service or a human right away.
-- If the person asks not to be called again, apologise, confirm and end.
-
-LANGUAGE RULES (every example and question)
-People speak mixed language on the phone, so write the way people actually
-talk, never like a textbook.
-
-Telugu:
-- Use natural spoken Telugu word order. In the opening, greet, say "నేను"
-  followed by AGENT_NAME if provided, then express the precise purpose as a
-  direct action involving the recipient. Put the host with the relevant event
-  or service, not between the greeting and the agent identity. For outbound,
-  the opening should sound like one person making a clear call, not a list of
-  translated input fields.
-- Mix Telugu grammar and verbs in Telugu script with English words people
-  naturally use for this particular task. Use each language where it belongs;
-  do not insert English words or Telugu endings merely to satisfy a count.
-  Keep greetings, dates, names, and common domain terms in their natural form.
-- Never use these formal or literary words: హాజరు, ఆహ్వానం, వివాహం, పెళ్లి,
-  వేడుక, కార్యక్రమం, ధన్యవాదాలు, శుభాకాంక్షలు, ప్రశ్న, సందేహం, సమయం, తేదీ,
-  వివరాలు, ధృవీకరించు, నిర్ధారించు, అందుబాటులో, సౌకర్యం, కుటుంబం, దయచేసి,
-  సంప్రదించు, విజ్ఞప్తి, ఆశీర్వదించు, స్థలం, ప్రదేశం, తెలియజేయు. When a word
-  is not in either list, use the simplest everyday spoken word, never the
-  written or literary one.
-- Dates, times, amounts and numbers are written and spoken in English.
-- Use respectful Telugu forms only; never informal address. No Roman-script
-  Telugu. No literary, archaic or Sanskrit-heavy Telugu. No word-for-word
-  translation from English.
-
-Hindi:
-- Natural Hinglish: Hindi words in Devanagari, familiar English terms in Latin
-  script where they fit. Numbers and dates in English. Use respectful forms.
-- Never write Roman-script Hindi, fully Hindi sentences, Sanskritised or
-  literary Hindi, or word-for-word translation.
-
-Other Indian languages (Tamil, Kannada, Malayalam, Marathi, Bengali, etc.):
-same principle. The language's own script for its own grammar and words,
-Latin script for the English words people naturally use, respectful register,
-no Roman-script writing, no literary vocabulary.
-
-English: natural conversational English, simple words, short sentences.
-
-OUTPUT CONTRACT (read carefully)
-Return JSON only. No markdown, no code fences, no text before or after.
-Exactly this shape and these key names:
-{"sections":[{"title":"","purpose":"","instructions":"","questions":[""],"examples":[""],"handling":""}]}
-- Exactly 6 objects in "sections", in the order above.
-- Every value is a plain string, except "questions" and "examples", which are
-  arrays of plain strings. Use [] when none. Never null, numbers, booleans,
-  objects or nested arrays.
-- "title", "purpose", "instructions" and "handling" are in English.
-  "questions" and "examples" are the exact words the agent says, in the call
-  language, following the LANGUAGE RULES.
-- Do not repeat labels such as "Purpose:", "Instructions:", "Question:",
-  "Spoken example:" or "Handling:" inside the values.
-- No JSON, dictionaries or key: value pairs inside any string.
-- If USER_CONTEXT lacks a detail, the agent says it does not have it. Do not
-  fill blanks with invented text."""
+        system = CALL_SCRIPT_MASTER_SYSTEM_PROMPT
         system = _render_script_system_prompt(
             system,
             user_context=json.dumps(context, ensure_ascii=False),
@@ -664,28 +566,57 @@ Exactly this shape and these key names:
             "LLM script prompt request_id=%s prompt_sha256=%s prompt_chars=%d model=%s language=%s call_direction=%s",
             request_id, hashlib.sha256(system.encode("utf-8")).hexdigest()[:12], len(system), model, language, call_direction,
         )
+        request_count = 0
+        last_provider: str | None = None
+        last_model: str | None = None
         if not attempts:
             configuration["script_source"] = "assembled"
             response = {"sections": self._assemble_script_sections(context, language, call_direction, configuration)}
         else:
-            # Script generation has one primary model and a hard three-request
-            # ceiling: strict -> repair -> permissive json_object. A provider
-            # fallback model is deliberately not used for this ladder.
+            # Keep a hard three-request ceiling: Gemini primary, one Gemini
+            # repair, then Groq fallback. If only one provider is configured,
+            # retain the final permissive JSON-object attempt.
             primary = attempts[0]
+            fallback = attempts[1] if len(attempts) > 1 else primary
+            ladder = (
+                (primary, "strict"),
+                (primary, "strict"),
+                (fallback, "strict" if fallback != primary else "json_object"),
+            )
             response = None
             feedback: list[dict[str, str]] = []
-            for mode in ("strict", "strict", "json_object"):
+            for attempt_index, (llm_attempt, mode) in enumerate(ladder):
                 if response is not None:
                     break
+                request_count += 1
+                last_provider = llm_attempt.provider
+                last_model = llm_attempt.model
+                logger.info(
+                    "LLM script request attempt request_id=%s attempt_number=%d retry_number=%d provider=%s model=%s mode=%s",
+                    request_id, request_count, request_count - 1,
+                    llm_attempt.provider, llm_attempt.model, mode,
+                )
                 try:
                     response = self._request_script_attempt(
-                        request_id, primary, system, user, language, mode,
-                        feedback if feedback else None,
+                        request_id, llm_attempt, system, user, language, mode,
+                        feedback if feedback else None, request_count,
                     )
-                    feedback = self._script_violations(
+                    violations = self._script_violations(
                         response["sections"], language, call_direction, context, configuration,
                     )
-                    if feedback:
+                    if violations:
+                        configuration["script_generation_warnings"] = violations
+                        logger.warning(
+                            "LLM script has advisory validation warnings request_id=%s warning_count=%d retrying=%s",
+                            request_id, len(violations), attempt_index == 0,
+                        )
+                    else:
+                        configuration.pop("script_generation_warnings", None)
+                    # Give the model one opportunity to repair content-quality
+                    # warnings, then retain the structurally valid result for
+                    # owner review instead of replacing it with a generic draft.
+                    feedback = violations
+                    if violations and attempt_index == 0:
                         response = None
                 except HTTPException as exc:
                     response = None
@@ -699,6 +630,11 @@ Exactly this shape and these key names:
                 configuration["script_source"] = "model"
                 configuration["script_review_required"] = False
 
+        logger.info(
+            "LLM script generation completed request_id=%s request_count=%d retry_count=%d final_provider=%s final_model=%s script_source=%s",
+            request_id, request_count, max(0, request_count - 1),
+            last_provider or "none", last_model or "none", configuration.get("script_source"),
+        )
         sections = response["sections"]
         configuration["conversation_sections"] = sections
         script = render_call_script_sections(sections)
@@ -713,6 +649,7 @@ Exactly this shape and these key names:
     def _request_script_attempt(
         self, request_id: UUID, attempt: LLMAttempt, system: str, user: str,
         language: str, mode: str, feedback: list[dict[str, str]] | None,
+        attempt_number: int,
     ) -> dict[str, Any]:
         prompt = system
         if feedback:
@@ -728,6 +665,8 @@ Exactly this shape and these key names:
             response_schema_name="employee_script",
             max_output_tokens=4000,
         )
+        payload["request_id"] = str(request_id)
+        payload["attempt_number"] = attempt_number
         if mode == "json_object":
             payload["json"]["response_format"] = {"type": "json_object"}
         response = self._perform_json_request(attempt.provider, payload)
@@ -741,8 +680,8 @@ Exactly this shape and these key names:
         message = detail.get("provider_message") or detail.get("message") or str(error.detail)
         failed = detail.get("failed_generation")
         if failed:
-            return f"Groq schema/output error: {message}; failed_generation={str(failed)[:500]}"
-        return f"Groq schema/output error: {message}"
+            return f"Provider schema/output error: {message}; failed_generation={str(failed)[:500]}"
+        return f"Provider schema/output error: {message}"
 
     @staticmethod
     def _script_violations(
@@ -902,9 +841,20 @@ Exactly this shape and these key names:
             finish_reason = None
             if isinstance(body.get("choices"), list) and body["choices"]:
                 finish_reason = (body["choices"][0] or {}).get("finish_reason")
+            elif isinstance(body.get("candidates"), list) and body["candidates"]:
+                finish_reason = (body["candidates"][0] or {}).get("finishReason")
             logger.info("LLM script provider response provider=%s status=%s finish_reason=%s body_keys=%s", provider, response.status_code, finish_reason, list(body) if isinstance(body, dict) else type(body).__name__)
+            usage = _provider_token_usage(body)
+            logger.info(
+                "LLM token usage request_id=%s attempt_number=%s provider=%s model=%s input_tokens=%s output_tokens=%s thinking_tokens=%s cached_tokens=%s total_tokens=%s",
+                payload.get("request_id", "unknown"), payload.get("attempt_number", "unknown"),
+                provider, _request_model(payload) or "unknown",
+                usage["input"], usage["output"], usage["thinking"], usage["cached"], usage["total"],
+            )
             try:
-                if provider.casefold() in {"anthropic", "claude"}:
+                if provider.casefold() in {"gemini", "google", "google-gemini"}:
+                    text = self._extract_gemini_text(body)
+                elif provider.casefold() in {"anthropic", "claude"}:
                     text = self._extract_anthropic_text(body)
                 else:
                     text = self._extract_openai_text(body)
@@ -984,6 +934,8 @@ Exactly this shape and these key names:
                 response_schema=response_schema, response_schema_name=response_schema_name,
                 max_output_tokens=max_output_tokens,
             )
+            payload["request_id"] = str(request_id)
+            payload["attempt_number"] = index + 1
             for schema_attempt in range(1):
                 try:
                     response = self._perform_json_request(llm_attempt.provider, payload)
@@ -1044,7 +996,18 @@ Exactly this shape and these key names:
                 return
             attempts.append(LLMAttempt(provider=provider, model=model, api_key=api_key, base_url=base_url))
 
-        # This is the single provider source of truth for employee generation.
+        # Gemini is the primary employee-generation provider. The dedicated
+        # script model is used for call scripts while other interview turns use
+        # the general Gemini model. Groq remains the operational fallback.
+        gemini_model = (
+            getattr(self.settings, "gemini_script_model", None)
+            if script_generation
+            else getattr(self.settings, "gemini_model", None)
+        )
+        gemini_key = getattr(self.settings, "gemini_api_key", None)
+        gemini_base_url = getattr(self.settings, "gemini_base_url", None) or "https://generativelanguage.googleapis.com/v1beta"
+        add("gemini", gemini_model, gemini_key, gemini_base_url)
+
         # Do not include generic legacy provider settings.
         groq_model = getattr(self.settings, "groq_script_model", None) if script_generation else None
         groq_model = groq_model or (DEFAULT_GROQ_SCRIPT_MODEL if script_generation else None) or getattr(self.settings, "groq_model", None)
@@ -1067,6 +1030,25 @@ Exactly this shape and these key names:
             getattr(self.settings, "groq_api_key_2", None) or groq_key,
             getattr(self.settings, "groq_base_url_2", None) or groq_base_url,
         )
+        # Keep explicitly configured supported providers working for lightweight
+        # callers and tests that expose only the resolved effective_* fields.
+        # Unknown legacy providers are intentionally ignored.
+        if not attempts:
+            resolved_provider = str(getattr(self.settings, "effective_llm_provider", "") or "").strip()
+            if resolved_provider.casefold() in {
+                "gemini", "google", "google-gemini", "groq", "openai", "open-ai", "anthropic", "claude",
+            }:
+                resolved_model = (
+                    getattr(self.settings, "effective_script_model", None)
+                    if script_generation
+                    else None
+                ) or getattr(self.settings, "effective_llm_model", None)
+                add(
+                    resolved_provider,
+                    resolved_model,
+                    getattr(self.settings, "effective_llm_api_key", None),
+                    getattr(self.settings, "effective_llm_base_url", None),
+                )
         return attempts
 
     def _repair_script_once(
@@ -1303,6 +1285,29 @@ Exactly this shape and these key names:
         max_output_tokens: int | None = None,
     ) -> dict[str, Any]:
         normalized = provider.casefold()
+        if normalized in {"gemini", "google", "google-gemini"}:
+            api_key = api_key or self.settings.gemini_api_key
+            base_url = (base_url or self.settings.gemini_base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+            output: dict[str, Any] = {"mimeType": "application/json"}
+            if response_schema:
+                output["schema"] = _gemini_schema(response_schema)
+            return {
+                "method": "POST",
+                "url": f"{base_url}/models/{model}:generateContent",
+                "headers": {
+                    "x-goog-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                "json": {
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "maxOutputTokens": max_output_tokens or 4000,
+                        "responseFormat": {"text": output},
+                    },
+                },
+            }
         if normalized in {"openai", "open-ai", "groq"}:
             api_key = api_key or self.settings.effective_llm_api_key
             base_url = (base_url or self.settings.effective_llm_base_url or "https://api.openai.com/v1").rstrip("/")
@@ -1412,7 +1417,9 @@ Exactly this shape and these key names:
                 detail="The LLM provider returned an unreadable response.",
             ) from exc
 
-        if provider.casefold() in {"anthropic", "claude"}:
+        if provider.casefold() in {"gemini", "google", "google-gemini"}:
+            text = self._extract_gemini_text(body)
+        elif provider.casefold() in {"anthropic", "claude"}:
             text = self._extract_anthropic_text(body)
         else:
             text = self._extract_openai_text(body)
@@ -1456,6 +1463,26 @@ Exactly this shape and these key names:
                 detail="The LLM provider returned no text content.",
             )
         return "\n".join(text_parts)
+
+    def _extract_gemini_text(self, body: dict[str, Any]) -> str:
+        candidates = body.get("candidates") or []
+        if not candidates:
+            feedback = body.get("promptFeedback") or {}
+            block_reason = feedback.get("blockReason") if isinstance(feedback, dict) else None
+            detail = "The Gemini provider returned no completion candidates."
+            if block_reason:
+                detail = f"The Gemini provider blocked the request ({block_reason})."
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+        content = candidates[0].get("content") or {}
+        parts = content.get("parts") or []
+        text_parts = [part.get("text", "") for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str)]
+        text = "".join(text_parts).strip()
+        if not text:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="The Gemini provider returned no text content.",
+            )
+        return text
 
     def _recover_json(self, text: str) -> dict[str, Any]:
         cleaned = text.strip()

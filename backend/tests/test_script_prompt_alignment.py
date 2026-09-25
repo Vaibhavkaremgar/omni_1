@@ -4,6 +4,20 @@ from types import SimpleNamespace
 import httpx
 
 from app.services.employee_interview import RealLLMService
+from app.services.call_script_master_prompt import CALL_SCRIPT_MASTER_SYSTEM_PROMPT
+
+
+def test_master_prompt_uses_application_json_contract_without_markdown_output():
+    prompt = CALL_SCRIPT_MASTER_SYSTEM_PROMPT
+
+    assert "UNIVERSAL OUTBOUND VOICE AGENT — MASTER SYSTEM PROMPT" in prompt
+    assert "The user gives you the objective. You design the employee." in prompt
+    assert "Return only valid JSON in exactly this top-level shape:" in prompt
+    assert "The `sections` array must contain exactly 6 objects." in prompt
+    assert '"title": "Concise English heading"' in prompt
+    assert '"questions": ["Actual spoken question"]' in prompt
+    assert "Do not wrap the JSON in Markdown fences." in prompt
+    assert "approximately **5–6 logical sections**" not in prompt
 
 
 def test_script_prompt_fills_identity_placeholders_and_uses_script_model():

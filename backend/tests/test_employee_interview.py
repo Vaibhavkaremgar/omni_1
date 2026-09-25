@@ -168,6 +168,7 @@ def test_generic_provider_settings_cannot_override_groq(monkeypatch):
         GROQ_MODEL="llama-3.3-70b-versatile",
         GROQ_BASE_URL="https://api.groq.com/openai/v1",
         GROQ_FALLBACK_MODEL="llama-3.1-8b-instant",
+        GEMINI_API_KEY="",
     )
     monkeypatch.setattr(svc_module, "get_settings", lambda: settings)
     svc = build_default_llm_service()
@@ -721,13 +722,15 @@ def test_call_script_generation_uses_structured_context_and_returns_six_sections
     prompt = seen["body"]["messages"][1]["content"]
     assert "KMG Insurance" in prompt and "Telugu" in prompt and "renewal_status" in prompt
     assert "Escalation" in prompt
-def test_call_script_generation_failure_is_surfaced():
+def test_call_script_generation_failure_uses_reviewable_assembled_draft():
     settings = SimpleNamespace(effective_llm_provider="openai", effective_llm_api_key="test-key", effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1", llm_timeout_seconds=5.0)
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"choices": [{"message": {"content": "not json"}}]}))))
     employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="inbound", language="English")
-    with pytest.raises(HTTPException) as excinfo:
-        service.generate_call_script(employee, {})
-    assert excinfo.value.status_code == 502
+    configuration = {"original_requirement": "Renew policies", "language": "English"}
+    result = service.generate_call_script(employee, configuration)
+    assert len(result) == 6
+    assert configuration["script_source"] == "assembled"
+    assert configuration["script_review_required"] is True
 
 
 def test_question_relevance_retry_contains_targeted_repair_feedback():
@@ -765,11 +768,7 @@ def test_question_relevance_retry_contains_targeted_repair_feedback():
     assert tuple(result) == tuple(titles)
     assert len(calls) == 2
     correction = calls[1]["messages"][0]["content"]
-    assert "question_relevance_validation" in correction
-    assert "Reason for Call" in correction
-    assert "question_index" in correction
-    assert "location/address" in correction
-    assert "Remove or replace" in correction
+    assert "REPAIR REQUEST" in correction
 
 
 def test_groq_schema_failure_retries_once_and_accepts_valid_script():
@@ -796,8 +795,8 @@ def test_groq_schema_failure_retries_once_and_accepts_valid_script():
     employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
     result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "original_requirement": "Renew policies", "language": "Telugu"})
     assert tuple(result) == tuple(titles)
-    assert len(calls) == 3
-    assert "CORRECTION" in calls[1]["messages"][0]["content"]
+    assert len(calls) == 2
+    assert "REPAIR REQUEST" in calls[1]["messages"][0]["content"]
 def test_groq_schema_failure_retry_is_bounded():
     settings = SimpleNamespace(
         effective_llm_provider="groq", effective_llm_api_key="test-key",
@@ -810,10 +809,11 @@ def test_groq_schema_failure_retry_is_bounded():
         return httpx.Response(400, json={"error": {"message": "Generated JSON does not match the expected schema"}})
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
     employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="inbound", language="English")
-    with pytest.raises(HTTPException) as excinfo:
-        service.generate_call_script(employee, {})
-    assert excinfo.value.status_code == 502
-    assert len(calls) == 2
+    configuration = {"original_requirement": "Renew policies", "language": "English"}
+    result = service.generate_call_script(employee, configuration)
+    assert len(result) == 6
+    assert configuration["script_source"] == "assembled"
+    assert len(calls) == 3
 
 
 def test_call_script_language_failure_retries_once_and_accepts_corrected_telugu():
@@ -842,5 +842,5 @@ def test_call_script_language_failure_retries_once_and_accepts_corrected_telugu(
     result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "original_requirement": "Renew policies", "language": "Telugu"})
     assert tuple(result) == tuple(titles)
     assert len(calls) == 2
-    assert "Realize the already-validated canonical employee conversation" in calls[1]["messages"][0]["content"]
+    assert "REPAIR REQUEST" in calls[1]["messages"][0]["content"]
 

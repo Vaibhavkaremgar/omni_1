@@ -37,7 +37,6 @@ from app.services.voice_recommendations import recommend_voices
 from app.services.employee_templates import template_library, render_template, get_template
 from app.services.employee_prompt import compose_employee_configuration
 from app.services.script_language_validation import (
-    assert_customer_facing_script_language,
     extract_call_script_from_prompt,
     validation_summary,
 )
@@ -179,14 +178,6 @@ def _ensure_draft(employee: AIEmployee, current_user: AuthenticatedUser) -> AIEm
 def _validate_publish(employee: AIEmployee, draft: AIEmployeeVersion | None) -> None:
     if draft is None or not isinstance(draft.configuration, dict):
         raise HTTPException(status_code=422, detail="A draft configuration is required before publishing")
-    if draft.configuration.get("script_source") == "assembled" and not draft.configuration.get("final_prompt_overridden"):
-        raise HTTPException(
-            status_code=422,
-            detail="The model could not produce a context-specific call script. Regenerate it or review and complete all six spoken sections before publishing.",
-        )
-    if draft.configuration.get("assembled_source_context") and draft.configuration.get("script_source") == "reviewed":
-        if not _has_six_spoken_examples(draft.configuration):
-            raise HTTPException(status_code=422, detail="Complete a spoken example in each of the six sections before publishing this reviewed draft.")
     required = ("name", "llm_provider", "llm_model", "language", "call_type")
     missing = [field for field in required if not str(draft.configuration.get(field, "")).strip()]
     if not str(draft.configuration.get("purpose", "")).strip() and not str(draft.configuration.get("direct_prompt", "")).strip() and not str(draft.configuration.get("final_prompt", "")).strip():
@@ -198,33 +189,18 @@ def _validate_publish(employee: AIEmployee, draft: AIEmployeeVersion | None) -> 
     script = draft.configuration.get("call_script") or {}
     if len(script) != 6 or not all(isinstance(v, str) and v.strip() for v in script.values()):
         raise HTTPException(422, "Generate an employee prompt before publishing")
-    _validate_script_language_or_422(draft.configuration)
+    _record_script_language_validation(draft.configuration)
 
 
-def _validate_script_language_or_422(configuration: dict) -> None:
-    if configuration.get("conversation_design"):
-        script = configuration.get("call_script") or {}
-        if len(script) != 6 or not all(isinstance(v, str) and v.strip() for v in script.values()):
-            raise HTTPException(422, "Exactly six populated employee sections are required")
-        summary = validation_summary(configuration)
-        if not summary["valid"]:
-            raise HTTPException(422, detail={"message": "Spoken language validation failed", "validation": summary})
-        return
-    # Configuration fields (business name, purpose, requirement, etc.) are
-    # owner-authored context and may be written in any language. Only validate
-    # when a customer-facing script has actually been supplied/generated.
-    call_script = configuration.get("call_script") if isinstance(configuration.get("call_script"), dict) else {}
-    has_spoken_script = any(str(value or "").strip() for value in call_script.values())
-    if not has_spoken_script and not (configuration.get("final_prompt_overridden") and str(configuration.get("final_prompt") or "").strip()):
-        return
-    assert_customer_facing_script_language(
-        call_script,
-        str(configuration.get("language") or "English"),
-    )
-    if configuration.get("final_prompt_overridden") and str(configuration.get("final_prompt") or "").strip():
-        prompt_script = extract_call_script_from_prompt(str(configuration.get("final_prompt") or ""))
-        if prompt_script:
-            assert_customer_facing_script_language(prompt_script, str(configuration.get("language") or "English"))
+def _record_script_language_validation(configuration: dict) -> None:
+    """Record script-quality findings for review without blocking save/publish."""
+    summary = validation_summary(configuration)
+    configuration["script_language_validation"] = summary
+    if not summary["valid"]:
+        logger.warning(
+            "Employee script has advisory language warnings language=%s issue_count=%d",
+            summary.get("language"), len(summary.get("issues") or []),
+        )
 
 
 def _has_customer_script(configuration: dict) -> bool:
@@ -581,7 +557,7 @@ def update_employee(
     draft.configuration = compose_employee_configuration(_apply_final_prompt_override_to_call_script(draft.configuration))
     needs_review = bool(draft.configuration.get("assembled_source_context")) and not _has_six_spoken_examples(draft.configuration)
     if had_customer_script and draft.configuration.get("script_source") != "assembled" and not needs_review:
-        _validate_script_language_or_422(draft.configuration)
+        _record_script_language_validation(draft.configuration)
     normalize_employee_llm_configuration(employee, draft)
     for field in ("name", "purpose", "call_type", "language", "creation_mode"):
         if field in draft.configuration:
@@ -634,10 +610,14 @@ def generate_employee_script(
         raise HTTPException(status_code=422, detail="Selected language is not supported for employee script generation")
     configuration = ensure_business_research(configuration)
     generated_script = RealLLMService().generate_call_script(employee, configuration)
-    draft.configuration = compose_employee_configuration({
+    composed = compose_employee_configuration({
         **configuration, "call_script": generated_script, "conversation_sections": configuration.get("conversation_sections"),
         "spoken_script_generated": True, "conversation_design": None,
     })
+    draft.configuration = {
+        **composed,
+        "script_language_validation": validation_summary(composed),
+    }
     draft.reviewed_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(draft)

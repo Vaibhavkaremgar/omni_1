@@ -242,7 +242,7 @@ def test_publish_preserves_valid_persisted_internal_configuration(employee_datab
         app.dependency_overrides.clear()
 
 
-def test_manual_telugu_roman_script_save_is_blocked(employee_database, monkeypatch):
+def test_manual_telugu_roman_script_save_returns_review_warning(employee_database, monkeypatch):
     db, _, _ = employee_database
     monkeypatch.setattr(employee_endpoint, "get_settings", lambda: SimpleNamespace(effective_llm_provider="groq", effective_llm_model="openai/gpt-oss-20b"))
     client = client_for(db, "employee-user-a", monkeypatch)
@@ -258,11 +258,10 @@ def test_manual_telugu_roman_script_save_is_blocked(employee_database, monkeypat
                 json={"configuration": {"language": "Telugu", "call_script": roman_script}},
                 headers={"Authorization": "Bearer a"},
             )
-            assert response.status_code == 422
-            detail = response.json()["detail"]
-            assert detail["message"] == "Telugu script validation failed"
-            assert detail["validation"]["valid"] is False
-            assert any(issue["type"] == "romanized_language" for issue in detail["validation"]["issues"])
+            assert response.status_code == 200
+            validation = response.json()["configuration"]["script_language_validation"]
+            assert validation["valid"] is False
+            assert any(issue["type"] == "romanized_language" for issue in validation["issues"])
     finally:
         app.dependency_overrides.clear()
 
@@ -319,8 +318,8 @@ def test_publish_upgrades_the_legacy_assembled_telugu_fallback(employee_database
     try:
         with client:
             published = client.post(f"/api/v1/employees/{employee.id}/publish", headers={"Authorization": "Bearer a"})
-        assert published.status_code == 422, published.json()
-        assert "Regenerate" in str(published.json()["detail"])
+        assert published.status_code == 200, published.json()
+        assert published.json()["configuration"]["script_language_validation"]["valid"] is False
     finally:
         app.dependency_overrides.clear()
 
@@ -338,19 +337,25 @@ def test_browser_cannot_relabel_an_assembled_draft_as_reviewed(employee_database
     config["call_script"] = render_call_script_sections(RealLLMService._assemble_script_sections(config, "English", "outbound", config))
     db.add(AIEmployeeVersion(tenant_id=tenant_a.id, employee_id=employee.id, version_number=1, status="draft", configuration=config))
     db.commit()
+    monkeypatch.setattr(
+        employee_endpoint,
+        "agent_service",
+        SimpleNamespace(synchronize=lambda *_: SimpleNamespace(provider_id="draft-agent", status="Completed", metadata={})),
+    )
     client = client_for(db, "employee-user-a", monkeypatch)
     try:
         with client:
             response = client.patch(f"/api/v1/employees/{employee.id}", json={"configuration": {"script_source": "reviewed", "script_review_required": False}}, headers={"Authorization": "Bearer a"})
             assert response.status_code == 200, response.json()
             assert response.json()["configuration"]["script_source"] == "assembled"
-            blocked = client.post(f"/api/v1/employees/{employee.id}/publish", headers={"Authorization": "Bearer a"})
-            assert blocked.status_code == 422
+            published = client.post(f"/api/v1/employees/{employee.id}/publish", headers={"Authorization": "Bearer a"})
+            assert published.status_code == 200
+            assert published.json()["configuration"]["script_source"] == "assembled"
     finally:
         app.dependency_overrides.clear()
 
 
-def test_publish_blocks_invalid_hindi_script_before_provider_sync(employee_database, monkeypatch):
+def test_publish_allows_invalid_hindi_script_with_warning(employee_database, monkeypatch):
     db, tenant_a, _ = employee_database
     employee = AIEmployee(
         tenant_id=tenant_a.id,
@@ -384,14 +389,17 @@ def test_publish_blocks_invalid_hindi_script_before_provider_sync(employee_datab
     ))
     db.commit()
     called = {"provider": False}
-    monkeypatch.setattr(employee_endpoint, "agent_service", SimpleNamespace(synchronize=lambda *_: called.__setitem__("provider", True)))
+    def synchronize(*_):
+        called["provider"] = True
+        return SimpleNamespace(provider_id="hindi-agent", status="Completed", metadata={})
+    monkeypatch.setattr(employee_endpoint, "agent_service", SimpleNamespace(synchronize=synchronize))
     client = client_for(db, "employee-user-a", monkeypatch)
     try:
         with client:
             response = client.post(f"/api/v1/employees/{employee.id}/publish", headers={"Authorization": "Bearer a"})
-            assert response.status_code == 422
-            assert response.json()["detail"]["message"] == "Hindi script validation failed"
-            assert called["provider"] is False
+            assert response.status_code == 200
+            assert response.json()["configuration"]["script_language_validation"]["valid"] is False
+            assert called["provider"] is True
     finally:
         app.dependency_overrides.clear()
 

@@ -43,30 +43,31 @@ class Settings(BaseSettings):
     groq_model_2: str | None = Field(default=None, validation_alias="GROQ_MODEL_2")
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash-lite", validation_alias="GEMINI_MODEL")
+    gemini_script_model: str = Field(default="gemini-3.6-flash", validation_alias="GEMINI_SCRIPT_MODEL")
     gemini_base_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta", validation_alias="GEMINI_BASE_URL")
     gemini_research_timeout_seconds: float = Field(default=30.0, validation_alias="GEMINI_RESEARCH_TIMEOUT_SECONDS")
 
     @property
     def effective_llm_provider(self) -> str | None:
-        # Employee generation is intentionally Groq-only. Generic legacy LLM
-        # settings must never select another provider implicitly.
-        return "groq" if self.groq_api_key else None
+        # Gemini is primary for employee generation; Groq remains the
+        # operational fallback when Gemini is unavailable.
+        return "gemini" if self.gemini_api_key else "groq" if self.groq_api_key else None
 
     @property
     def effective_llm_api_key(self) -> str | None:
-        return self.groq_api_key
+        return self.gemini_api_key or self.groq_api_key
 
     @property
     def effective_llm_model(self) -> str | None:
-        return self.groq_model
+        return self.gemini_script_model if self.gemini_api_key else self.groq_model
 
     @property
     def effective_script_model(self) -> str | None:
-        return self.groq_script_model or self.groq_model
+        return self.gemini_script_model if self.gemini_api_key else self.groq_script_model or self.groq_model
 
     @property
     def effective_llm_base_url(self) -> str | None:
-        return self.groq_base_url
+        return self.gemini_base_url if self.gemini_api_key else self.groq_base_url
 
     @property
     def groq_fallback_model_resolved(self) -> str | None:
@@ -76,14 +77,18 @@ class Settings(BaseSettings):
     @property
     def employee_llm_configuration_error(self) -> str | None:
         missing = []
+        if not str(self.gemini_api_key or "").strip():
+            missing.append("GEMINI_API_KEY")
+        if not str(self.gemini_base_url or "").strip():
+            missing.append("GEMINI_BASE_URL")
+        if not str(self.gemini_script_model or "").strip():
+            missing.append("GEMINI_SCRIPT_MODEL")
         if not str(self.groq_api_key or "").strip():
             missing.append("GROQ_API_KEY")
         if not str(self.groq_base_url or "").strip():
             missing.append("GROQ_BASE_URL")
-        if not str(self.groq_model or "").strip():
-            missing.append("GROQ_MODEL")
-        if not str(self.groq_fallback_model_resolved or "").strip():
-            missing.append("GROQ_FALLBACK_MODEL (or legacy GROQ_MODEL_2)")
+        if not str(self.groq_script_model or self.groq_model or "").strip():
+            missing.append("GROQ_SCRIPT_MODEL (or GROQ_MODEL)")
         return f"Employee LLM configuration is incomplete: missing {', '.join(missing)}." if missing else None
     omnidimension_api_key: str | None = Field(default=None, validation_alias="OMNIDIMENSION_API_KEY")
     omnidimension_base_url: str = Field(

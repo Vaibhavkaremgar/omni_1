@@ -1,4 +1,5 @@
 import json
+import logging
 from types import SimpleNamespace
 
 import httpx
@@ -16,6 +17,9 @@ REQUIREMENT = "You should invite my contact list for my wedding. Vaibhav and Mus
 
 def llm_settings(**overrides):
     values = {
+        "gemini_api_key": None, "gemini_model": "gemini-2.5-flash-lite",
+        "gemini_script_model": "gemini-3.6-flash",
+        "gemini_base_url": "https://generativelanguage.googleapis.com/v1beta",
         "groq_api_key": "test-key", "groq_base_url": "https://api.groq.com/openai/v1",
         "groq_model": "openai/gpt-oss-20b", "groq_script_model": "openai/gpt-oss-120b", "groq_fallback_model": "llama-3.3-70b-versatile",
         "groq_api_key_2": None, "groq_base_url_2": None,
@@ -153,6 +157,23 @@ def test_invalid_primary_language_uses_bounded_fallback_correction():
     assert len(result) == 6 and calls == ["openai/gpt-oss-120b", "openai/gpt-oss-120b"]
 
 
+def test_persistent_content_warnings_are_returned_for_review_instead_of_discarding_script():
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(response("English"))}}]})
+
+    service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
+    config = {"original_requirement": REQUIREMENT, "language": "Telugu", "call_type": "outbound"}
+    result = generate(service, language="Telugu", config=config)
+
+    assert len(result) == 6
+    assert calls == ["openai/gpt-oss-120b", "openai/gpt-oss-120b"]
+    assert config["script_source"] == "model"
+    assert config["script_generation_warnings"]
+
+
 @pytest.mark.parametrize("language,codepoint", [("Telugu", 0x0C00), ("Hindi", 0x0900)])
 def test_regional_language_output_uses_native_script(language, codepoint):
     service, _ = service_for(language=language)
@@ -165,11 +186,86 @@ def test_legacy_provider_configuration_cannot_select_employee_generation():
     assert service._configured_llm_attempts() == []
 
 
-def test_production_configuration_reports_missing_fallback_without_exposing_secrets():
-    settings = Settings(GROQ_API_KEY="configured", GROQ_MODEL="openai/gpt-oss-20b", GROQ_BASE_URL="https://api.groq.com/openai/v1", GROQ_FALLBACK_MODEL="", ENVIRONMENT="development")
-    assert settings.employee_llm_configuration_error == "Employee LLM configuration is incomplete: missing GROQ_FALLBACK_MODEL (or legacy GROQ_MODEL_2)."
-    legacy = Settings(GROQ_API_KEY="configured", GROQ_MODEL="openai/gpt-oss-20b", GROQ_MODEL_2="legacy-fallback", ENVIRONMENT="development")
-    assert legacy.employee_llm_configuration_error is None
+def test_configuration_requires_gemini_primary_and_groq_fallback_without_exposing_secrets():
+    settings = Settings(GEMINI_API_KEY="", GROQ_API_KEY="configured", GROQ_MODEL="openai/gpt-oss-20b", GROQ_BASE_URL="https://api.groq.com/openai/v1", GROQ_FALLBACK_MODEL="", ENVIRONMENT="development")
+    assert settings.employee_llm_configuration_error == "Employee LLM configuration is incomplete: missing GEMINI_API_KEY."
+    complete = Settings(GEMINI_API_KEY="gemini-configured", GEMINI_SCRIPT_MODEL="gemini-3.6-flash", GROQ_API_KEY="groq-configured", GROQ_MODEL="openai/gpt-oss-20b", ENVIRONMENT="development")
+    assert complete.employee_llm_configuration_error is None
+    assert complete.effective_llm_provider == "gemini"
+    assert complete.effective_script_model == "gemini-3.6-flash"
+
+
+def test_gemini_is_primary_and_receives_only_system_and_user_prompts(caplog):
+    captured = []
+    caplog.set_level(logging.INFO, logger="app.services.employee_interview")
+
+    def handler(request):
+        body = json.loads(request.content)
+        captured.append((str(request.url), body))
+        return httpx.Response(200, json={
+            "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps(response())}]}}],
+            "usageMetadata": {
+                "promptTokenCount": 6226, "candidatesTokenCount": 716,
+                "thoughtsTokenCount": 384, "cachedContentTokenCount": 0,
+                "totalTokenCount": 7326,
+            },
+        })
+
+    settings = llm_settings(
+        gemini_api_key="gemini-key",
+        effective_llm_provider="gemini",
+        effective_llm_api_key="gemini-key",
+        effective_llm_model="gemini-3.6-flash",
+        effective_llm_base_url="https://generativelanguage.googleapis.com/v1beta",
+    )
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
+
+    assert len(generate(service, config=config)) == 6
+    assert len(captured) == 1
+    url, body = captured[0]
+    assert url.endswith("/models/gemini-3.6-flash:generateContent")
+    assert set(body) == {"systemInstruction", "contents", "generationConfig"}
+    system_prompt = body["systemInstruction"]["parts"][0]["text"]
+    user_prompt = body["contents"][0]["parts"][0]["text"]
+    assert "UNIVERSAL OUTBOUND VOICE AGENT" in system_prompt
+    assert "{{USER_CONTEXT}}" not in system_prompt
+    assert json.loads(user_prompt)["USER_CONTEXT"]["original_requirement"] == REQUIREMENT
+    assert body["generationConfig"]["responseFormat"]["text"]["mimeType"] == "application/json"
+    assert "schema" in body["generationConfig"]["responseFormat"]["text"]
+    assert "input_tokens=6226 output_tokens=716 thinking_tokens=384 cached_tokens=0 total_tokens=7326" in caplog.text
+    assert "request_count=1 retry_count=0" in caplog.text
+
+
+def test_groq_is_used_only_after_two_gemini_failures(caplog):
+    calls = []
+    caplog.set_level(logging.INFO, logger="app.services.employee_interview")
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append((str(request.url), body.get("model")))
+        if "generativelanguage.googleapis.com" in str(request.url):
+            return httpx.Response(503, json={"error": {"message": "temporary"}})
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps(response())}}],
+            "usage": {"prompt_tokens": 6300, "completion_tokens": 800, "total_tokens": 7100},
+        })
+
+    settings = llm_settings(
+        gemini_api_key="gemini-key",
+        effective_llm_provider="gemini",
+        effective_llm_api_key="gemini-key",
+        effective_llm_model="gemini-3.6-flash",
+        effective_llm_base_url="https://generativelanguage.googleapis.com/v1beta",
+    )
+    service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    assert len(generate(service)) == 6
+    assert [model for _, model in calls] == [None, None, "openai/gpt-oss-120b"]
+    assert all("generativelanguage.googleapis.com" in url for url, _ in calls[:2])
+    assert "api.groq.com" in calls[2][0]
+    assert "request_count=3 retry_count=2" in caplog.text
+    assert "provider=groq model=openai/gpt-oss-120b input_tokens=6300 output_tokens=800" in caplog.text
 
 
 def test_groq_request_contract_matches_validator_and_prompt():
@@ -208,7 +304,7 @@ def test_malformed_section_reports_exact_index_field_and_type_without_content():
     assert config["script_source"] == "model"
 
 
-def test_schema_400_repair_then_json_object_then_assembled_ladder():
+def test_schema_400_retries_primary_then_uses_strict_groq_fallback():
     calls = []
 
     def handler(request):
@@ -220,7 +316,7 @@ def test_schema_400_repair_then_json_object_then_assembled_ladder():
     service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
     config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
     assert len(generate(service, config=config)) == 6
-    assert calls == ["json_schema", "json_schema", "json_object"]
+    assert calls == ["json_schema", "json_schema", "json_schema"]
     assert config["script_source"] == "model"
 
 
