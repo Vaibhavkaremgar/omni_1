@@ -25,7 +25,9 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-OMNI_LIVE_MODEL = "gpt-4.1-mini"
+# Omni live-call agent model.  Keep this independent from the build-time
+# script-generation model; Flash-Lite is the lower-latency Gemini option.
+OMNI_LIVE_MODEL = "gemini-2.5-flash-lite"
 
 
 @dataclass(frozen=True)
@@ -267,9 +269,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         # contact value: each call supplies its own value in call_context.
         "dynamic_variables": {"name": ""},
         "context_breakdown": context,
-        # Omni's live voice agent uses OpenAI. Script-generation providers are
-        # separate and must never leak into the live call-agent configuration.
-        # Keep responses deterministic for concise, low-variance call turns.
+        # Script-generation providers are separate; Omni receives the explicit
+        # Gemini live-call model configured above for low-latency turns.
         "model": {"model": OMNI_LIVE_MODEL, "temperature": 0.1},
         "languages": [lang],
         "post_call_actions": post_call_actions,
