@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     groq_model_2: str | None = Field(default=None, validation_alias="GROQ_MODEL_2")
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash-lite", validation_alias="GEMINI_MODEL")
-    gemini_script_model: str = Field(default="gemini-3.6-flash", validation_alias="GEMINI_SCRIPT_MODEL")
+    gemini_script_model: str = Field(default="gemini-3.5-flash-lite", validation_alias="GEMINI_SCRIPT_MODEL")
     gemini_fallback_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_FALLBACK_MODEL")
     gemini_base_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta", validation_alias="GEMINI_BASE_URL")
     gemini_research_timeout_seconds: float = Field(default=30.0, validation_alias="GEMINI_RESEARCH_TIMEOUT_SECONDS")
