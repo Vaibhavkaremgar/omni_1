@@ -16,9 +16,11 @@ from app.models.campaign_execution_slot import CampaignExecutionSlot
 from app.models.enums import CallStatus, CampaignStatus, ContactStatus, EmployeeStatus, NumberStatus
 from app.services.campaign_execution import (
     CampaignExecutionService,
+    _update_campaign_progress,
     poll_campaign_active_calls,
     recover_stale_contacts,
     recover_stale_slots,
+    release_campaign_slot,
 )
 from app.services.campaign_scheduler import CampaignScheduler
 from app.integrations.omnidimension.exceptions import OmniDimensionNetworkError
@@ -78,9 +80,10 @@ def polling_db():
 
 
 class FakeOmniProvider:
-    def __init__(self, statuses: list[str] | None = None, *, fail_poll: bool = False):
+    def __init__(self, statuses: list[str] | None = None, *, fail_poll: bool = False, use_bulk: bool = True):
         self.statuses = list(statuses or [])
         self.fail_poll = fail_poll
+        self.use_bulk = use_bulk
         self.dispatches: list[str] = []
         self.live_checks = 0
         self.line_checks = 0
@@ -91,7 +94,7 @@ class FakeOmniProvider:
         return SimpleNamespace(
             provider_call_id=None,
             provider_request_id=f"bulk-{number}",
-            provider_bulk_call_id=f"bulk-{number}",
+            provider_bulk_call_id=f"bulk-{number}" if self.use_bulk else None,
             provider_line_id=None,
             status="queued",
         )
@@ -108,8 +111,16 @@ class FakeOmniProvider:
         return [{
             "line_id": f"line-{bulk_call_id}",
             "call_id": f"call-{bulk_call_id}",
+            "call_request_id": bulk_call_id,
             "call_status": status,
         }]
+
+    def get_call_log_by_request_id(self, request_id):
+        self.line_checks += 1
+        if self.fail_poll:
+            raise OmniDimensionNetworkError("offline")
+        status = self.statuses.pop(0) if self.statuses else "in_progress"
+        return {"id": f"call-{request_id}", "call_request_id": {"id": request_id}, "call_status": status}
 
 
 def install_provider(monkeypatch, provider: FakeOmniProvider):
@@ -159,6 +170,9 @@ def test_start_poll_complete_then_start_next_contact(polling_db, monkeypatch):
         ("failed", ContactStatus.failed.value),
         ("busy", ContactStatus.busy.value),
         ("no-answer", ContactStatus.no_answer.value),
+        ("voicemail_detected", ContactStatus.voicemail.value),
+        ("cancelled", ContactStatus.cancelled.value),
+        ("skipped", ContactStatus.skipped.value),
     ],
 )
 def test_terminal_failure_status_releases_slot_and_next_contact_starts(
@@ -227,6 +241,54 @@ def test_worker_restart_polls_existing_active_call_without_redispatch(polling_db
     assert len(provider.dispatches) == 1
 
 
+def test_standalone_dispatch_polls_call_logs_without_using_bulk_endpoints(polling_db, monkeypatch):
+    db, tenant, campaign, contacts = polling_db
+    provider = FakeOmniProvider(["completed"], use_bulk=False)
+    install_provider(monkeypatch, provider)
+    call = CampaignExecutionService().dispatch_next_pending(db, campaign.id, tenant.id)
+
+    assert contacts[0].provider_request_id == "bulk-1"
+    assert contacts[0].provider_bulk_call_id is None
+    assert poll_campaign_active_calls(db, campaign) == 1
+    assert contacts[0].status == ContactStatus.completed.value
+    assert provider.live_checks == 0
+    assert provider.line_checks == 1
+    assert contacts[0].provider_call_id == "call-bulk-1"
+    assert call.dispatch_metadata["terminal_status_source"] == "call_log_status_poll"
+
+
+def test_multiple_bulk_lines_match_exact_request_id_not_first_line(polling_db, monkeypatch):
+    db, tenant, campaign, contacts = polling_db
+    provider = FakeOmniProvider()
+    provider.get_bulk_call_lines = lambda bulk_call_id: [
+        {"id": "wrong-line", "call_request_id": "other", "to_number": contacts[1].phone_number, "call_status": "failed"},
+        {"id": "right-line", "call_request_id": bulk_call_id, "to_number": contacts[0].phone_number, "call_status": "completed"},
+    ]
+    install_provider(monkeypatch, provider)
+    CampaignExecutionService().dispatch_next_pending(db, campaign.id, tenant.id)
+
+    assert poll_campaign_active_calls(db, campaign) == 1
+    assert contacts[0].status == ContactStatus.completed.value
+    assert contacts[0].provider_line_id == "right-line"
+
+
+def test_ambiguous_phone_fallback_keeps_slot_and_does_not_advance(polling_db, monkeypatch):
+    db, tenant, campaign, contacts = polling_db
+    provider = FakeOmniProvider()
+    provider.get_bulk_call_lines = lambda _bulk_call_id: [
+        {"id": "line-a", "to_number": contacts[0].phone_number, "call_status": "completed"},
+        {"id": "line-b", "to_number": contacts[0].phone_number, "call_status": "completed"},
+    ]
+    install_provider(monkeypatch, provider)
+    service = CampaignExecutionService()
+    service.dispatch_next_pending(db, campaign.id, tenant.id)
+
+    assert poll_campaign_active_calls(db, campaign) == 0
+    assert contacts[0].status == ContactStatus.in_progress.value
+    assert len(active_slots(db, campaign)) == 1
+    assert service.dispatch_next_pending(db, campaign.id, tenant.id) is None
+    assert len(provider.dispatches) == 1
+
 def test_duplicate_workers_never_create_two_active_calls(polling_db, monkeypatch):
     db, tenant, campaign, _contacts = polling_db
     provider = FakeOmniProvider()
@@ -239,6 +301,33 @@ def test_duplicate_workers_never_create_two_active_calls(polling_db, monkeypatch
     assert first is not None
     assert second is None
     assert len(provider.dispatches) == 1
+    assert len(active_slots(db, campaign)) == 1
+
+
+def test_two_sessions_observing_completion_only_dispatch_one_next_call(polling_db, monkeypatch):
+    db, tenant, campaign, contacts = polling_db
+    provider = FakeOmniProvider(["completed"])
+    install_provider(monkeypatch, provider)
+    CampaignExecutionService().dispatch_next_pending(db, campaign.id, tenant.id)
+    assert poll_campaign_active_calls(db, campaign) == 1
+
+    Session = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+    worker_a_db = Session()
+    worker_b_db = Session()
+    try:
+        # Both workers load the same durable post-completion state before either
+        # attempts to reserve the one campaign execution slot.
+        worker_a_db.get(Campaign, campaign.id)
+        worker_b_db.get(Campaign, campaign.id)
+        assert CampaignExecutionService().dispatch_next_pending(worker_a_db, campaign.id, tenant.id) is not None
+        assert CampaignExecutionService().dispatch_next_pending(worker_b_db, campaign.id, tenant.id) is None
+    finally:
+        worker_a_db.close()
+        worker_b_db.close()
+
+    assert len(provider.dispatches) == 2
+    db.refresh(contacts[1])
+    assert contacts[1].status == ContactStatus.in_progress.value
     assert len(active_slots(db, campaign)) == 1
 
 
@@ -280,6 +369,26 @@ def test_campaign_completes_only_after_last_contact_is_terminal(polling_db, monk
 
     assert campaign.status == CampaignStatus.running.value
     assert poll_campaign_active_calls(db, campaign) == 1
+    assert campaign.status == CampaignStatus.completed.value
+
+
+def test_campaign_does_not_complete_while_call_or_slot_is_active(polling_db, monkeypatch):
+    db, tenant, campaign, contacts = polling_db
+    db.delete(contacts[1])
+    db.commit()
+    provider = FakeOmniProvider()
+    install_provider(monkeypatch, provider)
+    call = CampaignExecutionService().dispatch_next_pending(db, campaign.id, tenant.id)
+
+    contacts[0].status = ContactStatus.completed.value
+    _update_campaign_progress(db, campaign)
+    db.commit()
+    assert campaign.status == CampaignStatus.running.value
+
+    call.status = CallStatus.completed.value
+    release_campaign_slot(db, call_id=call.id)
+    _update_campaign_progress(db, campaign)
+    db.commit()
     assert campaign.status == CampaignStatus.completed.value
 
 

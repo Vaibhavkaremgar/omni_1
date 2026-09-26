@@ -166,7 +166,7 @@ TERMINAL_CALL_STATUSES = {
 
 
 def _update_campaign_progress(db: Session, campaign: Campaign) -> None:
-    """Transition campaign to completed if all contacts are terminal."""
+    """Complete only when every contact is terminal and no call/slot is active."""
     if campaign.status not in {CampaignStatus.running.value, CampaignStatus.paused.value, CampaignStatus.paused_credits.value}:
         return
     contacts = db.scalars(
@@ -174,7 +174,19 @@ def _update_campaign_progress(db: Session, campaign: Campaign) -> None:
     ).all()
     if not contacts:
         return
-    if all(c.status in TERMINAL_CONTACT_STATUSES for c in contacts):
+    active_call = db.scalar(select(Call.id).where(
+        Call.campaign_id == campaign.id,
+        Call.status.in_(ACTIVE_CALL_STATUSES),
+    ))
+    active_slot = db.scalar(select(CampaignExecutionSlot.id).where(
+        CampaignExecutionSlot.campaign_id == campaign.id,
+        CampaignExecutionSlot.released_at.is_(None),
+    ))
+    if (
+        all(c.status in TERMINAL_CONTACT_STATUSES for c in contacts)
+        and active_call is None
+        and active_slot is None
+    ):
         campaign.status = CampaignStatus.completed.value
         campaign.ends_at = utc_now()
 
@@ -441,7 +453,7 @@ def dispatch_single_contact(
         raise
 
     provider_request_id = getattr(result, "provider_request_id", None)
-    provider_bulk_call_id = getattr(result, "provider_bulk_call_id", None) or provider_request_id
+    provider_bulk_call_id = getattr(result, "provider_bulk_call_id", None)
     provider_line_id = getattr(result, "provider_line_id", None)
     call.provider_call_id = result.provider_call_id
     call.dispatch_metadata = {
@@ -492,24 +504,69 @@ def _line_identifier(line: dict, keys: tuple[str, ...]) -> str | None:
     return str(value) if value not in (None, "") else None
 
 
-def _select_contact_line(contact: CampaignContact, call: Call, lines: list[dict]) -> dict | None:
-    """Select an exact provider line; a single-line dispatch is unambiguous."""
-    if len(lines) == 1:
-        return lines[0]
-    matches: list[dict] = []
-    for line in lines:
-        line_id = _line_identifier(line, ("line_id", "lineId", "bulk_call_line_id", "bulkCallLineId"))
-        call_id = _line_identifier(line, ("call_id", "callId", "call_log_id", "callLogId"))
-        local_call_id = _line_identifier(line, ("local_call_id",))
-        contact_id = _line_identifier(line, ("campaign_contact_id", "contact_id"))
-        if (
-            (contact.provider_line_id and line_id == str(contact.provider_line_id))
-            or (contact.provider_call_id and call_id == str(contact.provider_call_id))
-            or local_call_id == str(call.id)
-            or contact_id == str(contact.id)
-        ):
-            matches.append(line)
+def _request_identifier(line: dict) -> str | None:
+    value = _nested_value(line, ("call_request_id", "requestId", "request_id"))
+    if isinstance(value, dict):
+        value = value.get("id")
+    return str(value) if value not in (None, "", False) else None
+
+
+def _normalized_phone(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    digits = "".join(character for character in text if character.isdigit())
+    return digits or None
+
+
+def _unique_line_match(lines: list[dict], predicate) -> dict | None:
+    matches = [line for line in lines if predicate(line)]
     return matches[0] if len(matches) == 1 else None
+
+
+def _select_contact_line(contact: CampaignContact, call: Call, lines: list[dict]) -> dict | None:
+    """Match one provider line using identifiers in descending strength."""
+    if contact.provider_line_id:
+        match = _unique_line_match(lines, lambda line: _line_identifier(
+            line, ("line_id", "lineId", "bulk_call_line_id", "bulkCallLineId", "id")
+        ) == str(contact.provider_line_id))
+        if match is not None:
+            return match
+    provider_call_id = contact.provider_call_id or call.provider_call_id
+    if provider_call_id:
+        match = _unique_line_match(lines, lambda line: _line_identifier(
+            line, ("call_id", "callId", "call_log_id", "callLogId")
+        ) == str(provider_call_id))
+        if match is not None:
+            return match
+    if contact.provider_request_id:
+        match = _unique_line_match(
+            lines,
+            lambda line: _request_identifier(line) == str(contact.provider_request_id),
+        )
+        if match is not None:
+            return match
+    match = _unique_line_match(lines, lambda line: (
+        _line_identifier(line, ("local_call_id",)) == str(call.id)
+        or _line_identifier(line, ("campaign_contact_id", "contact_id")) == str(contact.id)
+    ))
+    if match is not None:
+        return match
+    expected_phone = _normalized_phone(contact.normalized_phone or contact.phone_number)
+    if expected_phone:
+        return _unique_line_match(lines, lambda line: _normalized_phone(
+            _nested_value(line, ("to_number", "toNumber", "phone_number", "phoneNumber"))
+        ) == expected_phone)
+    return None
+
+
+def _call_log_status_record(provider: OmniDimensionCallProvider, contact: CampaignContact, call: Call) -> dict | None:
+    """Resolve a standalone dispatch through its call log without treating requestId as a bulk ID."""
+    if contact.provider_call_id or call.provider_call_id:
+        return provider.get_call_log(str(contact.provider_call_id or call.provider_call_id))
+    if contact.provider_request_id:
+        return provider.get_call_log_by_request_id(str(contact.provider_request_id))
+    return None
 
 
 def _elapsed_seconds(started_at: datetime | None, now: datetime) -> float:
@@ -560,6 +617,7 @@ def _finish_polled_call(
     call_status: str,
     *,
     provider_status: str,
+    terminal_status_source: str,
 ) -> None:
     now = utc_now()
     old_status = contact.status
@@ -569,7 +627,7 @@ def _finish_polled_call(
     call.dispatch_metadata = {
         **(call.dispatch_metadata or {}),
         "provider_status": provider_status,
-        "terminal_status_source": "bulk_call_status_poll",
+        "terminal_status_source": terminal_status_source,
     }
     contact.status = _retry_or_terminal_status(contact, campaign, call_status)
     contact.completed_at = None if contact.status == ContactStatus.retry_scheduled.value else now
@@ -616,6 +674,7 @@ def poll_campaign_active_calls(db: Session, campaign: Campaign) -> int:
                 _finish_polled_call(
                     db, campaign, contact, call, CallStatus.timed_out.value,
                     provider_status="polling_timeout",
+                    terminal_status_source="polling_timeout",
                 )
                 terminal_count += 1
             continue
@@ -629,16 +688,14 @@ def poll_campaign_active_calls(db: Session, campaign: Campaign) -> int:
             contact.error_message = "Active campaign contact has no local call record."
             db.commit()
             continue
-        bulk_call_id = contact.provider_bulk_call_id or contact.provider_request_id or (
-            (call.dispatch_metadata or {}).get("provider_bulk_call_id")
-            or (call.dispatch_metadata or {}).get("provider_request_id")
-        )
+        bulk_call_id = contact.provider_bulk_call_id or (call.dispatch_metadata or {}).get("provider_bulk_call_id")
+        request_id = contact.provider_request_id or (call.dispatch_metadata or {}).get("provider_request_id")
         contact.status_checked_at = now
-        if not bulk_call_id:
-            contact.error_message = "Omni bulk call identifier is not available yet."
+        if not bulk_call_id and not (contact.provider_call_id or call.provider_call_id or request_id):
+            contact.error_message = "Omni call correlation identifier is not available yet."
             db.commit()
             logger.warning(
-                "[CAMPAIGN_CALL_POLL_DEFERRED] campaign_id=%s contact_id=%s local_call_id=%s reason=missing_bulk_call_id",
+                "[CAMPAIGN_CALL_POLL_DEFERRED] campaign_id=%s contact_id=%s local_call_id=%s reason=missing_provider_identifier",
                 campaign.id, contact.id, call.id,
             )
             continue
@@ -649,13 +706,19 @@ def poll_campaign_active_calls(db: Session, campaign: Campaign) -> int:
         try:
             if provider is None:
                 provider = OmniDimensionCallProvider(OmniDimensionClient(settings))
-            live = provider.get_bulk_call_live_status(str(bulk_call_id))
-            logger.info(
-                "[CAMPAIGN_CALL_LIVE_STATUS] campaign_id=%s contact_id=%s local_call_id=%s campaign_status=%s",
-                campaign.id, contact.id, call.id,
-                _nested_value(live, ("campaign_status", "campaignStatus", "status")) or "unknown",
-            )
-            lines = provider.get_bulk_call_lines(str(bulk_call_id))
+            if bulk_call_id:
+                live = provider.get_bulk_call_live_status(str(bulk_call_id))
+                logger.info(
+                    "[CAMPAIGN_CALL_LIVE_STATUS] campaign_id=%s contact_id=%s local_call_id=%s campaign_status=%s",
+                    campaign.id, contact.id, call.id,
+                    _nested_value(live, ("campaign_status", "campaignStatus", "status")) or "unknown",
+                )
+                lines = provider.get_bulk_call_lines(str(bulk_call_id))
+                line = _select_contact_line(contact, call, lines)
+            else:
+                record = _call_log_status_record(provider, contact, call)
+                lines = [record] if isinstance(record, dict) else []
+                line = record
         except OmniDimensionError as exc:
             contact.error_message = f"Omni status check failed: {type(exc).__name__}"
             db.commit()
@@ -664,7 +727,6 @@ def poll_campaign_active_calls(db: Session, campaign: Campaign) -> int:
                 campaign.id, contact.id, call.id, type(exc).__name__,
             )
             continue
-        line = _select_contact_line(contact, call, lines)
         if line is None:
             contact.error_message = "Omni line status is not yet available or could not be matched safely."
             db.commit()
@@ -676,14 +738,20 @@ def poll_campaign_active_calls(db: Session, campaign: Campaign) -> int:
         provider_status_value = _nested_value(line, ("call_status", "callStatus", "status", "state"))
         provider_status = str(provider_status_value or "unknown")
         normalized_status = normalize_omni_call_status(provider_status_value)
-        line_id = _line_identifier(line, ("line_id", "lineId", "bulk_call_line_id", "bulkCallLineId", "id"))
-        provider_call_id = _line_identifier(line, ("call_id", "callId", "call_log_id", "callLogId"))
+        line_id = _line_identifier(
+            line,
+            ("line_id", "lineId", "bulk_call_line_id", "bulkCallLineId") + (("id",) if bulk_call_id else ()),
+        )
+        provider_call_id = _line_identifier(
+            line,
+            ("call_id", "callId", "call_log_id", "callLogId") + (() if bulk_call_id else ("id",)),
+        )
         contact.provider_line_id = contact.provider_line_id or line_id
         contact.provider_call_id = contact.provider_call_id or provider_call_id
         call.provider_call_id = call.provider_call_id or provider_call_id
         call.dispatch_metadata = {
             **(call.dispatch_metadata or {}),
-            "provider_bulk_call_id": str(bulk_call_id),
+            "provider_bulk_call_id": str(bulk_call_id) if bulk_call_id else None,
             "provider_line_id": contact.provider_line_id,
             "provider_status": provider_status,
         }
@@ -709,6 +777,9 @@ def poll_campaign_active_calls(db: Session, campaign: Campaign) -> int:
             _finish_polled_call(
                 db, campaign, contact, call, normalized_status,
                 provider_status=provider_status,
+                terminal_status_source=(
+                    "bulk_call_status_poll" if bulk_call_id else "call_log_status_poll"
+                ),
             )
             terminal_count += 1
     provider_client = getattr(provider, "client", None)
@@ -909,11 +980,15 @@ class CampaignExecutionService:
             contact.last_called_at = None
             contact.last_call_id = None
             contact.provider_request_id = None
+            contact.provider_bulk_call_id = None
+            contact.provider_line_id = None
             contact.provider_call_id = None
             contact.error_message = None
             contact.claimed_at = None
             contact.attempt_started_at = None
             contact.completed_at = None
+            contact.polling_started_at = None
+            contact.status_checked_at = None
             contact.retry_at = None
             contact.callback_at = None
             contact.lease_token = None

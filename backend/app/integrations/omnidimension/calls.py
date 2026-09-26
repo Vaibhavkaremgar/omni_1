@@ -72,8 +72,13 @@ class OmniDimensionCallProvider:
             status=status,
             metadata={"status": status, "provider_request_id": str(response["requestId"])},
             provider_request_id=str(response["requestId"]),
-            provider_bulk_call_id=str(
-                response.get("bulk_call_id") or response.get("bulkCallId") or response["requestId"]
+            # /calls/dispatch documents requestId as a call-request identifier,
+            # not as a bulk campaign identifier.  Only persist a bulk ID when
+            # Omni explicitly returns one.
+            provider_bulk_call_id=(
+                str(response.get("bulk_call_id") or response.get("bulkCallId"))
+                if response.get("bulk_call_id") or response.get("bulkCallId")
+                else None
             ),
             provider_line_id=(
                 str(response.get("line_id") or response.get("lineId") or response.get("bulk_call_line_id"))
@@ -117,30 +122,40 @@ class OmniDimensionCallProvider:
 
     def get_call_log_by_request_id(self, request_id: str) -> dict[str, Any] | None:
         """Resolve Omni's dispatch request ID to its detailed call record."""
-        response = self.list_call_logs(page=1, page_size=100)
-        rows = response.get("data") or response.get("call_logs") or response.get("results") or []
-        if isinstance(rows, dict):
-            rows = rows.get("data") or []
-        if not isinstance(rows, list):
-            return None
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            candidate = row.get("call_request_id")
-            candidate = candidate.get("id") if isinstance(candidate, dict) else candidate
-            candidate = candidate or row.get("requestId") or row.get("request_id")
-            if str(candidate) != str(request_id):
-                continue
-            provider_call_id = row.get("id") or row.get("call_log_id") or row.get("call_id")
-            if provider_call_id is None:
+        page_size = 150
+        for page in range(1, 21):
+            response = self.list_call_logs(page=page, page_size=page_size)
+            rows = (
+                response.get("call_log_data")
+                or response.get("data")
+                or response.get("call_logs")
+                or response.get("results")
+                or []
+            )
+            if isinstance(rows, dict):
+                rows = rows.get("data") or []
+            if not isinstance(rows, list):
+                return None
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                candidate = row.get("call_request_id")
+                candidate = candidate.get("id") if isinstance(candidate, dict) else candidate
+                candidate = candidate or row.get("requestId") or row.get("request_id")
+                if str(candidate) != str(request_id):
+                    continue
+                provider_call_id = row.get("id") or row.get("call_log_id") or row.get("call_id")
+                if provider_call_id is None:
+                    return row
+                detail = self.get_call_log(provider_call_id)
+                if isinstance(detail, dict):
+                    detail_rows = detail.get("call_log_data")
+                    if isinstance(detail_rows, list) and detail_rows and isinstance(detail_rows[0], dict):
+                        return {**row, **detail_rows[0]}
+                    return {**row, **detail}
                 return row
-            detail = self.get_call_log(provider_call_id)
-            if isinstance(detail, dict):
-                detail_rows = detail.get("call_log_data")
-                if isinstance(detail_rows, list) and detail_rows and isinstance(detail_rows[0], dict):
-                    return detail_rows[0]
-                return detail
-            return row
+            if len(rows) < page_size:
+                return None
         return None
 
     @staticmethod
@@ -237,7 +252,7 @@ def _bulk_line_rows(value: Any) -> list[dict[str, Any]] | None:
         return [row for row in value if isinstance(row, dict)]
     if not isinstance(value, dict):
         return None
-    for key in ("lines", "data", "results", "items", "call_lines", "bulk_call_lines"):
+    for key in ("records", "lines", "data", "results", "items", "call_lines", "bulk_call_lines"):
         if key not in value:
             continue
         rows = _bulk_line_rows(value[key])
