@@ -25,6 +25,24 @@ PERSONAL_CONTEXT_MARKERS = (
 )
 
 
+def _gemini_text(body: dict[str, Any]) -> str:
+    candidates = body.get("candidates") or []
+    if not candidates:
+        return ""
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    return "".join(part.get("text", "") for part in parts if isinstance(part, dict)).strip()
+
+
+def _log_gemini_call(research_id: str, phase: str, response: Any, body: dict[str, Any]) -> None:
+    usage = body.get("usageMetadata") or {}
+    logger.info(
+        "Business research Gemini call research_id=%s phase=%s status=%s input_tokens=%s output_tokens=%s thinking_tokens=%s total_tokens=%s",
+        research_id, phase, getattr(response, "status_code", 200),
+        usage.get("promptTokenCount"), usage.get("candidatesTokenCount"),
+        usage.get("thoughtsTokenCount"), usage.get("totalTokenCount"),
+    )
+
+
 def research_fingerprint(configuration: dict[str, Any]) -> str:
     context = {key: str(configuration.get(key) or "").strip() for key in RESEARCH_CONTEXT_KEYS}
     return hashlib.sha256(json.dumps(context, sort_keys=True, ensure_ascii=True).casefold().encode("utf-8")).hexdigest()
@@ -74,46 +92,70 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
         config["business_research"] = {"status": "unavailable", "reason": "gemini_api_key_missing", "fingerprint": fingerprint}
         return config
 
+    research_id = fingerprint[:12]
     prompt = (
         "Research this business using Google Search grounding. Prefer the official company website and authoritative sources. "
-        "Return JSON only with keys summary (string), facts (array of strings), and sources (array of objects with title and uri). "
-        "Do not guess. If a fact is not verified, omit it.\n\n"
+        "Return concise plain-text findings. Do not guess. If a fact is not verified, omit it.\n\n"
         f"Company name: {business_name}\nBusiness description: {description}\n"
         f"Original requirement: {config.get('original_requirement') or ''}\n"
         f"Employee role/purpose: {config.get('role') or config.get('job_role') or config.get('purpose') or ''}\n"
         f"Official website to prioritize when relevant: {website_url or 'None provided'}\n"
         f"Language: {config.get('language') or ''}\nCall type: {config.get('call_type') or ''}"
     )
-    payload = {
+    grounding_payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
-        "generationConfig": {"responseMimeType": "application/json"},
     }
     http = client or httpx.Client(timeout=settings.gemini_research_timeout_seconds)
+    endpoint = f"{settings.gemini_base_url.rstrip('/')}/models/{settings.gemini_model}:generateContent"
+    headers = {"x-goog-api-key": settings.gemini_api_key, "content-type": "application/json"}
+    grounded_text = ""
+    grounding_sources: list[dict[str, str]] = []
     try:
-        response = http.post(
-            f"{settings.gemini_base_url.rstrip('/')}/models/{settings.gemini_model}:generateContent",
-            headers={"x-goog-api-key": settings.gemini_api_key, "content-type": "application/json"},
-            json=payload,
+        try:
+            grounding_response = http.post(endpoint, headers=headers, json=grounding_payload)
+            grounding_response.raise_for_status()
+            grounding_raw = grounding_response.json()
+            _log_gemini_call(research_id, "grounding", grounding_response, grounding_raw)
+            grounded_text = _gemini_text(grounding_raw)
+            metadata = (grounding_raw.get("candidates") or [{}])[0].get("groundingMetadata", {})
+            for chunk in metadata.get("groundingChunks", []):
+                web = chunk.get("web", {}) if isinstance(chunk, dict) else {}
+                if web.get("uri"):
+                    grounding_sources.append({"title": str(web.get("title") or web["uri"]), "uri": str(web["uri"])})
+        except Exception as exc:
+            status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            logger.warning(
+                "Business research Gemini call failed research_id=%s phase=grounding status=%s exception_class=%s input_tokens=%s output_tokens=%s thinking_tokens=%s total_tokens=%s continuing_with_context=true",
+                research_id, status_code, type(exc).__name__, None, None, None, None,
+            )
+
+        formatting_prompt = (
+            "Format business research into JSON with exactly these keys: summary (string), facts (array of strings), "
+            "and sources (array of objects with title and uri). Use only the supplied business context, grounded findings, "
+            "and grounded sources. Do not invent facts or sources. If information is missing, use an empty string or empty array.\n\n"
+            f"BUSINESS CONTEXT:\n{prompt}\n\n"
+            f"GROUNDED FINDINGS:\n{grounded_text or 'No grounded findings were available.'}\n\n"
+            f"GROUNDED SOURCES:\n{json.dumps(grounding_sources, ensure_ascii=False)}"
         )
+        formatting_payload = {
+            "contents": [{"role": "user", "parts": [{"text": formatting_prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"},
+        }
+        response = http.post(endpoint, headers=headers, json=formatting_payload)
         response.raise_for_status()
         raw = response.json()
-        text = "".join(part.get("text", "") for part in raw.get("candidates", [{}])[0].get("content", {}).get("parts", []) if isinstance(part, dict))
+        _log_gemini_call(research_id, "formatting", response, raw)
+        text = _gemini_text(raw)
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
         result = json.loads(text)
-        metadata = raw.get("candidates", [{}])[0].get("groundingMetadata", {})
         sources = result.get("sources") if isinstance(result, dict) else []
         if not isinstance(sources, list):
             sources = []
         if not sources:
-            for chunk in metadata.get("groundingChunks", []):
-                web = chunk.get("web", {}) if isinstance(chunk, dict) else {}
-                if web.get("uri"):
-                    sources.append({"title": web.get("title") or web["uri"], "uri": web["uri"]})
+            sources = grounding_sources
         facts = result.get("facts", []) if isinstance(result, dict) else []
         summary = str(result.get("summary", "")).strip() if isinstance(result, dict) else ""
-        if not summary and not facts:
-            raise ValueError("grounded response contained no usable facts")
         snapshot = {
             "status": "success", "summary": summary, "facts": [str(item) for item in facts if item],
             "sources": [{"title": str(item.get("title") or ""), "uri": str(item.get("uri") or "")} for item in sources if isinstance(item, dict) and item.get("uri")],
@@ -121,7 +163,10 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
             "research_query": prompt,
             "context": {key: config.get(key) for key in RESEARCH_CONTEXT_KEYS if config.get(key)},
         }
-        if not snapshot["sources"]:
+        if not summary and not facts:
+            snapshot["status"] = "unavailable"
+            snapshot["reason"] = "no_verified_facts"
+        elif not snapshot["sources"]:
             snapshot["status"] = "unavailable"
             snapshot["reason"] = "no_grounding_sources"
         return {**config, "business_research": snapshot}
@@ -131,8 +176,8 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
         if isinstance(exc, httpx.HTTPStatusError):
             provider_body = re.sub(r"\s+", " ", exc.response.text or "")[:500]
         logger.warning(
-            "Business research failed business_name=%s exception_class=%s status_code=%s body=%s",
-            business_name[:120], type(exc).__name__, status_code, provider_body,
+            "Business research Gemini call failed research_id=%s phase=formatting status=%s exception_class=%s input_tokens=%s output_tokens=%s thinking_tokens=%s total_tokens=%s body=%s",
+            research_id, status_code, type(exc).__name__, None, None, None, None, provider_body,
         )
         return {**config, "business_research": {"status": "failed", "reason": "provider_error", "fingerprint": fingerprint, **({"status_code": status_code} if status_code else {})}}
     finally:

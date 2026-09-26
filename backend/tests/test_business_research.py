@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 import httpx
@@ -13,22 +14,67 @@ def test_research_reuses_matching_snapshot_without_call(monkeypatch):
     assert ensure_business_research(config, client)["business_research"]["facts"] == ["Known"]
 
 
-def test_research_uses_google_search_and_persists_grounded_facts(monkeypatch):
+def test_research_uses_google_search_and_persists_grounded_facts(monkeypatch, caplog):
     monkeypatch.setattr("app.services.business_research.get_settings", lambda: SimpleNamespace(
         gemini_api_key="test-key", gemini_model="gemini-2.5-flash-lite",
         gemini_base_url="https://generativelanguage.googleapis.com/v1beta",
         gemini_research_timeout_seconds=5.0,
     ))
+    calls = []
+    caplog.set_level(logging.INFO, logger="app.services.business_research")
+
     def handler(request):
-        body = request.read()
-        assert b"google_search" in body
+        body = __import__("json").loads(request.read())
+        calls.append(body)
         assert request.headers["x-goog-api-key"] == "test-key"
-        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '{"summary":"Official","facts":["Open since 1999"],"sources":[]}'}]}, "groundingMetadata": {"groundingChunks": [{"web": {"title": "Official", "uri": "https://acme.example"}}]}}]})
+        if len(calls) == 1:
+            assert body["tools"] == [{"google_search": {}}]
+            assert "generationConfig" not in body
+            return httpx.Response(200, json={
+                "candidates": [{"content": {"parts": [{"text": "Acme has operated since 1999."}]}, "groundingMetadata": {"groundingChunks": [{"web": {"title": "Official", "uri": "https://acme.example"}}]}}],
+                "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 25, "totalTokenCount": 125},
+            })
+        assert "tools" not in body
+        assert body["generationConfig"]["responseMimeType"] == "application/json"
+        assert "Acme has operated since 1999" in body["contents"][0]["parts"][0]["text"]
+        return httpx.Response(200, json={
+            "candidates": [{"content": {"parts": [{"text": '{"summary":"Official","facts":["Open since 1999"],"sources":[]}'}]}}],
+            "usageMetadata": {"promptTokenCount": 150, "candidatesTokenCount": 40, "totalTokenCount": 190},
+        })
     client = httpx.Client(transport=httpx.MockTransport(handler))
     result = ensure_business_research({"business_name": "Acme", "business_description": "Tools"}, client)
     assert result["business_research"]["status"] == "success"
     assert result["business_research"]["facts"] == ["Open since 1999"]
     assert result["business_research"]["sources"][0]["uri"] == "https://acme.example"
+    assert len(calls) == 2
+    assert "phase=grounding status=200 input_tokens=100 output_tokens=25" in caplog.text
+    assert "phase=formatting status=200 input_tokens=150 output_tokens=40" in caplog.text
+
+
+def test_research_formats_from_context_when_grounding_call_fails(monkeypatch):
+    monkeypatch.setattr("app.services.business_research.get_settings", lambda: SimpleNamespace(
+        gemini_api_key="test-key", gemini_model="gemini-test",
+        gemini_base_url="https://generativelanguage.googleapis.com/v1beta",
+        gemini_research_timeout_seconds=5.0,
+    ))
+    calls = []
+
+    def handler(request):
+        calls.append(__import__("json").loads(request.read()))
+        if len(calls) == 1:
+            return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
+        assert "tools" not in calls[1]
+        assert "No grounded findings were available" in calls[1]["contents"][0]["parts"][0]["text"]
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '{"summary":"","facts":[],"sources":[]}'}]}}]})
+
+    result = ensure_business_research(
+        {"business_name": "Acme", "business_description": "Tools", "purpose": "Support buyers"},
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert len(calls) == 2
+    assert result["business_research"]["status"] == "unavailable"
+    assert result["business_research"]["reason"] == "no_verified_facts"
 
 
 def test_research_failure_is_explicit_and_public_config_has_no_source_metadata(monkeypatch):

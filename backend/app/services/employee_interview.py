@@ -7,6 +7,7 @@ import json
 import hashlib
 import re
 import logging
+import random
 import time
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -583,12 +584,17 @@ class RealLLMService(LLMService):
             # repair, then Groq fallback. If only one provider is configured,
             # retain the final permissive JSON-object attempt.
             primary = attempts[0]
-            fallback = attempts[1] if len(attempts) > 1 else primary
-            ladder = (
-                (primary, "strict"),
-                (primary, "strict"),
-                (fallback, "strict" if fallback != primary else "json_object"),
-            )
+            if len(attempts) >= 3:
+                # Primary Gemini, secondary Gemini, then the previously agreed
+                # Groq provider fallback, all within the existing three-call cap.
+                ladder = tuple((attempt, "strict") for attempt in attempts[:3])
+            else:
+                fallback = attempts[1] if len(attempts) > 1 else primary
+                ladder = (
+                    (primary, "strict"),
+                    (primary, "strict"),
+                    (fallback, "strict" if fallback != primary else "json_object"),
+                )
             response = None
             feedback: list[dict[str, str]] = []
             for attempt_index, (llm_attempt, mode) in enumerate(ladder):
@@ -606,6 +612,8 @@ class RealLLMService(LLMService):
                     response = self._request_script_attempt(
                         request_id, llm_attempt, system, user, language, mode,
                         feedback if feedback else None, request_count,
+                        2.0 * (2 ** attempt_index) * random.uniform(0.8, 1.2)
+                        if attempt_index < len(ladder) - 1 else 0.0,
                     )
                     violations = self._script_violations(
                         response["sections"], language, call_direction, context, configuration,
@@ -637,9 +645,16 @@ class RealLLMService(LLMService):
                 configuration["script_review_required"] = False
 
         logger.info(
-            "LLM script generation completed request_id=%s request_count=%d retry_count=%d final_provider=%s final_model=%s script_source=%s",
+            "LLM script generation completed request_id=%s request_count=%d retry_count=%d final_provider=%s final_model=%s final_tier=%s script_source=%s",
             request_id, request_count, max(0, request_count - 1),
-            last_provider or "none", last_model or "none", configuration.get("script_source"),
+            last_provider or "none", last_model or "none",
+            (
+                "deterministic_fallback" if configuration.get("script_source") == "assembled"
+                else "primary_model" if attempts and last_provider == attempts[0].provider and last_model == attempts[0].model
+                else "fallback_model" if str(last_provider).casefold() in {"gemini", "google", "google-gemini"}
+                else "provider_fallback"
+            ),
+            configuration.get("script_source"),
         )
         sections = response["sections"]
         configuration["conversation_sections"] = sections
@@ -655,7 +670,7 @@ class RealLLMService(LLMService):
     def _request_script_attempt(
         self, request_id: UUID, attempt: LLMAttempt, system: str, user: str,
         language: str, mode: str, feedback: list[dict[str, str]] | None,
-        attempt_number: int,
+        attempt_number: int, provider_unavailable_backoff_seconds: float,
     ) -> dict[str, Any]:
         prompt = system
         if feedback:
@@ -673,6 +688,7 @@ class RealLLMService(LLMService):
         )
         payload["request_id"] = str(request_id)
         payload["attempt_number"] = attempt_number
+        payload["provider_unavailable_backoff_seconds"] = provider_unavailable_backoff_seconds
         if mode == "json_object":
             payload["json"]["response_format"] = {"type": "json_object"}
         response = self._perform_json_request(attempt.provider, payload)
@@ -913,6 +929,15 @@ class RealLLMService(LLMService):
                 else "provider_unavailable" if provider_status in {502, 503, 504}
                 else "provider_request_rejected"
             )
+            provider_status_name = str(provider_error.get("status") or "").upper()
+            backoff_seconds = float(payload.get("provider_unavailable_backoff_seconds") or 0)
+            if provider_status == 503 and provider_status_name == "UNAVAILABLE" and backoff_seconds > 0:
+                logger.warning(
+                    "LLM provider unavailable; backing off request_id=%s attempt_number=%s provider=%s model=%s delay_seconds=%.3f",
+                    payload.get("request_id", "unknown"), payload.get("attempt_number", "unknown"),
+                    provider, _request_model(payload), backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -1013,6 +1038,8 @@ class RealLLMService(LLMService):
         gemini_key = getattr(self.settings, "gemini_api_key", None)
         gemini_base_url = getattr(self.settings, "gemini_base_url", None) or "https://generativelanguage.googleapis.com/v1beta"
         add("gemini", gemini_model, gemini_key, gemini_base_url)
+        if script_generation:
+            add("gemini", getattr(self.settings, "gemini_fallback_model", None) or "gemini-2.5-flash", gemini_key, gemini_base_url)
 
         # Do not include generic legacy provider settings.
         groq_model = getattr(self.settings, "groq_script_model", None) if script_generation else None

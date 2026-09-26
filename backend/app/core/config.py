@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash-lite", validation_alias="GEMINI_MODEL")
     gemini_script_model: str = Field(default="gemini-3.6-flash", validation_alias="GEMINI_SCRIPT_MODEL")
+    gemini_fallback_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_FALLBACK_MODEL")
     gemini_base_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta", validation_alias="GEMINI_BASE_URL")
     gemini_research_timeout_seconds: float = Field(default=30.0, validation_alias="GEMINI_RESEARCH_TIMEOUT_SECONDS")
 
@@ -83,6 +84,8 @@ class Settings(BaseSettings):
             missing.append("GEMINI_BASE_URL")
         if not str(self.gemini_script_model or "").strip():
             missing.append("GEMINI_SCRIPT_MODEL")
+        if not str(self.gemini_fallback_model or "").strip():
+            missing.append("GEMINI_FALLBACK_MODEL")
         if not str(self.groq_api_key or "").strip():
             missing.append("GROQ_API_KEY")
         if not str(self.groq_base_url or "").strip():

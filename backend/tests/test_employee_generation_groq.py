@@ -19,6 +19,7 @@ def llm_settings(**overrides):
     values = {
         "gemini_api_key": None, "gemini_model": "gemini-2.5-flash-lite",
         "gemini_script_model": "gemini-3.6-flash",
+        "gemini_fallback_model": "gemini-2.5-flash",
         "gemini_base_url": "https://generativelanguage.googleapis.com/v1beta",
         "groq_api_key": "test-key", "groq_base_url": "https://api.groq.com/openai/v1",
         "groq_model": "openai/gpt-oss-20b", "groq_script_model": "openai/gpt-oss-120b", "groq_fallback_model": "llama-3.3-70b-versatile",
@@ -193,6 +194,7 @@ def test_configuration_requires_gemini_primary_and_groq_fallback_without_exposin
     assert complete.employee_llm_configuration_error is None
     assert complete.effective_llm_provider == "gemini"
     assert complete.effective_script_model == "gemini-3.6-flash"
+    assert complete.gemini_fallback_model == "gemini-2.5-flash"
 
 
 def test_gemini_is_primary_and_receives_only_system_and_user_prompts(caplog):
@@ -237,7 +239,7 @@ def test_gemini_is_primary_and_receives_only_system_and_user_prompts(caplog):
     assert "request_count=1 retry_count=0" in caplog.text
 
 
-def test_groq_is_used_only_after_two_gemini_failures(caplog):
+def test_groq_is_used_after_primary_and_fallback_gemini_failures(caplog):
     calls = []
     caplog.set_level(logging.INFO, logger="app.services.employee_interview")
 
@@ -262,10 +264,59 @@ def test_groq_is_used_only_after_two_gemini_failures(caplog):
 
     assert len(generate(service)) == 6
     assert [model for _, model in calls] == [None, None, "openai/gpt-oss-120b"]
-    assert all("generativelanguage.googleapis.com" in url for url, _ in calls[:2])
+    assert calls[0][0].endswith("/models/gemini-3.6-flash:generateContent")
+    assert calls[1][0].endswith("/models/gemini-2.5-flash:generateContent")
     assert "api.groq.com" in calls[2][0]
     assert "request_count=3 retry_count=2" in caplog.text
     assert "provider=groq model=openai/gpt-oss-120b input_tokens=6300 output_tokens=800" in caplog.text
+
+
+def test_503_unavailable_backs_off_before_gemini_fallback(monkeypatch, caplog):
+    calls = []
+    sleeps = []
+    caplog.set_level(logging.INFO, logger="app.services.employee_interview")
+    monkeypatch.setattr("app.services.employee_interview.random.uniform", lambda _low, _high: 1.0)
+    monkeypatch.setattr("app.services.employee_interview.time.sleep", sleeps.append)
+
+    def handler(request):
+        calls.append(str(request.url))
+        if len(calls) == 1:
+            return httpx.Response(503, json={"error": {"status": "UNAVAILABLE", "message": "high demand"}})
+        return httpx.Response(200, json={
+            "candidates": [{"content": {"parts": [{"text": json.dumps(response())}]}}],
+            "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 50, "totalTokenCount": 150},
+        })
+
+    service = RealLLMService(
+        settings=llm_settings(gemini_api_key="gemini-key", effective_llm_provider="gemini"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert len(generate(service)) == 6
+    assert calls[0].endswith("/models/gemini-3.6-flash:generateContent")
+    assert calls[1].endswith("/models/gemini-2.5-flash:generateContent")
+    assert sleeps == [2.0]
+    assert "final_tier=fallback_model" in caplog.text
+
+
+def test_non_503_failure_does_not_back_off(monkeypatch):
+    sleeps = []
+    calls = []
+    monkeypatch.setattr("app.services.employee_interview.time.sleep", sleeps.append)
+
+    def handler(request):
+        calls.append(str(request.url))
+        if len(calls) == 1:
+            return httpx.Response(400, json={"error": {"status": "INVALID_ARGUMENT", "message": "bad schema"}})
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": json.dumps(response())}]}}]})
+
+    service = RealLLMService(
+        settings=llm_settings(gemini_api_key="gemini-key", effective_llm_provider="gemini"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert len(generate(service)) == 6
+    assert sleeps == []
 
 
 def test_groq_request_contract_matches_validator_and_prompt():
