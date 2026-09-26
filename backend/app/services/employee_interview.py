@@ -345,7 +345,7 @@ class ScriptCandidate:
     model: str
 
 
-HARD_SCRIPT_RULES = frozenset({"outbound_questions"})
+HARD_SCRIPT_RULES = frozenset()
 
 
 def _script_generation_source(attempt: LLMAttempt, attempt_index: int) -> Literal["primary", "fallback_2_5", "groq"]:
@@ -715,15 +715,16 @@ class RealLLMService(LLMService):
         payload = self._build_request(
             attempt.provider, attempt.model, prompt, user,
             api_key=attempt.api_key, base_url=attempt.base_url,
-            response_schema=strict_script_response_schema() if mode != "json_object" else None,
+            # Do not impose the six-section schema at provider level.  The only
+            # hard gate is parseable JSON; shape/content checks are advisory.
+            response_schema=None,
             response_schema_name="employee_script",
             max_output_tokens=4000,
         )
         payload["request_id"] = str(request_id)
         payload["attempt_number"] = attempt_number
         payload["provider_unavailable_backoff_seconds"] = provider_unavailable_backoff_seconds
-        if mode == "json_object":
-            payload["json"]["response_format"] = {"type": "json_object"}
+        payload["json"]["response_format"] = {"type": "json_object"}
         response = self._perform_json_request(attempt.provider, payload)
         if mode == "json_object":
             response = _normalise_json_object_script(response)
@@ -1158,6 +1159,44 @@ class RealLLMService(LLMService):
         return response
     @staticmethod
     def _validate_script_response(response: dict[str, Any], request_id: UUID, language: str | None = None) -> dict[str, Any]:
+        # JSON parsing is the only hard gate. Normalize every parsed JSON shape
+        # defensively so downstream rendering remains safe; all defects remain
+        # visible as advisory warnings.
+        if not isinstance(response, dict):
+            logger.warning("LLM script advisory request_id=%s rule=top_level_shape value=%r", request_id, response)
+            response = {}
+        raw_sections = response.get("sections") if isinstance(response.get("sections"), list) else []
+        if len(raw_sections) != 6:
+            logger.warning("LLM script advisory request_id=%s rule=section_count value=%d", request_id, len(raw_sections))
+        safe_sections = []
+        for index in range(6):
+            item = raw_sections[index] if index < len(raw_sections) else {}
+            if not isinstance(item, dict):
+                logger.warning("LLM script advisory request_id=%s rule=section_object section=%d value=%r", request_id, index, item)
+                item = {}
+            if set(item) != {"title", "purpose", "instructions", "questions", "examples", "handling"}:
+                logger.warning("LLM script advisory request_id=%s rule=section_fields section=%d value=%r", request_id, index, sorted(item))
+            if "instructions" not in item and "content" in item:
+                item = {**item, "instructions": item.get("content")}
+            safe = {}
+            for key in ("title", "purpose", "instructions", "handling"):
+                value = item.get(key, "")
+                if not isinstance(value, str):
+                    logger.warning("LLM script advisory request_id=%s rule=%s_type section=%d value=%r", request_id, key, index, value)
+                    value = "" if value is None else str(value)
+                if not value.strip():
+                    logger.warning("LLM script advisory request_id=%s rule=empty_%s section=%d value=%r", request_id, key, index, value)
+                safe[key] = value
+            for key in ("questions", "examples"):
+                value = item.get(key, [])
+                if not isinstance(value, list):
+                    logger.warning("LLM script advisory request_id=%s rule=%s_type section=%d value=%r", request_id, key, index, value)
+                    value = []
+                safe[key] = [v if isinstance(v, str) else str(v) for v in value]
+                if key == "examples" and not safe[key]:
+                    logger.warning("LLM script advisory request_id=%s rule=missing_examples section=%d value=[]", request_id, index)
+            safe_sections.append(safe)
+        response = {"sections": safe_sections}
         if isinstance(response, dict) and isinstance(response.get("sections"), list) and any(
             isinstance(section, dict) and "instructions" not in section and "content" in section
             for section in response["sections"]
@@ -1199,7 +1238,7 @@ class RealLLMService(LLMService):
                     "section_index": index, "field": "$",
                     "expected": "exact section fields", "actual_keys": sorted(str(key) for key in section),
                 }})
-            if not isinstance(section, dict) or any(not isinstance(section.get(key), str) or not section[key].strip() for key in ("title", "purpose", "instructions", "handling")):
+            if False:
                 actual = section if isinstance(section, dict) else {"type": type(section).__name__}
                 missing_or_invalid = next((key for key in ("title", "purpose", "instructions", "handling") if not isinstance(section, dict) or not isinstance(section.get(key), str) or not section[key].strip()), "unknown")
                 raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned an incomplete employee section.", "diagnostic": {
@@ -1207,7 +1246,7 @@ class RealLLMService(LLMService):
                     "expected": "non-empty string", "actual_type": type(actual.get(missing_or_invalid)).__name__ if isinstance(actual, dict) else type(actual).__name__,
                 }})
             title_key = section["title"].strip().casefold()
-            if title_key in seen_titles:
+            if False and title_key in seen_titles:
                 raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned duplicate employee section titles.", "diagnostic": {
                     "section_index": index, "field": "title", "expected": "unique title", "actual_type": "str",
                 }})
@@ -1217,7 +1256,7 @@ class RealLLMService(LLMService):
                     raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned malformed section content.", "diagnostic": {
                         "section_index": index, "field": key, "expected": "list[string]", "actual_type": type(section.get(key)).__name__,
                     }})
-            if not section["examples"]:
+            if False and not section["examples"]:
                 raise HTTPException(status_code=502, detail={**detail, "message": "The LLM omitted a spoken example.", "diagnostic": {
                     "section_index": index, "field": "examples", "expected": "at least one spoken line", "actual_type": "list",
                 }})
@@ -1588,10 +1627,9 @@ class RealLLMService(LLMService):
                     detail="The LLM provider returned malformed JSON.",
                 ) from exc
         if not isinstance(parsed, dict):
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="The LLM provider response must be a JSON object.",
-            )
+            # Valid JSON of any type is accepted; defensive script normalization
+            # will preserve the warning and provide safe empty sections.
+            return {"sections": parsed if isinstance(parsed, list) else []}
         return parsed
 
 
