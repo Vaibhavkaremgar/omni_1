@@ -219,7 +219,6 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     Each section maps to a distinct behavioral area so the Omni agent follows the
     employee's exact rules rather than behaving as a generic assistant.
     """
-    from app.services.conversation_design import runtime_rules
     configuration = dict(configuration)
     lang = _language_name(_text(configuration.get("language"), employee.language))
     saved_script = _canonical_call_script(configuration)
@@ -243,11 +242,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         )
     else:
         canonical_prompt = str(configuration.get("final_prompt") or build_employee_prompt(configuration))
-    context = [
-        {"title": "Published Call Script Source of Truth", "body": _format_call_script(saved_script), "is_enabled": True},
-        {"title": "Employee Runtime Rules", "body": runtime_rules(configuration), "is_enabled": True},
-        {"title": "Complete Employee Instructions", "body": canonical_prompt, "is_enabled": True},
-    ]
+    # Omni receives one source of truth: the generated/edited call script.
+    # Behavioral rules belong in the script-generation prompt, not as competing
+    # runtime instruction fragments.
+    context = [{"title": "Generated Call Script", "body": _format_call_script(saved_script), "is_enabled": True}]
     post_call_actions = _automatic_post_call_actions()
     extraction = configuration.get("conversation_variables")
     if not isinstance(extraction, list):

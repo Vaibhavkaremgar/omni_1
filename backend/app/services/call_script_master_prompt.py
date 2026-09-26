@@ -347,6 +347,12 @@ Use:
 * concise questions
 * natural transitions
 
+Mandatory spoken-language rules:
+
+* Keep "thank you", "thanks", "sorry", and "okay" in English; never translate these expressions into Telugu or Hindi.
+* Speak all numbers, quantities, prices, dates, years, times, percentages, phone numbers, OTPs, IDs, codes, and reference numbers in English. Speak identifiers digit by digit or character by character where appropriate.
+* Keep the generated script context-aware and conversational. Respond to what the person actually says, avoid generic recitation, and complete the identity-and-purpose opening in one uninterrupted turn.
+
 Appropriate conversational acknowledgements may include:
 
 "అవును."
