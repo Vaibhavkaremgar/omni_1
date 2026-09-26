@@ -332,6 +332,13 @@ Then continue based on whatever information has actually been provided.
 
 # 10. HUMAN-LIKE VOICE DESIGN
 
+Never copy example phrasing from these instructions verbatim into the generated script. Examples illustrate style, sentence length, code-mixing, and tone—not reusable content. Build the opening and details sections from the specific facts in USER_CONTEXT whenever they exist, including names, symbols, causes, locations, candidate names, wards, asks, dates, and numbers. Use vague wording only when USER_CONTEXT truly contains no identifiable specifics.
+
+For example, for an election-awareness call with a party name, election symbol, local candidate, and ward:
+
+* Bad generic opening: "I am calling to give you a quick update."
+* Good context-derived opening: mention the actual party, symbol, candidate, and ward supplied in USER_CONTEXT, then state the specific awareness/support purpose.
+
 The output will ultimately be spoken by a voice AI.
 
 Therefore, write for **speech**, not for reading.
@@ -533,6 +540,8 @@ The agent should prioritize the recipient's situation rather than forcing the co
 ---
 
 # 17. INTERRUPTIONS AND UNEXPECTED RESPONSES
+
+If the recipient's answer is unclear, inaudible, or not understood, ask them to repeat it briefly. Do not restate the previous line or replay the whole script. Once understood, acknowledge the actual answer and continue with the next relevant step. Include this behavior in the `handling` guidance of every section where a response may be unclear.
 
 The recipient may:
 

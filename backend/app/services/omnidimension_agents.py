@@ -280,7 +280,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         # Finish the identity + purpose turn before listening for a reply.
         "is_welcome_message_interruption": False,
         "is_interruption_allowed": True,
-        "interruption_min_words": 3,
+        "interruption_min_words": 2,
         # Automatic end_call is deliberately opt-in. If it is enabled for
         # every agent, the provider's internal LLM tool can hang up after a
         # single answered question or after a false silence detection.
@@ -457,7 +457,7 @@ def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any])
         "six_section_prompt": _format_call_script(script) if script else "",
         "six_section_titles": list(script) if script else [],
         "interruption_enabled": True,
-        "interruption_min_words": 3,
+        "interruption_min_words": 2,
         "idle_threshold_sec": 5,
         "end_call_enabled": bool(end_call and _text(end_call.get("condition"))),
         "end_call_condition": _text(end_call.get("condition")) if end_call else None,
@@ -598,7 +598,7 @@ def _transcriber_configuration(configuration: dict[str, Any], language: str) -> 
         # Keep end-of-turn detection responsive. This is configurable because
         # noisy phone lines may need a larger value.
         "silence_timeout_ms": getattr(get_settings(), "live_speech_silence_timeout_ms", 500),
-        "interruption_min_words": 3,
+        "interruption_min_words": 2,
     }
     if isinstance(configured, dict):
         legacy_provider = str(configured.get("provider") or "").casefold()
