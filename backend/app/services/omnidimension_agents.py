@@ -279,7 +279,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         # defaults. All values can be overridden by employee configuration.
         "transcriber": _transcriber_configuration(configuration, lang),
         "is_welcome_message_dynamic": True,
-        "is_welcome_message_interruption": True,
+        # Finish the identity + purpose turn before listening for a reply.
+        "is_welcome_message_interruption": False,
         "is_interruption_allowed": True,
         "interruption_min_words": 3,
         # Automatic end_call is deliberately opt-in. If it is enabled for
@@ -454,6 +455,7 @@ def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any])
         "voice_id": str(voice_id) if voice_id else None,
         "welcome_message": _welcome_message(employee, configuration, language),
         "is_welcome_message_dynamic": True,
+        "is_welcome_message_interruption": False,
         "six_section_prompt": _format_call_script(script) if script else "",
         "six_section_titles": list(script) if script else [],
         "interruption_enabled": True,
@@ -659,14 +661,14 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
                 reviewed_sections.append({"examples": examples, "questions": []})
             first_examples = reviewed_sections[0]["examples"]
             if first_examples and _is_valid_outbound_opening(first_examples[0], reviewed_sections):
-                return first_examples[0]
+                return _complete_opening(first_examples[0])
     generated_sections = configuration.get("conversation_sections")
     if outbound and isinstance(generated_sections, list) and len(generated_sections) == 6:
         first_examples = generated_sections[0].get("examples") if isinstance(generated_sections[0], dict) else None
         if isinstance(first_examples, list) and first_examples:
             candidate = _text(first_examples[0])
             if _is_valid_outbound_opening(candidate, generated_sections):
-                return candidate
+                return _complete_opening(candidate)
         return _static_outbound_welcome(
             configuration,
             purpose=_safe_purpose(configuration.get("purpose"), employee.purpose),
@@ -716,13 +718,14 @@ def _is_valid_outbound_opening(candidate: str, sections: list[Any]) -> bool:
 
 
 def _static_outbound_welcome(configuration: dict[str, Any], *, purpose: str, language: str) -> str:
-    """Safe non-question fallback used when the generated Opening is unusable."""
+    """Safe complete identity-plus-purpose fallback used for outbound calls."""
     agent_name = _text(configuration.get("agent_name"))
     if language == "Telugu":
         return f"Hello అండి, నేను {agent_name}." if agent_name else "Hello అండి, నేను AI assistant ని."
     if language == "Hindi":
         return f"नमस्ते जी, मैं {agent_name} हूँ।" if agent_name else "नमस्ते जी, मैं AI assistant हूँ।"
-    return f"Hello, I am {agent_name}." if agent_name else "Hello, I am an AI assistant."
+    identity = f"Hello, I am {agent_name}" if agent_name else "Hello, I am an AI assistant"
+    return f"{identity}. I’m calling to {purpose}."
 
 
 def _raw_welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
@@ -766,12 +769,17 @@ def _contains_raw_description(text: str, configuration: dict[str, Any], minimum_
         if len(words) < minimum_words:
             continue
         for start in range(0, len(words) - minimum_words + 1):
+            phrase = words[start:start + minimum_words]
             if words[start:start + minimum_words] == normalized_text[:minimum_words]:
                 return True
-            phrase = words[start:start + minimum_words]
             if " ".join(phrase) in text.casefold():
                 return True
     return False
+
+
+def _complete_opening(text: str) -> str:
+    """Send identity and purpose as one uninterrupted opening turn."""
+    return re.sub(r"\s+", " ", _text(text)).strip()
 def _default_end_call_message(language: str) -> str:
     if language == "Telugu":
         return "Thank you. Have a nice day."
