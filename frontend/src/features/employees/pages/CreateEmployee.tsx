@@ -10,13 +10,6 @@ type Employee = { id: string; name: string; purpose: string; language: string; c
 type Phone = { id: string; e164_number: string; status: string; label?: string | null };
 type Session = { messages: Array<{ role: string; content: string }>; current_question: string | null; is_complete: boolean; extracted_configuration: Config };
 
-const firstAiLine = (card = '') => {
-  const value = /^(?:Spoken example|AI):\s*(.+)$/m.exec(card)?.[1]?.trim();
-  return value?.replace(/^"(.*)"$/, '$1');
-};
-
-const hasAiLine = (card: string) => /^(?:Spoken example|AI):\s*\S/m.test(card);
-
 function NewEmployeeChat() {
   const navigate = useNavigate();
   const [requirement, setRequirement] = useState(''); const [hostName, setHostName] = useState('');
@@ -65,9 +58,9 @@ function EmployeeWorkspace() {
   const clonedVoices = voices.filter(v => v.is_cloned || v.tier === 'cloned' || v.tier === 'custom');
   const selectedVoice = voices.find(v => v.id === voiceId); const script = config.call_script ?? {};
   const generatedOpening = (config.conversation_sections as Array<{ examples?: string[] }> | undefined)?.[0]?.examples?.[0];
-  const editedOpening = firstAiLine(Object.values(script)[0] ?? '');
+  const editedOpening = /^Spoken example:\s*(.+)$/m.exec(Object.values(script)[0] ?? '')?.[1];
   const opening = editedOpening || generatedOpening || config.opening || script['Greeting & Intro'];
-  const needsSpokenReview = Boolean(config.assembled_source_context) && Object.values(script).some(card => !hasAiLine(card));
+  const needsSpokenReview = Boolean(config.assembled_source_context) && Object.values(script).some(card => !/^Spoken example:\s*\S/m.test(card));
   const sectionNames = Object.keys(script);
   const save = async (publish = false): Promise<string | undefined> => { if (!name.trim() || !requirement.trim()) return; setBusy(true); setError(''); setNotice(''); try { let eid = employeeId; if (!eid) { const e = await backendJson<Employee>('/employees', { method: 'POST', body: JSON.stringify({ name: name.trim(), purpose: requirement.trim(), language, creation_mode: 'chat', call_type: 'inbound' }) }); eid = e.id; setEmployeeId(eid); window.history.replaceState(null, '', `/employees/${eid}`); } const next = { ...config, name: name.trim(), purpose: requirement.trim(), original_requirement: requirement.trim(), language, creation_mode: 'chat', ...(voiceId ? { voice: { id: voiceId, name: selectedVoice?.name, tier: selectedVoice?.tier, gender: selectedVoice?.gender } } : {}) }; const updated = await backendJson<Employee>(`/employees/${eid}`, { method: 'PATCH', body: JSON.stringify({ name: name.trim(), purpose: requirement.trim(), language, configuration: next }) }); setConfig(updated.configuration ?? next); if (publish) { await backendJson(`/employees/${eid}/publish`, { method: 'POST' }); setNotice('Employee published successfully.'); } else setNotice('Draft saved.'); return eid; } catch (e) { setError(e instanceof Error ? e.message : 'Unable to save employee.'); } finally { setBusy(false); } };
   const startChat = async () => { const eid = employeeId || await save(); if (!eid) return; setBusy(true); try { setSession(await backendJson<Session>(`/employees/${eid}/interview/start`, { method: 'POST', body: '{}' })); } catch { setError('Shabdha could not be started.'); } finally { setBusy(false); } };

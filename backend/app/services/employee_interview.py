@@ -41,18 +41,14 @@ SCRIPT_SECTION_TITLES = (
 
 
 def render_call_script_sections(sections: list[dict[str, Any]]) -> dict[str, str]:
-    """Render validated sections as an editable, script-first call flow.
-
-    Purpose and instruction metadata remain available in
-    ``conversation_sections`` for the runtime.  The owner-facing cards show
-    only what the agent may say and how it should branch, which makes the
-    generated result read like an actual call script instead of a prompt.
-    """
+    """Render the validated section model into the editable six-card format."""
     return {
         str(section["title"]): "\n".join([
-            *[f'AI: "{example}"' for example in section["examples"]],
-            *[f'AI asks: "{question}"' for question in section["questions"]],
-            f"If the recipient responds differently: {section['handling']}",
+            f"Purpose: {section['purpose']}",
+            f"Instructions: {section['instructions']}",
+            *[f"Question: {question}" for question in section["questions"]],
+            *[f"Spoken example: {example}" for example in section["examples"]],
+            f"Handling: {section['handling']}",
         ])
         for section in sections
     }

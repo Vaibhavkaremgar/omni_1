@@ -221,11 +221,15 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     configuration = dict(configuration)
     lang = _language_name(_text(configuration.get("language"), employee.language))
     saved_script = _canonical_call_script(configuration)
-    # Generated scripts retain structured metadata internally. Once an owner
-    # edits a card, the save path removes conversation_sections and the edited
-    # six-card script becomes the source of truth.
+    # The editable generated prompt is the publishing source of truth.
     sections = configuration.get("conversation_sections")
     edited_script = configuration.get("call_script")
+    if isinstance(edited_script, dict) and len(edited_script) == 6:
+        canonical_prompt = "\n\n".join(
+            f"SECTION {index} — {title}\n{body}"
+            for index, (title, body) in enumerate(edited_script.items(), 1)
+        )
+        sections = None
     if isinstance(sections, list) and len(sections) == 6:
         canonical_prompt = "\n\n".join(
             f"SECTION {index} — {item.get('title', '')}\nPurpose: {item.get('purpose', '')}\n"
@@ -234,11 +238,6 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             f"Spoken examples: {'; '.join(item.get('examples', []))}\n"
             f"Handling: {item.get('handling', '')}"
             for index, item in enumerate(sections, 1) if isinstance(item, dict)
-        )
-    elif isinstance(edited_script, dict) and len(edited_script) == 6:
-        canonical_prompt = "\n\n".join(
-            f"SECTION {index} — {title}\n{body}"
-            for index, (title, body) in enumerate(edited_script.items(), 1)
         )
     else:
         canonical_prompt = str(configuration.get("final_prompt") or build_employee_prompt(configuration))
@@ -647,21 +646,6 @@ def _remove_builder_instruction(text: str) -> str:
     return re.sub(r"\s{2,}", " ", cleaned).strip()
 
 
-def _spoken_examples_from_card(card: Any) -> list[str]:
-    """Read new script-first cards while preserving legacy card support."""
-    examples: list[str] = []
-    for line in _text(card).splitlines():
-        match = re.match(r"^\s*(?:Spoken example|AI):\s*(.+?)\s*$", line)
-        if not match:
-            continue
-        candidate = match.group(1).strip()
-        if len(candidate) >= 2 and candidate[0] == candidate[-1] == '"':
-            candidate = candidate[1:-1].strip()
-        if candidate:
-            examples.append(candidate)
-    return examples
-
-
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
     """Build the static greeting sent to Omni, excluding builder-only copy."""
     outbound = _text(configuration.get("call_type", employee.call_type)).casefold() == "outbound"
@@ -670,7 +654,7 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
         if isinstance(cards, dict) and len(cards) == 6:
             reviewed_sections = []
             for card in cards.values():
-                examples = _spoken_examples_from_card(card)
+                examples = re.findall(r"(?m)^Spoken example:\s*(.+)$", _text(card))
                 reviewed_sections.append({"examples": examples, "questions": []})
             first_examples = reviewed_sections[0]["examples"]
             if first_examples and _is_valid_outbound_opening(first_examples[0], reviewed_sections):
@@ -755,8 +739,8 @@ def _raw_welcome_message(employee: AIEmployee, configuration: dict[str, Any], la
     cards = configuration.get("call_script")
     if isinstance(cards, dict):
         card = _text(cards.get("Greeting & Intro") or next(iter(cards.values()), ""))
-        examples = _spoken_examples_from_card(card)
-        candidate = examples[0] if examples else ""
+        match = re.search(r"(?m)^Spoken example:\s*(.+)$", card)
+        candidate = match.group(1).strip() if match else ""
         if candidate and not _contains_raw_description(candidate, configuration):
             return candidate
     name = _text(configuration.get("agent_name"))

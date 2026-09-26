@@ -258,7 +258,7 @@ def spoken_script(configuration: dict[str, Any]) -> dict[str, str]:
         return configuration.get("call_script") or {}
     result = {"Opening": str(configuration.get("opening") or "")}
     for title, content in (configuration.get("call_script") or {}).items():
-        for index, match in enumerate(re.finditer(r'(?m)^(?:Spoken|Question|AI(?: asks)?):\s*(".*")\s*$', content)):
+        for index, match in enumerate(re.finditer(r'(?m)^(?:Spoken|Question):\s*(".*")\s*$', content)):
             try:
                 result[f"{title} / {index + 1}"] = json.loads(match.group(1))
             except ValueError:
@@ -276,9 +276,6 @@ def runtime_rules(configuration: dict[str, Any]) -> str:
         "When runtime customer details include a name, use {{name}} naturally in the opening and in later relevant references (for Telugu, use {{name}} గారికి where natural). If the name is missing or blank, address the caller naturally and respectfully without a name (use అండి in Telugu or restructure the sentence), do not leave a dangling గారికి, do not speak any placeholder, and do not ask for the customer's name merely because it was not provided. "
         f"Call direction: {configuration.get('call_type', 'inbound')}. "
         "The welcome has already been spoken; listen and respond to the person's actual words without repeating it. "
-        "Before every reply, silently check the person's latest words, what the agent has already said, what has already been answered, and the next unfinished objective. "
-        "Never replay a script line, question, explanation, offer, or entire section that has already been delivered. Use the script as guidance, not as a loop. "
-        "Only repeat when the person explicitly asks; then paraphrase briefly unless an exact identifier must be repeated. "
         "Yield immediately on interruption. A short answer, hesitation or silence is not permission to hang up. "
         "Respect a clear refusal or request to stop. Continue on genuine questions and end only on clear completion intent. "
         "If the caller asks whether you are a robot or AI, answer honestly that you are an AI assistant speaking on behalf of the configured host; never claim to be human or to be the host. "
