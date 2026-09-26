@@ -254,25 +254,16 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         )
     else:
         canonical_prompt = str(configuration.get("final_prompt") or build_employee_prompt(configuration))
-    # Omni receives one source of truth: the generated/edited call script.
-    # Behavioral rules belong in the script-generation prompt, not as competing
-    # runtime instruction fragments.
-    # The script is a conversation framework, not a turn-by-turn monologue.
-    # Explicitly tell Omni to respond to what the candidate actually says and
-    # use the next relevant script step only after addressing that response.
-    conversation_guardrail = (
-        "CONVERSATION GUARDRAIL: Answer the candidate based on their latest response. "
-        "Use the call script below as a reference for goals, questions, facts, and "
-        "handling—not as text to recite mechanically. Do not move to the next script "
-        "step until you have acknowledged and responded naturally to the candidate's "
-        "answer. Ask only relevant follow-up questions, adapt to what they say, and "
-        "skip or reorder steps when their response already provides the information."
-    )
-    context = [{
-        "title": "Generated Call Script",
-        "body": f"{conversation_guardrail}\n\n{_format_call_script(saved_script)}",
-        "is_enabled": True,
-    }]
+    context = [
+        {"title": "Generated Call Script", "body": _format_call_script(saved_script), "is_enabled": True},
+        {"title": "Critical Runtime Guardrails", "body": (
+            "Use the script and caller context as the source of truth. Respond to the caller's latest words before the next unfinished step. "
+            "Never repeat the same sentence, question, greeting, or section. If unclear, ask briefly for repetition and adapt. "
+            "Respect stop, decline, and callback requests. Complete the identity-and-purpose opening in one turn. Keep responses conversational. "
+            "Say thank you, thanks, sorry, and okay in English. Speak numbers, dates, years, times, prices, percentages, phone numbers, "
+            "OTPs, IDs, codes, and references in English; speak identifiers digit by digit when appropriate."
+        ), "is_enabled": True},
+    ]
     post_call_actions = _automatic_post_call_actions()
     extraction = configuration.get("conversation_variables")
     if not isinstance(extraction, list):
