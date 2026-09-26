@@ -126,8 +126,15 @@ class CallResultService:
                     CallStatus.no_answer.value,
                     CallStatus.busy.value,
                     CallStatus.canceled.value,
+                    CallStatus.skipped.value,
+                    CallStatus.timed_out.value,
                 }:
-                    retryable = event["status"] in {CallStatus.no_answer.value, CallStatus.busy.value, CallStatus.failed.value}
+                    retryable = event["status"] in {
+                        CallStatus.no_answer.value,
+                        CallStatus.busy.value,
+                        CallStatus.failed.value,
+                        CallStatus.timed_out.value,
+                    }
                     campaign = contact.campaign
                     # Older campaigns/databases may have NULL until the additive
                     # migration runs; treat that safely as the legacy enabled behavior.
@@ -138,11 +145,20 @@ class CallResultService:
                         contact.status = ContactStatus.retry_scheduled.value
                         contact.retry_at = utc_now() + timedelta(minutes=max(1, int(retry_intervals[retry_index])))
                     else:
-                        contact.status = ContactStatus.no_answer.value if event["status"] == CallStatus.no_answer.value else ContactStatus.busy.value if event["status"] == CallStatus.busy.value else ContactStatus.failed.value
+                        contact.status = (
+                            ContactStatus.no_answer.value if event["status"] == CallStatus.no_answer.value
+                            else ContactStatus.busy.value if event["status"] == CallStatus.busy.value
+                            else ContactStatus.cancelled.value if event["status"] == CallStatus.canceled.value
+                            else ContactStatus.skipped.value if event["status"] == CallStatus.skipped.value
+                            else ContactStatus.timed_out.value if event["status"] == CallStatus.timed_out.value
+                            else ContactStatus.failed.value
+                        )
                     contact.completed_at = utc_now() if contact.status not in {ContactStatus.retry_scheduled.value} else None
                     contact.lease_token = None
                 elif event["status"] == CallStatus.voicemail.value:
-                    contact.status = ContactStatus.called.value
+                    contact.status = ContactStatus.voicemail.value
+                    contact.completed_at = utc_now()
+                    contact.lease_token = None
                 outcome = str(event.get("outcome") or "").casefold().replace(" ", "_")
                 if outcome in {"callback_requested", "callback_request"} and event.get("callback_at") is not None:
                     contact.status = ContactStatus.retry_scheduled.value

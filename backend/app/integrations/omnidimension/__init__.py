@@ -1,6 +1,6 @@
 from .client import OmniDimensionClient
 from .agents import OmniDimensionAgentProvider, ProviderAgent
-from .calls import OmniDimensionCallProvider, ProviderDispatchResult
+from .calls import OmniDimensionCallProvider, ProviderDispatchResult, normalize_omni_call_status
 from .phone_numbers import OmniDimensionPhoneNumberProvider, ProviderAvailablePhoneNumber, ProviderPhoneNumber
 from .reseller import OmniDimensionResellerProvider
 from .exceptions import (
@@ -20,6 +20,7 @@ __all__ = [
     "ProviderAgent",
     "OmniDimensionCallProvider",
     "ProviderDispatchResult",
+    "normalize_omni_call_status",
     "OmniDimensionPhoneNumberProvider",
     "ProviderPhoneNumber",
     "ProviderAvailablePhoneNumber",

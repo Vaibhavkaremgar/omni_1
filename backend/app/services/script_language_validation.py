@@ -11,12 +11,12 @@ CUSTOMER_FACING_SECTIONS = SCRIPT_SECTION_NAMES
 TELUGU_RANGE = (0x0C00, 0x0C7F)
 DEVANAGARI_RANGE = (0x0900, 0x097F)
 
-# Generated scripts are stored as readable section cards.  Those cards contain
-# English-only Purpose / Instructions / Handling metadata as well as the words
-# an agent actually says.  Language validation must inspect the latter only.
+# Generated scripts are stored as readable section cards. New cards use
+# ``AI:`` / ``AI asks:`` while older saved cards may still use ``Spoken
+# example:`` / ``Question:``. Language validation must inspect speech only.
 _SPOKEN_LABEL_RE = re.compile(
-    r"(?ims)^\s*(?:spoken(?:\s+example)?|question)\s*:\s*(.+?)"
-    r"(?=^\s*(?:purpose|objective|instructions|handling|spoken(?:\s+example)?|question|reason|support\s+type|requirement\s+basis)\s*:|\Z)"
+    r"(?ims)^\s*(?:spoken(?:\s+example)?|question|ai(?:\s+asks)?)\s*:\s*(.+?)"
+    r"(?=^\s*(?:purpose|objective|instructions|handling|response\s+handling|if\s+the\s+recipient\s+responds\s+differently|spoken(?:\s+example)?|question|ai(?:\s+asks)?|reason|support\s+type|requirement\s+basis)\s*:|\Z)"
 )
 
 BUSINESS_ENGLISH_WORDS = {
@@ -150,6 +150,8 @@ def _customer_facing_entries(value: Any) -> list[str]:
     entries: list[str] = []
     for match in matches:
         candidate = match.group(1).strip()
+        if len(candidate) >= 2 and candidate[0] == candidate[-1] == '"':
+            candidate = candidate[1:-1].strip()
         # Conversation-design cards store quoted JSON strings.  Decode those
         # when possible so surrounding quotes are never part of validation.
         if candidate.startswith('"') and candidate.endswith('"'):

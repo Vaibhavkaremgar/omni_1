@@ -86,6 +86,8 @@ class ContactStatus(str, Enum):
     completed = "completed"
     do_not_call = "do_not_call"
     cancelled = "cancelled"
+    voicemail = "voicemail"
+    timed_out = "timed_out"
     skipped = "skipped"  # legacy persisted value
 
 
@@ -113,6 +115,8 @@ class CallStatus(str, Enum):
     busy = "busy"
     voicemail = "voicemail"
     canceled = "canceled"
+    skipped = "skipped"
+    timed_out = "timed_out"
 
 
 class WalletStatus(str, Enum):

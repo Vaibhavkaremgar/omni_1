@@ -12,7 +12,8 @@ interface EmployeeSummary {
   id: string; name: string; purpose: string; language: string; status: string; is_ready: boolean;
 }
 interface CampaignProgress {
-  total: number; pending: number; in_progress: number; completed: number; failed: number; skipped: number; retry_pending?: number; cancelled?: number;
+  total: number; pending: number; queued?: number; in_progress: number; completed: number; failed: number; skipped: number; retry_pending?: number; cancelled?: number;
+  busy?: number; no_answer?: number; voicemail?: number; timed_out?: number;
 }
 interface CampaignDetail {
   id: string; name: string; description: string | null; status: string;
@@ -62,6 +63,7 @@ const CONTACT_STATUS_COLORS: Record<string, string> = {
   skipped: 'bg-gray-100 text-gray-400',
   do_not_call: 'bg-gray-100 text-gray-400',
   retry_scheduled: 'bg-violet-100 text-violet-700', no_answer: 'bg-amber-100 text-amber-700', busy: 'bg-amber-100 text-amber-700',
+  voicemail: 'bg-indigo-100 text-indigo-700', timed_out: 'bg-orange-100 text-orange-700', cancelled: 'bg-slate-100 text-slate-600',
 };
 
 function fmtDate(iso: string) {
@@ -262,16 +264,18 @@ function ProgressBar({ progress }: { progress: CampaignProgress }) {
   const { total, completed, failed, in_progress, skipped } = progress;
   if (total === 0) return null;
   const pct = (n: number) => `${Math.round((n / total) * 100)}%`;
+  const otherTerminal = (progress.busy || 0) + (progress.no_answer || 0) + (progress.voicemail || 0) + (progress.timed_out || 0) + (progress.cancelled || 0);
   return (
     <div className="mb-6">
       <div className="flex justify-between text-xs text-gray-500 mb-1">
         <span>{completed} completed · {in_progress} in progress · {failed} failed · {progress.pending} pending</span>
-        <span>{Math.round(((completed + skipped) / total) * 100)}%</span>
+        <span>{Math.round(((completed + failed + skipped + otherTerminal) / total) * 100)}%</span>
       </div>
       <div className="h-2 bg-gray-100 rounded-full overflow-hidden flex">
         <div className="bg-emerald-500 h-full transition-all" style={{ width: pct(completed) }} />
         <div className="bg-blue-400 h-full transition-all" style={{ width: pct(in_progress) }} />
         <div className="bg-rose-400 h-full transition-all" style={{ width: pct(failed) }} />
+        <div className="bg-amber-400 h-full transition-all" style={{ width: pct(otherTerminal) }} />
         <div className="bg-gray-300 h-full transition-all" style={{ width: pct(skipped) }} />
       </div>
     </div>
@@ -579,13 +583,18 @@ export default function CampaignDetailPage() {
         {campaign.contact_count > 0 && <ProgressBar progress={campaign.progress} />}
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
           {[
             { label: 'Total contacts', value: campaign.contact_count, icon: Users, color: 'text-gray-600 bg-gray-50' },
             { label: 'Completed', value: campaign.progress.completed, icon: CheckCircle, color: 'text-emerald-600 bg-emerald-50' },
             { label: 'Pending', value: campaign.progress.pending, icon: Clock, color: 'text-amber-600 bg-amber-50' },
+            { label: 'Queued', value: campaign.progress.queued || 0, icon: Clock, color: 'text-slate-600 bg-slate-50' },
             { label: 'Failed', value: campaign.progress.failed, icon: XCircle, color: 'text-rose-600 bg-rose-50' },
             { label: 'Calling', value: campaign.progress.in_progress, icon: PhoneCall, color: 'text-blue-600 bg-blue-50' },
+            { label: 'Busy', value: campaign.progress.busy || 0, icon: Phone, color: 'text-amber-600 bg-amber-50' },
+            { label: 'No answer', value: campaign.progress.no_answer || 0, icon: Phone, color: 'text-amber-600 bg-amber-50' },
+            { label: 'Voicemail', value: campaign.progress.voicemail || 0, icon: Phone, color: 'text-indigo-600 bg-indigo-50' },
+            { label: 'Timed out', value: campaign.progress.timed_out || 0, icon: Clock, color: 'text-orange-600 bg-orange-50' },
             { label: 'Retry scheduled', value: campaign.progress.retry_pending || 0, icon: RotateCcw, color: 'text-violet-600 bg-violet-50' },
           ].map(stat => (
             <div key={stat.label} className="bg-white border border-gray-200 rounded-xl p-4 flex items-center gap-3">
@@ -613,7 +622,7 @@ export default function CampaignDetailPage() {
               </button>
             )}
           </div>
-          {contacts.length > 0 && <div className="mb-3 flex flex-wrap gap-2"><input value={contactSearch} onChange={e => setContactSearch(e.target.value)} placeholder="Search name or phone" className="rounded-lg border border-gray-200 px-3 py-2 text-sm" /><select value={contactFilter} onChange={e => setContactFilter(e.target.value)} className="rounded-lg border border-gray-200 px-3 py-2 text-sm"><option value="all">All statuses</option><option value="pending">Pending</option><option value="calling">Calling</option><option value="completed">Completed</option><option value="retry_scheduled">Retry scheduled</option><option value="no_answer">No answer</option><option value="busy">Busy</option><option value="failed">Failed</option><option value="do_not_call">Do not call</option><option value="cancelled">Cancelled</option></select></div>}
+          {contacts.length > 0 && <div className="mb-3 flex flex-wrap gap-2"><input value={contactSearch} onChange={e => setContactSearch(e.target.value)} placeholder="Search name or phone" className="rounded-lg border border-gray-200 px-3 py-2 text-sm" /><select value={contactFilter} onChange={e => setContactFilter(e.target.value)} className="rounded-lg border border-gray-200 px-3 py-2 text-sm"><option value="all">All statuses</option><option value="pending">Pending</option><option value="calling">Calling</option><option value="completed">Completed</option><option value="retry_scheduled">Retry scheduled</option><option value="no_answer">No answer</option><option value="busy">Busy</option><option value="voicemail">Voicemail</option><option value="timed_out">Timed out</option><option value="failed">Failed</option><option value="do_not_call">Do not call</option><option value="cancelled">Cancelled</option></select></div>}
           {contacts.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
               <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">

@@ -7,6 +7,7 @@ from typing import Any
 
 from .client import OmniDimensionClient
 from .exceptions import OmniDimensionResponseError
+from app.models.enums import CallStatus
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,8 @@ class ProviderDispatchResult:
     status: str
     metadata: dict[str, Any]
     provider_request_id: str | None = None
+    provider_bulk_call_id: str | None = None
+    provider_line_id: str | None = None
 
 
 class OmniDimensionCallProvider:
@@ -69,7 +72,30 @@ class OmniDimensionCallProvider:
             status=status,
             metadata={"status": status, "provider_request_id": str(response["requestId"])},
             provider_request_id=str(response["requestId"]),
+            provider_bulk_call_id=str(
+                response.get("bulk_call_id") or response.get("bulkCallId") or response["requestId"]
+            ),
+            provider_line_id=(
+                str(response.get("line_id") or response.get("lineId") or response.get("bulk_call_line_id"))
+                if response.get("line_id") or response.get("lineId") or response.get("bulk_call_line_id")
+                else None
+            ),
         )
+
+    def get_bulk_call_live_status(self, bulk_call_id: str | int) -> dict[str, Any]:
+        """Return aggregate live status for one Omni bulk-call request."""
+        response = self.client.get(f"/bulk-call/{bulk_call_id}/live-status")
+        if not isinstance(response, dict):
+            raise OmniDimensionResponseError("OmniDimension returned an invalid bulk-call status response.")
+        return response
+
+    def get_bulk_call_lines(self, bulk_call_id: str | int) -> list[dict[str, Any]]:
+        """Return individual line records for one Omni bulk-call request."""
+        response = self.client.get(f"/calls/bulk_call/{bulk_call_id}/lines")
+        rows = _bulk_line_rows(response)
+        if rows is None:
+            raise OmniDimensionResponseError("OmniDimension returned an invalid bulk-call lines response.")
+        return rows
 
     def get_call_log(self, call_log_id: str | int) -> dict[str, Any]:
         """Read the provider's post-call record; this never mutates provider state."""
@@ -167,3 +193,54 @@ def _finite_number(value: Any) -> int | float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return value if value >= 0 else None
+
+
+def normalize_omni_call_status(value: Any) -> str | None:
+    """Map documented and observed Omni spellings to one internal call status."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().casefold().replace("-", "_").replace(" ", "_")
+    return {
+        "pending": CallStatus.queued.value,
+        "queued": CallStatus.queued.value,
+        "initiated": CallStatus.queued.value,
+        "scheduled": CallStatus.queued.value,
+        "dispatched": CallStatus.queued.value,
+        "dialing": CallStatus.ringing.value,
+        "calling": CallStatus.ringing.value,
+        "ringing": CallStatus.ringing.value,
+        "answered": CallStatus.in_progress.value,
+        "connected": CallStatus.in_progress.value,
+        "ongoing": CallStatus.in_progress.value,
+        "in_progress": CallStatus.in_progress.value,
+        "completed": CallStatus.completed.value,
+        "complete": CallStatus.completed.value,
+        "finished": CallStatus.completed.value,
+        "ended": CallStatus.completed.value,
+        "failed": CallStatus.failed.value,
+        "error": CallStatus.failed.value,
+        "busy": CallStatus.busy.value,
+        "no_answer": CallStatus.no_answer.value,
+        "noanswer": CallStatus.no_answer.value,
+        "voicemail": CallStatus.voicemail.value,
+        "voicemail_detected": CallStatus.voicemail.value,
+        "cancelled": CallStatus.canceled.value,
+        "canceled": CallStatus.canceled.value,
+        "skipped": CallStatus.skipped.value,
+        "timed_out": CallStatus.timed_out.value,
+        "timeout": CallStatus.timed_out.value,
+    }.get(normalized)
+
+
+def _bulk_line_rows(value: Any) -> list[dict[str, Any]] | None:
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, dict)]
+    if not isinstance(value, dict):
+        return None
+    for key in ("lines", "data", "results", "items", "call_lines", "bulk_call_lines"):
+        if key not in value:
+            continue
+        rows = _bulk_line_rows(value[key])
+        if rows is not None:
+            return rows
+    return [] if not value else None

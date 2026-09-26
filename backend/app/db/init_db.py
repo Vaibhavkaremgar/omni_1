@@ -387,11 +387,15 @@ def _ensure_campaign_contact_columns() -> None:
         "normalized_phone": "VARCHAR(32)",
         "customer_data": "JSON",
         "provider_request_id": "VARCHAR(255)",
+        "provider_bulk_call_id": "VARCHAR(255)",
+        "provider_line_id": "VARCHAR(255)",
         "provider_call_id": "VARCHAR(255)",
         "error_message": "VARCHAR(1024)",
         "claimed_at": "TIMESTAMP",
         "attempt_started_at": "TIMESTAMP",
         "completed_at": "TIMESTAMP",
+        "polling_started_at": "TIMESTAMP",
+        "status_checked_at": "TIMESTAMP",
         "retry_at": "TIMESTAMP",
         "callback_at": "TIMESTAMP",
         "lease_token": "VARCHAR(64)",
@@ -403,6 +407,8 @@ def _ensure_campaign_contact_columns() -> None:
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_status ON campaign_contacts(status)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_normalized_phone ON campaign_contacts(normalized_phone)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_provider_request_id ON campaign_contacts(provider_request_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_provider_bulk_call_id ON campaign_contacts(provider_bulk_call_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_provider_line_id ON campaign_contacts(provider_line_id)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_campaign_contacts_provider_call_id ON campaign_contacts(provider_call_id)"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_contact_phone ON campaign_contacts(campaign_id, normalized_phone)"))
 

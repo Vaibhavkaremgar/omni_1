@@ -11,6 +11,8 @@ from app.integrations.omnidimension import (
     OmniDimensionNetworkError,
     OmniDimensionResponseError,
     OmniDimensionServerError,
+    OmniDimensionCallProvider,
+    normalize_omni_call_status,
 )
 
 
@@ -139,3 +141,43 @@ def test_connectivity_method_is_authenticated_and_testable():
         assert seen["authorization"] == f"Bearer {API_KEY}"
     finally:
         client.close()
+
+
+def test_bulk_call_status_methods_use_documented_paths_and_parse_lines():
+    paths = []
+
+    def handler(request: httpx.Request):
+        paths.append(request.url.path)
+        if request.url.path.endswith("/live-status"):
+            return httpx.Response(200, json={"campaign_status": "in_progress"})
+        return httpx.Response(200, json={"data": {"lines": [{"line_id": "line-1", "status": "completed"}]}})
+
+    client = client_for(handler)
+    provider = OmniDimensionCallProvider(client)
+    try:
+        assert provider.get_bulk_call_live_status("bulk-1")["campaign_status"] == "in_progress"
+        assert provider.get_bulk_call_lines("bulk-1")[0]["line_id"] == "line-1"
+        assert paths == [
+            "/api/v1/bulk-call/bulk-1/live-status",
+            "/api/v1/calls/bulk_call/bulk-1/lines",
+        ]
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    ("provider_status", "internal_status"),
+    [
+        ("IN PROGRESS", "in_progress"),
+        ("no-answer", "no_answer"),
+        ("voicemail_detected", "voicemail"),
+        ("cancelled", "canceled"),
+        ("skipped", "skipped"),
+    ],
+)
+def test_bulk_call_status_normalization(provider_status, internal_status):
+    assert normalize_omni_call_status(provider_status) == internal_status
+
+
+def test_unknown_bulk_call_status_is_not_guessed():
+    assert normalize_omni_call_status("provider_new_state") is None

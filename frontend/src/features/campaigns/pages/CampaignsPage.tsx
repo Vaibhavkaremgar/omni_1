@@ -25,7 +25,7 @@ interface Campaign {
   created_at: string;
   updated_at: string;
   scheduled_at?: string | null;
-  progress: { total: number; completed: number; in_progress: number; pending: number; failed: number; retry_pending?: number; cancelled?: number };
+  progress: { total: number; completed: number; in_progress: number; pending: number; failed: number; skipped?: number; retry_pending?: number; cancelled?: number; queued?: number; busy?: number; no_answer?: number; voicemail?: number; timed_out?: number };
 }
 
 const statusConfig: Record<string, { color: string; label: string }> = {
@@ -137,6 +137,9 @@ export default function CampaignsPage() {
                           <span>{camp.progress.completed}/{camp.progress.total} completed</span>
                           <span>{camp.progress.pending} pending</span>
                           <span>{camp.progress.in_progress} calling</span>
+                          {(camp.progress.busy || 0) > 0 && <span>{camp.progress.busy} busy</span>}
+                          {(camp.progress.no_answer || 0) > 0 && <span>{camp.progress.no_answer} no answer</span>}
+                          {(camp.progress.timed_out || 0) > 0 && <span>{camp.progress.timed_out} timed out</span>}
                           <span>{camp.progress.retry_pending || 0} retry</span>
                           <span>{camp.progress.failed} failed</span>
                           {camp.scheduled_at && <span>Scheduled {new Date(camp.scheduled_at).toLocaleString()}</span>}
@@ -144,7 +147,7 @@ export default function CampaignsPage() {
                       </div>
                       <div className="text-right text-xs text-gray-500 shrink-0">
                         <div>{camp.contact_count} contact{camp.contact_count === 1 ? '' : 's'}</div>
-                        <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-gray-100"><div className="h-full bg-violet-500" style={{ width: `${camp.progress.total ? Math.round(((camp.progress.completed + (camp.progress.cancelled || 0)) / camp.progress.total) * 100) : 0}%` }} /></div>
+                        <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-gray-100"><div className="h-full bg-violet-500" style={{ width: `${camp.progress.total ? Math.round(((camp.progress.completed + camp.progress.failed + (camp.progress.skipped || 0) + (camp.progress.busy || 0) + (camp.progress.no_answer || 0) + (camp.progress.voicemail || 0) + (camp.progress.timed_out || 0) + (camp.progress.cancelled || 0)) / camp.progress.total) * 100) : 0}%` }} /></div>
                       </div>
                     </div>
                   </div>

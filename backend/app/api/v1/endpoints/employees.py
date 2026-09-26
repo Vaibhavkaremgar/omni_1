@@ -63,6 +63,16 @@ def employee_response(employee: AIEmployee) -> AIEmployeeRead:
     active = draft or published or max(employee.versions, key=lambda version: version.version_number, default=None)
     configuration = public_employee_configuration(active.configuration) if active else None
     if configuration:
+        sections = configuration.get("conversation_sections")
+        if (
+            configuration.get("script_source") != "reviewed"
+            and isinstance(sections, list)
+            and len(sections) == 6
+        ):
+            # Existing generated employees may still have the old metadata-led
+            # cards persisted. Present the same structured script in the new
+            # owner-facing format without mutating the saved version.
+            configuration = {**configuration, "call_script": render_call_script_sections(sections)}
         configuration = {**configuration, "script_language_validation": validation_summary(configuration)}
     fields = configuration or {}
     provider_version = published
@@ -213,7 +223,7 @@ def _has_customer_script(configuration: dict) -> bool:
 def _has_six_spoken_examples(configuration: dict) -> bool:
     cards = configuration.get("call_script")
     return isinstance(cards, dict) and len(cards) == 6 and all(
-        re.search(r"(?m)^Spoken example:\s*\S", str(card)) for card in cards.values()
+        re.search(r"(?m)^(?:Spoken example|AI):\s*\S", str(card)) for card in cards.values()
     )
 
 

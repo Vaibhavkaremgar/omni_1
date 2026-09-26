@@ -97,6 +97,10 @@ class CampaignProgress(BaseModel):
     dispatching: int = 0
     retry_pending: int = 0
     cancelled: int = 0
+    busy: int = 0
+    no_answer: int = 0
+    voicemail: int = 0
+    timed_out: int = 0
 
 
 class CampaignDetail(BaseModel):
@@ -194,8 +198,14 @@ def _campaign_progress(campaign_id: UUID, db: Session) -> CampaignProgress:
         }),
         queued=sum(1 for c in contacts if c.status == ContactStatus.queued.value),
         dispatching=sum(1 for c in contacts if c.status == ContactStatus.dispatching.value),
-        retry_pending=sum(1 for c in contacts if c.status == ContactStatus.retry_pending.value),
+        retry_pending=sum(1 for c in contacts if c.status in {
+            ContactStatus.retry_pending.value, ContactStatus.retry_scheduled.value
+        }),
         cancelled=sum(1 for c in contacts if c.status == ContactStatus.cancelled.value),
+        busy=sum(1 for c in contacts if c.status == ContactStatus.busy.value),
+        no_answer=sum(1 for c in contacts if c.status == ContactStatus.no_answer.value),
+        voicemail=sum(1 for c in contacts if c.status == ContactStatus.voicemail.value),
+        timed_out=sum(1 for c in contacts if c.status == ContactStatus.timed_out.value),
     )
 
 

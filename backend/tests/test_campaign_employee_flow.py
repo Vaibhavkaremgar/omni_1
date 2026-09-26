@@ -766,7 +766,7 @@ def test_payload_preserves_complete_shabdha_context_and_telugu_configuration():
     assert "Converse naturally in Telugu" in bodies
     assert "To be defined through the builder" not in bodies
     assert payload["welcome_message"] not in bodies
-    assert payload["model"]["model"] == "gemini-2.5-flash-lite"
+    assert payload["model"]["model"] == "gpt-4.1-mini"
 
 
 def test_payload_preserves_exact_paste_prompt_without_system_prompt_duplication():

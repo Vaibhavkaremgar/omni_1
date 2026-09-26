@@ -102,6 +102,16 @@ class Settings(BaseSettings):
         default=15.0,
         validation_alias="OMNIDIMENSION_TIMEOUT_SECONDS",
     )
+    omni_call_status_poll_interval_seconds: int = Field(
+        default=10,
+        validation_alias="OMNI_CALL_STATUS_POLL_INTERVAL_SECONDS",
+        ge=1,
+    )
+    omni_call_status_max_wait_seconds: int = Field(
+        default=1800,
+        validation_alias="OMNI_CALL_STATUS_MAX_WAIT_SECONDS",
+        ge=30,
+    )
     live_speech_silence_timeout_ms: int = Field(default=500, validation_alias="LIVE_SPEECH_SILENCE_TIMEOUT_MS", ge=150, le=2000)
     omnidimension_voice_catalog_json: str = Field(default="", validation_alias="OMNIDIMENSION_VOICE_CATALOG_JSON")
     phone_number_monthly_price_inr: Decimal = Field(

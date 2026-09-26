@@ -14,16 +14,22 @@ from sqlalchemy.orm import Session
 from app.models.campaign import Campaign
 from app.models.enums import CampaignStatus, ContactStatus
 from app.models.campaign_contact import CampaignContact
-from app.services.campaign_execution import CampaignExecutionError, campaign_execution_service, recover_stale_contacts, recover_stale_slots
+from app.services.campaign_execution import (
+    CampaignExecutionError,
+    campaign_execution_service,
+    poll_campaign_active_calls,
+    recover_stale_contacts,
+    recover_stale_slots,
+)
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
 class CampaignScheduler:
-    def __init__(self, session_factory=None, interval_seconds: int = 10):
+    def __init__(self, session_factory=None, interval_seconds: int | None = None):
         self.session_factory = session_factory
-        self.interval_seconds = interval_seconds
+        self.interval_seconds = interval_seconds or get_settings().omni_call_status_poll_interval_seconds
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._lifecycle_lock = threading.RLock()
@@ -102,7 +108,13 @@ class CampaignScheduler:
         recover_stale_contacts(db)
         recover_stale_slots(db)
         campaigns = db.scalars(select(Campaign).where(
-            Campaign.status.in_([CampaignStatus.scheduled.value, CampaignStatus.running.value]),
+            Campaign.status.in_([
+                CampaignStatus.scheduled.value,
+                CampaignStatus.running.value,
+                CampaignStatus.paused.value,
+                CampaignStatus.paused_credits.value,
+                CampaignStatus.cancelled.value,
+            ]),
             (Campaign.scheduled_at.is_(None) | (Campaign.scheduled_at <= now)),
         )).all()
         logger.info("[SCHEDULER_CAMPAIGN_SCAN] running_campaigns=%s campaign_ids=%s", len(campaigns), [str(c.id) for c in campaigns])
@@ -114,6 +126,14 @@ class CampaignScheduler:
                 campaign.status = CampaignStatus.running.value
                 campaign.starts_at = campaign.starts_at or now
                 db.commit()
+            poll_campaign_active_calls(db, campaign)
+            db.refresh(campaign)
+            if campaign.status != CampaignStatus.running.value:
+                logger.info(
+                    "[SCHEDULER_CAMPAIGN_POLL_ONLY] campaign_id=%s status=%s reason=new_dispatch_not_allowed",
+                    campaign.id, campaign.status,
+                )
+                continue
             logger.info("[SCHEDULER_CAMPAIGN_ELIGIBLE] campaign_id=%s reason=status_and_schedule_due", campaign.id)
             for _ in range(max(1, int(campaign.concurrency or 1))):
                 try:

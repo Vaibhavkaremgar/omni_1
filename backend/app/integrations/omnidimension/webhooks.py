@@ -13,6 +13,8 @@ TERMINAL_STATUSES = {
     CallStatus.busy.value,
     CallStatus.voicemail.value,
     CallStatus.canceled.value,
+    CallStatus.skipped.value,
+    CallStatus.timed_out.value,
 }
 
 
@@ -83,8 +85,12 @@ def normalize_status(value: Any) -> str | None:
         "no_answer": CallStatus.no_answer.value,
         "busy": CallStatus.busy.value,
         "voicemail": CallStatus.voicemail.value,
+        "voicemail_detected": CallStatus.voicemail.value,
         "canceled": CallStatus.canceled.value,
         "cancelled": CallStatus.canceled.value,
+        "skipped": CallStatus.skipped.value,
+        "timed_out": CallStatus.timed_out.value,
+        "timeout": CallStatus.timed_out.value,
     }.get(normalized)
 
 

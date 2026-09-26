@@ -24,7 +24,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.base import utc_now
-from app.integrations.omnidimension import OmniDimensionCallProvider, OmniDimensionClient
+from app.integrations.omnidimension import (
+    OmniDimensionCallProvider,
+    OmniDimensionClient,
+    normalize_omni_call_status,
+)
 from app.integrations.omnidimension.exceptions import OmniDimensionError
 from app.models.ai_employee import AIEmployee
 from app.models.call import Call
@@ -130,6 +134,34 @@ TERMINAL_CONTACT_STATUSES = {
     ContactStatus.failed.value,
     ContactStatus.do_not_call.value,
     ContactStatus.skipped.value,
+    ContactStatus.cancelled.value,
+    ContactStatus.voicemail.value,
+    ContactStatus.timed_out.value,
+}
+
+ACTIVE_CONTACT_STATUSES = {
+    ContactStatus.claimed.value,
+    ContactStatus.dispatching.value,
+    ContactStatus.queued.value,
+    ContactStatus.calling.value,
+    ContactStatus.in_progress.value,
+}
+
+ACTIVE_CALL_STATUSES = {
+    CallStatus.queued.value,
+    CallStatus.ringing.value,
+    CallStatus.in_progress.value,
+}
+
+TERMINAL_CALL_STATUSES = {
+    CallStatus.completed.value,
+    CallStatus.failed.value,
+    CallStatus.no_answer.value,
+    CallStatus.busy.value,
+    CallStatus.voicemail.value,
+    CallStatus.canceled.value,
+    CallStatus.skipped.value,
+    CallStatus.timed_out.value,
 }
 
 
@@ -181,13 +213,21 @@ def next_calling_window_time(campaign: Campaign, requested_at: datetime) -> date
 
 
 def recover_stale_contacts(db: Session, *, lease_seconds: int = 900) -> int:
-    """Return abandoned claims to the queue after a worker/process crash."""
+    """Recover only pre-dispatch claims; active provider calls are polled safely."""
     cutoff = utc_now() - timedelta(seconds=lease_seconds)
     rows = db.scalars(select(CampaignContact).where(
-        CampaignContact.status.in_([ContactStatus.dispatching.value, ContactStatus.in_progress.value, ContactStatus.calling.value]),
+        CampaignContact.status == ContactStatus.dispatching.value,
         CampaignContact.claimed_at < cutoff,
     )).all()
     for contact in rows:
+        active_call = db.scalar(select(Call).where(
+            Call.campaign_contact_id == contact.id,
+            Call.status.in_(ACTIVE_CALL_STATUSES),
+        ).order_by(Call.created_at.desc()))
+        if active_call is not None or contact.provider_bulk_call_id or contact.provider_request_id or contact.provider_call_id:
+            contact.status = ContactStatus.in_progress.value
+            contact.polling_started_at = contact.polling_started_at or contact.attempt_started_at or contact.claimed_at
+            continue
         contact.status = ContactStatus.retry_scheduled.value if contact.attempt_count < (contact.campaign.max_attempts if contact.campaign else 3) else ContactStatus.failed.value
         contact.retry_at = utc_now() if contact.status == ContactStatus.retry_scheduled.value else None
         contact.lease_token = None
@@ -198,16 +238,26 @@ def recover_stale_contacts(db: Session, *, lease_seconds: int = 900) -> int:
 
 
 def recover_stale_slots(db: Session, *, lease_seconds: int = 900) -> int:
-    cutoff = utc_now() - timedelta(seconds=lease_seconds)
+    """Release abandoned/terminal slots without guessing that an active call ended."""
     rows = db.scalars(select(CampaignExecutionSlot).where(
         CampaignExecutionSlot.released_at.is_(None),
-        CampaignExecutionSlot.reserved_at < cutoff,
     )).all()
+    released = 0
     for slot in rows:
-        slot.released_at = utc_now()
-    if rows:
+        call = db.get(Call, slot.call_id) if slot.call_id else None
+        contact = db.get(CampaignContact, slot.campaign_contact_id) if slot.campaign_contact_id else None
+        terminal = bool(call and call.status in TERMINAL_CALL_STATUSES) or bool(
+            contact and contact.status in TERMINAL_CONTACT_STATUSES
+        )
+        abandoned = _elapsed_seconds(slot.reserved_at, utc_now()) >= lease_seconds and call is None and (
+            contact is None or contact.status not in ACTIVE_CONTACT_STATUSES
+        )
+        if terminal or abandoned:
+            slot.released_at = utc_now()
+            released += 1
+    if released:
         db.commit()
-    return len(rows)
+    return released
 
 
 def reserve_campaign_slot(db: Session, campaign: Campaign, contact: CampaignContact) -> CampaignExecutionSlot | None:
@@ -351,6 +401,8 @@ def dispatch_single_contact(
     metadata = {
         "local_call_id": str(call.id),
         "campaign_id": str(campaign.id),
+        "campaign_contact_id": str(contact.id),
+        "contact_id": str(contact.id),
         "tenant_id": str(campaign.tenant_id),
         "employee_id": str(employee.id),
     }
@@ -389,15 +441,23 @@ def dispatch_single_contact(
         raise
 
     provider_request_id = getattr(result, "provider_request_id", None)
+    provider_bulk_call_id = getattr(result, "provider_bulk_call_id", None) or provider_request_id
+    provider_line_id = getattr(result, "provider_line_id", None)
     call.provider_call_id = result.provider_call_id
     call.dispatch_metadata = {
         **(call.dispatch_metadata or {}),
         "provider_status": result.status,
         "provider_request_id": provider_request_id,
+        "provider_bulk_call_id": provider_bulk_call_id,
+        "provider_line_id": provider_line_id,
         "provider_call_id_received_at_dispatch": bool(result.provider_call_id),
     }
     contact.provider_request_id = provider_request_id
+    contact.provider_bulk_call_id = provider_bulk_call_id
+    contact.provider_line_id = provider_line_id
     contact.provider_call_id = result.provider_call_id
+    contact.polling_started_at = contact.polling_started_at or utc_now()
+    contact.status_checked_at = None
     contact.last_call_id = call.id
     try:
         db.commit()
@@ -408,6 +468,253 @@ def dispatch_single_contact(
     logger.info("[CAMPAIGN_CONTACT_DISPATCHED] campaign_id=%s contact_id=%s local_call_id=%s provider_request_id=%s", campaign.id, contact.id, call.id, provider_request_id or "unknown")
     db.refresh(call)
     return call
+
+
+def _nested_value(value: object, keys: tuple[str, ...]) -> object | None:
+    if isinstance(value, dict):
+        for key in keys:
+            if key in value and value[key] not in (None, ""):
+                return value[key]
+        for child in value.values():
+            found = _nested_value(child, keys)
+            if found not in (None, ""):
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _nested_value(child, keys)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def _line_identifier(line: dict, keys: tuple[str, ...]) -> str | None:
+    value = _nested_value(line, keys)
+    return str(value) if value not in (None, "") else None
+
+
+def _select_contact_line(contact: CampaignContact, call: Call, lines: list[dict]) -> dict | None:
+    """Select an exact provider line; a single-line dispatch is unambiguous."""
+    if len(lines) == 1:
+        return lines[0]
+    matches: list[dict] = []
+    for line in lines:
+        line_id = _line_identifier(line, ("line_id", "lineId", "bulk_call_line_id", "bulkCallLineId"))
+        call_id = _line_identifier(line, ("call_id", "callId", "call_log_id", "callLogId"))
+        local_call_id = _line_identifier(line, ("local_call_id",))
+        contact_id = _line_identifier(line, ("campaign_contact_id", "contact_id"))
+        if (
+            (contact.provider_line_id and line_id == str(contact.provider_line_id))
+            or (contact.provider_call_id and call_id == str(contact.provider_call_id))
+            or local_call_id == str(call.id)
+            or contact_id == str(contact.id)
+        ):
+            matches.append(line)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _elapsed_seconds(started_at: datetime | None, now: datetime) -> float:
+    if started_at is None:
+        return 0.0
+    if started_at.tzinfo is None and now.tzinfo is not None:
+        started_at = started_at.replace(tzinfo=now.tzinfo)
+    return max(0.0, (now - started_at).total_seconds())
+
+
+def _retry_or_terminal_status(contact: CampaignContact, campaign: Campaign, call_status: str) -> str:
+    if call_status == CallStatus.completed.value:
+        return ContactStatus.completed.value
+    if call_status == CallStatus.voicemail.value:
+        return ContactStatus.voicemail.value
+    if call_status == CallStatus.canceled.value:
+        return ContactStatus.cancelled.value
+    if call_status == CallStatus.skipped.value:
+        return ContactStatus.skipped.value
+    retryable = call_status in {
+        CallStatus.failed.value,
+        CallStatus.no_answer.value,
+        CallStatus.busy.value,
+        CallStatus.timed_out.value,
+    }
+    retry_intervals = list(campaign.retry_intervals or [2])
+    retry_index = max(0, contact.attempt_count - 1)
+    if (
+        retryable
+        and campaign.retry_enabled is not False
+        and contact.attempt_count < campaign.max_attempts
+        and retry_index < len(retry_intervals)
+    ):
+        contact.retry_at = utc_now() + timedelta(minutes=max(1, int(retry_intervals[retry_index])))
+        return ContactStatus.retry_scheduled.value
+    return {
+        CallStatus.no_answer.value: ContactStatus.no_answer.value,
+        CallStatus.busy.value: ContactStatus.busy.value,
+        CallStatus.timed_out.value: ContactStatus.timed_out.value,
+    }.get(call_status, ContactStatus.failed.value)
+
+
+def _finish_polled_call(
+    db: Session,
+    campaign: Campaign,
+    contact: CampaignContact,
+    call: Call,
+    call_status: str,
+    *,
+    provider_status: str,
+) -> None:
+    now = utc_now()
+    old_status = contact.status
+    call.status = call_status
+    call.ended_at = call.ended_at or now
+    call.completed_at = call.completed_at or now
+    call.dispatch_metadata = {
+        **(call.dispatch_metadata or {}),
+        "provider_status": provider_status,
+        "terminal_status_source": "bulk_call_status_poll",
+    }
+    contact.status = _retry_or_terminal_status(contact, campaign, call_status)
+    contact.completed_at = None if contact.status == ContactStatus.retry_scheduled.value else now
+    contact.lease_token = None
+    if call_status == CallStatus.timed_out.value:
+        contact.error_message = "Omni call status did not reach a terminal state before the polling deadline."
+    else:
+        contact.error_message = None
+    release_campaign_slot(db, call_id=call.id)
+    _update_campaign_progress(db, campaign)
+    db.commit()
+    logger.info(
+        "[CAMPAIGN_CALL_TERMINAL] campaign_id=%s contact_id=%s local_call_id=%s old_status=%s new_status=%s provider_status=%s",
+        campaign.id, contact.id, call.id, old_status, contact.status, provider_status,
+    )
+
+
+def poll_campaign_active_calls(db: Session, campaign: Campaign) -> int:
+    """Poll due active calls once. Unknown status keeps the execution slot held."""
+    settings = get_settings()
+    now = utc_now()
+    interval = int(settings.omni_call_status_poll_interval_seconds)
+    max_wait = int(settings.omni_call_status_max_wait_seconds)
+    contacts = db.scalars(select(CampaignContact).where(
+        CampaignContact.campaign_id == campaign.id,
+        CampaignContact.status.in_(ACTIVE_CONTACT_STATUSES),
+    ).order_by(CampaignContact.created_at)).all()
+    if not contacts:
+        return 0
+
+    provider: OmniDimensionCallProvider | None = None
+    terminal_count = 0
+    for contact in contacts:
+        started_at = contact.polling_started_at or contact.attempt_started_at or contact.claimed_at
+        if _elapsed_seconds(started_at, now) >= max_wait:
+            call = db.get(Call, contact.last_call_id) if contact.last_call_id else db.scalar(
+                select(Call).where(Call.campaign_contact_id == contact.id).order_by(Call.created_at.desc())
+            )
+            if call is not None and call.status in ACTIVE_CALL_STATUSES:
+                logger.warning(
+                    "[CAMPAIGN_CALL_POLL_TIMEOUT] campaign_id=%s contact_id=%s local_call_id=%s max_wait_seconds=%s",
+                    campaign.id, contact.id, call.id, max_wait,
+                )
+                _finish_polled_call(
+                    db, campaign, contact, call, CallStatus.timed_out.value,
+                    provider_status="polling_timeout",
+                )
+                terminal_count += 1
+            continue
+        if contact.status_checked_at and _elapsed_seconds(contact.status_checked_at, now) < interval:
+            continue
+        call = db.get(Call, contact.last_call_id) if contact.last_call_id else db.scalar(
+            select(Call).where(Call.campaign_contact_id == contact.id).order_by(Call.created_at.desc())
+        )
+        if call is None:
+            contact.status_checked_at = now
+            contact.error_message = "Active campaign contact has no local call record."
+            db.commit()
+            continue
+        bulk_call_id = contact.provider_bulk_call_id or contact.provider_request_id or (
+            (call.dispatch_metadata or {}).get("provider_bulk_call_id")
+            or (call.dispatch_metadata or {}).get("provider_request_id")
+        )
+        contact.status_checked_at = now
+        if not bulk_call_id:
+            contact.error_message = "Omni bulk call identifier is not available yet."
+            db.commit()
+            logger.warning(
+                "[CAMPAIGN_CALL_POLL_DEFERRED] campaign_id=%s contact_id=%s local_call_id=%s reason=missing_bulk_call_id",
+                campaign.id, contact.id, call.id,
+            )
+            continue
+        logger.info(
+            "[CAMPAIGN_CALL_POLL_STARTED] campaign_id=%s contact_id=%s local_call_id=%s bulk_call_id=%s",
+            campaign.id, contact.id, call.id, bulk_call_id,
+        )
+        try:
+            if provider is None:
+                provider = OmniDimensionCallProvider(OmniDimensionClient(settings))
+            live = provider.get_bulk_call_live_status(str(bulk_call_id))
+            logger.info(
+                "[CAMPAIGN_CALL_LIVE_STATUS] campaign_id=%s contact_id=%s local_call_id=%s campaign_status=%s",
+                campaign.id, contact.id, call.id,
+                _nested_value(live, ("campaign_status", "campaignStatus", "status")) or "unknown",
+            )
+            lines = provider.get_bulk_call_lines(str(bulk_call_id))
+        except OmniDimensionError as exc:
+            contact.error_message = f"Omni status check failed: {type(exc).__name__}"
+            db.commit()
+            logger.warning(
+                "[CAMPAIGN_CALL_POLL_FAILED] campaign_id=%s contact_id=%s local_call_id=%s exception_type=%s",
+                campaign.id, contact.id, call.id, type(exc).__name__,
+            )
+            continue
+        line = _select_contact_line(contact, call, lines)
+        if line is None:
+            contact.error_message = "Omni line status is not yet available or could not be matched safely."
+            db.commit()
+            logger.info(
+                "[CAMPAIGN_CALL_STATUS_UNKNOWN] campaign_id=%s contact_id=%s local_call_id=%s line_count=%s",
+                campaign.id, contact.id, call.id, len(lines),
+            )
+            continue
+        provider_status_value = _nested_value(line, ("call_status", "callStatus", "status", "state"))
+        provider_status = str(provider_status_value or "unknown")
+        normalized_status = normalize_omni_call_status(provider_status_value)
+        line_id = _line_identifier(line, ("line_id", "lineId", "bulk_call_line_id", "bulkCallLineId", "id"))
+        provider_call_id = _line_identifier(line, ("call_id", "callId", "call_log_id", "callLogId"))
+        contact.provider_line_id = contact.provider_line_id or line_id
+        contact.provider_call_id = contact.provider_call_id or provider_call_id
+        call.provider_call_id = call.provider_call_id or provider_call_id
+        call.dispatch_metadata = {
+            **(call.dispatch_metadata or {}),
+            "provider_bulk_call_id": str(bulk_call_id),
+            "provider_line_id": contact.provider_line_id,
+            "provider_status": provider_status,
+        }
+        if normalized_status is None:
+            contact.error_message = f"Unknown Omni call status: {provider_status[:120]}"
+            db.commit()
+            logger.warning(
+                "[CAMPAIGN_CALL_STATUS_UNKNOWN] campaign_id=%s contact_id=%s local_call_id=%s provider_status=%s",
+                campaign.id, contact.id, call.id, provider_status,
+            )
+            continue
+        contact.error_message = None
+        logger.info(
+            "[CAMPAIGN_CALL_STATUS_CHECKED] campaign_id=%s contact_id=%s local_call_id=%s provider_status=%s normalized_status=%s",
+            campaign.id, contact.id, call.id, provider_status, normalized_status,
+        )
+        if normalized_status in ACTIVE_CALL_STATUSES:
+            call.status = normalized_status
+            contact.status = ContactStatus.in_progress.value
+            db.commit()
+            continue
+        if normalized_status in TERMINAL_CALL_STATUSES:
+            _finish_polled_call(
+                db, campaign, contact, call, normalized_status,
+                provider_status=provider_status,
+            )
+            terminal_count += 1
+    provider_client = getattr(provider, "client", None)
+    if provider_client is not None:
+        provider_client.close()
+    return terminal_count
 
 
 # ── Campaign lifecycle service ────────────────────────────────────────────────
@@ -653,6 +960,21 @@ class CampaignExecutionService:
         if not _within_calling_window(campaign):
             logger.info("[SCHEDULER_CAMPAIGN_SKIPPED] campaign_id=%s reason=outside_calling_window timezone=%s window=%s-%s", campaign.id, campaign.timezone or "UTC", campaign.calling_window_start, campaign.calling_window_end)
             return None
+        if int(campaign.concurrency or 1) == 1:
+            active_contact = db.scalar(select(CampaignContact.id).where(
+                CampaignContact.campaign_id == campaign.id,
+                CampaignContact.status.in_(ACTIVE_CONTACT_STATUSES),
+            ))
+            active_slot = db.scalar(select(CampaignExecutionSlot.id).where(
+                CampaignExecutionSlot.campaign_id == campaign.id,
+                CampaignExecutionSlot.released_at.is_(None),
+            ))
+            if active_contact is not None or active_slot is not None:
+                logger.info(
+                    "[SCHEDULER_CAMPAIGN_SKIPPED] campaign_id=%s reason=sequential_call_still_active active_contact=%s active_slot=%s",
+                    campaign.id, active_contact, active_slot,
+                )
+                return None
         contact = db.scalar(
             select(CampaignContact).where(
                 CampaignContact.campaign_id == campaign.id,
