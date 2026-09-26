@@ -254,14 +254,17 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         )
     else:
         canonical_prompt = str(configuration.get("final_prompt") or build_employee_prompt(configuration))
+    welcome_message = _welcome_message_from_first_section(saved_script) or _welcome_message(employee, configuration, lang)
     context = [
         {"title": "Critical Runtime Guardrails", "body": (
+            "The Generated Call Script is reference material for facts, goals, and possible handling; it is not a line-by-line response queue. "
+            "The welcome message has already spoken the opening. Never greet again, repeat the welcome, or restart section one after the caller responds. "
             "The caller's latest words always have priority over the script sequence. First identify whether the caller asked a question, "
             "gave an answer, changed the topic, objected, or requested repetition. Answer that exact question before continuing. "
             "An out-of-script question is not permission to recite the next script line. Pause briefly with a natural holding phrase such as "
             "'One moment, let me check that for you.' For an out-of-script question, first check the employee knowledge base when one is "
-            "available; otherwise use the connected internet/search source, then use your live Gemini LLM reasoning to summarize only verified "
-            "information. Never use an unrelated script answer. If neither the knowledge base nor search/reasoning provides viable information, "
+            "available; otherwise answer from the live Gemini model's reliable general knowledge or any actually connected search source. "
+            "Never use an unrelated script answer. If neither the knowledge base nor the live model provides reliable information, "
             "say 'I don't have that information right now,' offer a callback or human follow-up if appropriate, and politely move to the next "
             "relevant step. Never guess, invent, or present uncertainty as fact. "
             "After answering, continue only from the next relevant unfinished step. Never repeat the same sentence, question, greeting, or section. "
@@ -287,7 +290,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             post_call_actions["webhook"]["extracted_variables"] = variables
     payload: dict[str, Any] = {
         "name": _text(configuration.get("name"), employee.name),
-        "welcome_message": _welcome_message(employee, configuration, lang),
+        "welcome_message": welcome_message,
         # Omni substitutes {{name}} from the dispatch call_context at call
         # time.  Declare the slot on the published agent without assigning a
         # contact value: each call supplies its own value in call_context.
@@ -676,7 +679,7 @@ def _remove_builder_instruction(text: str) -> str:
 def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], language: str) -> str:
     """Build the static greeting sent to Omni, excluding builder-only copy."""
     outbound = _text(configuration.get("call_type", employee.call_type)).casefold() == "outbound"
-    if outbound and configuration.get("script_source") == "reviewed":
+    if outbound:
         cards = configuration.get("call_script")
         if isinstance(cards, dict) and len(cards) == 6:
             reviewed_sections = []
@@ -720,6 +723,19 @@ def _welcome_message(employee: AIEmployee, configuration: dict[str, Any], langua
         "and continue without asking for the caller's name or leaving an awkward gap. "
         f"Then continue naturally with this approved opening: {base}"
     )
+
+
+def _welcome_message_from_first_section(script: dict[str, str]) -> str:
+    """Use the first opening utterance from the first published script section."""
+    if not isinstance(script, dict) or not script:
+        return ""
+    first_body = _text(next(iter(script.values()), ""))
+    # Current generated scripts may place the opening utterance under Question
+    # and reserve Spoken example for the response to that opening.
+    match = re.search(r"(?m)^Question:\s*(.+)$", first_body)
+    if not match:
+        match = re.search(r"(?m)^Spoken example:\s*(.+)$", first_body)
+    return _complete_opening(match.group(1)) if match else ""
 
 
 def _is_valid_outbound_opening(candidate: str, sections: list[Any]) -> bool:
