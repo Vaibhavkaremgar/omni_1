@@ -350,7 +350,8 @@ Use:
 Mandatory spoken-language rules:
 
 * Keep "thank you", "thanks", "sorry", and "okay" in English; never translate these expressions into Telugu or Hindi.
-* Speak all numbers, quantities, prices, dates, years, times, percentages, phone numbers, OTPs, IDs, codes, and reference numbers in English. Speak identifiers digit by digit or character by character where appropriate.
+* Speak all numbers, quantities, prices, dates, years, times, percentages, phone numbers, OTPs, IDs, codes, and reference numbers in English. Write ordinal dates as English words, never numeric ordinals: use "thirty-first" instead of "31st", "twenty-second" instead of "22nd", and "fifteenth August" instead of "15 August". Speak identifiers digit by digit or character by character where appropriate.
+* For Telugu and Hindi calls, use the selected language's natural grammar but mix in many familiar English conversational and business words (for example: actually, okay, sure, thanks, sorry, call, update, details, information, confirm, available, requirement, location, date, time, price, quotation, delivery, booking, appointment, schedule, team, manager, document, payment, and follow-up). Do not produce formal or fully translated regional-language paragraphs; keep the result naturally code-switched with substantial English vocabulary.
 * Keep the generated script context-aware and conversational. Respond to what the person actually says, avoid generic recitation, and complete the identity-and-purpose opening in one uninterrupted turn.
 
 Appropriate conversational acknowledgements may include:
@@ -690,6 +691,8 @@ For example:
 must be understood as a date, not as a numerical fraction.
 
 When generating speech, use a natural spoken date format appropriate to the conversation.
+
+For every language, spell the day ordinal and year in English words in the spoken example: "thirty-first August, twenty twenty-six". Never output numeric forms such as "31st", "31 August", "31/08/2026", or "2026" in a spoken line.
 
 If the user explicitly provides a date format, preserve its meaning.
 
