@@ -717,14 +717,17 @@ class RealLLMService(LLMService):
             api_key=attempt.api_key, base_url=attempt.base_url,
             # Do not impose the six-section schema at provider level.  The only
             # hard gate is parseable JSON; shape/content checks are advisory.
-            response_schema=None,
+            response_schema=(strict_script_response_schema()
+                             if attempt.provider.casefold() in {"gemini", "google", "google-gemini"}
+                             else None),
             response_schema_name="employee_script",
             max_output_tokens=4000,
         )
         payload["request_id"] = str(request_id)
         payload["attempt_number"] = attempt_number
         payload["provider_unavailable_backoff_seconds"] = provider_unavailable_backoff_seconds
-        payload["json"]["response_format"] = {"type": "json_object"}
+        if attempt.provider.casefold() not in {"gemini", "google", "google-gemini"}:
+            payload["json"]["response_format"] = {"type": "json_object"}
         response = self._perform_json_request(attempt.provider, payload)
         if mode == "json_object":
             response = _normalise_json_object_script(response)
@@ -1405,11 +1408,13 @@ class RealLLMService(LLMService):
         if normalized in {"gemini", "google", "google-gemini"}:
             api_key = api_key or self.settings.gemini_api_key
             base_url = (base_url or self.settings.gemini_base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
-            # responseFormat uses the REST enum value. The deprecated
-            # responseMimeType field is the one that accepts "application/json".
-            output: dict[str, Any] = {"mimeType": "APPLICATION_JSON"}
+            generation_config: dict[str, Any] = {
+                "temperature": 0.2,
+                "maxOutputTokens": max_output_tokens or 4000,
+                "responseMimeType": "application/json",
+            }
             if response_schema:
-                output["schema"] = _gemini_schema(response_schema)
+                generation_config["responseSchema"] = _gemini_schema(response_schema)
             return {
                 "method": "POST",
                 "url": f"{base_url}/models/{model}:generateContent",
@@ -1420,11 +1425,7 @@ class RealLLMService(LLMService):
                 "json": {
                     "systemInstruction": {"parts": [{"text": system_prompt}]},
                     "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.2,
-                        "maxOutputTokens": max_output_tokens or 4000,
-                        "responseFormat": {"text": output},
-                    },
+                    "generationConfig": generation_config,
                 },
             }
         if normalized in {"openai", "open-ai", "groq"}:
