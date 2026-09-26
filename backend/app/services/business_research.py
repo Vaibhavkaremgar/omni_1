@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import random
+import time
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -142,8 +144,35 @@ def ensure_business_research(configuration: dict[str, Any], client: httpx.Client
             "contents": [{"role": "user", "parts": [{"text": formatting_prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"},
         }
-        response = http.post(endpoint, headers=headers, json=formatting_payload)
-        response.raise_for_status()
+        # Retry formatting only; grounded search results above are retained.
+        formatting_models = [settings.gemini_model]
+        fallback_model = getattr(settings, "gemini_fallback_model", None)
+        if fallback_model and fallback_model not in formatting_models:
+            formatting_models.append(fallback_model)
+        response = None
+        last_exc = None
+        for model_index, formatting_model in enumerate(formatting_models):
+            formatting_endpoint = f"{settings.gemini_base_url.rstrip('/')}/models/{formatting_model}:generateContent"
+            for retry_index in range(3):
+                try:
+                    response = http.post(formatting_endpoint, headers=headers, json=formatting_payload)
+                    if response.status_code == 503:
+                        raise httpx.HTTPStatusError("Gemini formatting service unavailable", request=response.request, response=response)
+                    response.raise_for_status()
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                    if status_code != 503 or retry_index == 2:
+                        break
+                    delay = min(8.0, 1.5 * (2 ** retry_index)) * random.uniform(0.8, 1.2)
+                    logger.warning("Business research formatting retry research_id=%s model=%s retry=%d backoff_seconds=%.2f", research_id, formatting_model, retry_index + 1, delay)
+                    time.sleep(delay)
+            if response is not None and response.status_code < 400:
+                break
+            response = None
+        if response is None:
+            raise last_exc or RuntimeError("Gemini formatting failed")
         raw = response.json()
         _log_gemini_call(research_id, "formatting", response, raw)
         text = _gemini_text(raw)

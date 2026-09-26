@@ -123,18 +123,16 @@ def strict_script_response_schema() -> dict[str, Any]:
 
 
 def _gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Keep only JSON Schema keywords supported by Gemini structured output."""
-    unsupported = {"minLength", "maxLength", "pattern", "default", "examples"}
+    """Convert local JSON Schema into Gemini native responseSchema syntax."""
+    # Native Schema is a restricted OpenAPI subset.  In particular, the
+    # deployed endpoint rejects additionalProperties; local validation keeps it.
+    supported = {"type", "properties", "required", "items", "enum", "description", "format", "nullable", "title", "propertyOrdering"}
 
     def normalize(value: Any, *, property_map: bool = False) -> Any:
         if isinstance(value, dict):
             if property_map:
                 return {key: normalize(item) for key, item in value.items()}
-            return {
-                key: normalize(item, property_map=key == "properties")
-                for key, item in value.items()
-                if key not in unsupported
-            }
+            return {key: normalize(item, property_map=key == "properties") for key, item in value.items() if key in supported}
         if isinstance(value, list):
             return [normalize(item) for item in value]
         return value
