@@ -335,6 +335,35 @@ class LLMAttempt:
     base_url: str | None = None
 
 
+@dataclass(frozen=True)
+class ScriptCandidate:
+    response: dict[str, Any]
+    warnings: list[dict[str, str]]
+    warning_count: int
+    generation_source: Literal["primary", "fallback_2_5", "groq"]
+    provider: str
+    model: str
+
+
+HARD_SCRIPT_RULES = frozenset({"outbound_questions"})
+
+
+def _script_generation_source(attempt: LLMAttempt, attempt_index: int) -> Literal["primary", "fallback_2_5", "groq"]:
+    if attempt_index == 0:
+        return "primary"
+    if attempt.provider.casefold() in {"gemini", "google", "google-gemini"}:
+        return "fallback_2_5"
+    return "groq"
+
+
+def _partition_script_violations(
+    violations: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    hard = [item for item in violations if item.get("rule") in HARD_SCRIPT_RULES]
+    advisory = [item for item in violations if item.get("rule") not in HARD_SCRIPT_RULES]
+    return hard, advisory
+
+
 class LLMService(ABC):
     @abstractmethod
     def initial_question(self, employee: AIEmployee) -> InterviewGeneration:
@@ -576,85 +605,89 @@ class RealLLMService(LLMService):
         request_count = 0
         last_provider: str | None = None
         last_model: str | None = None
+        best_candidate: ScriptCandidate | None = None
+        previous_policy_discard_risk = False
         if not attempts:
             configuration["script_source"] = "assembled"
+            configuration["generation_source"] = "fallback_template"
             response = {"sections": self._assemble_script_sections(context, language, call_direction, configuration)}
         else:
-            # Keep a hard three-request ceiling: Gemini primary, one Gemini
-            # repair, then Groq fallback. If only one provider is configured,
-            # retain the final permissive JSON-object attempt.
-            primary = attempts[0]
-            if len(attempts) >= 3:
-                # Primary Gemini, secondary Gemini, then the previously agreed
-                # Groq provider fallback, all within the existing three-call cap.
-                ladder = tuple((attempt, "strict") for attempt in attempts[:3])
-            else:
-                fallback = attempts[1] if len(attempts) > 1 else primary
-                ladder = (
-                    (primary, "strict"),
-                    (primary, "strict"),
-                    (fallback, "strict" if fallback != primary else "json_object"),
-                )
+            # Each configured tier gets at most one attempt: primary Gemini,
+            # Gemini 2.5 fallback, then the configured Groq script model.
+            ladder = tuple((attempt, "strict") for attempt in attempts[:3])
             response = None
             feedback: list[dict[str, str]] = []
             for attempt_index, (llm_attempt, mode) in enumerate(ladder):
-                if response is not None:
-                    break
                 request_count += 1
                 last_provider = llm_attempt.provider
                 last_model = llm_attempt.model
+                generation_source = _script_generation_source(llm_attempt, attempt_index)
                 logger.info(
-                    "LLM script request attempt request_id=%s attempt_number=%d retry_number=%d provider=%s model=%s mode=%s",
+                    "LLM script request attempt request_id=%s attempt_number=%d retry_number=%d tier=%s provider=%s model=%s mode=%s",
                     request_id, request_count, request_count - 1,
-                    llm_attempt.provider, llm_attempt.model, mode,
+                    generation_source, llm_attempt.provider, llm_attempt.model, mode,
                 )
                 try:
-                    response = self._request_script_attempt(
+                    candidate_response = self._request_script_attempt(
                         request_id, llm_attempt, system, user, language, mode,
                         feedback if feedback else None, request_count,
                         2.0 * (2 ** attempt_index) * random.uniform(0.8, 1.2)
                         if attempt_index < len(ladder) - 1 else 0.0,
                     )
                     violations = self._script_violations(
-                        response["sections"], language, call_direction, context, configuration,
+                        candidate_response["sections"], language, call_direction, context, configuration,
                     )
-                    if violations:
-                        configuration["script_generation_warnings"] = violations
+                    hard_failures, advisory_warnings = _partition_script_violations(violations)
+                    if hard_failures:
+                        feedback = hard_failures
                         logger.warning(
-                            "LLM script has advisory validation warnings request_id=%s warning_count=%d retrying=%s",
-                            request_id, len(violations), attempt_index == 0,
+                            "LLM script hard validation failure request_id=%s tier=%s failure_count=%d advancing_tier=%s",
+                            request_id, generation_source, len(hard_failures), attempt_index < len(ladder) - 1,
                         )
-                    else:
-                        configuration.pop("script_generation_warnings", None)
-                    # Give the model one opportunity to repair content-quality
-                    # warnings, then retain the structurally valid result for
-                    # owner review instead of replacing it with a generic draft.
-                    feedback = violations
-                    if violations and attempt_index == 0:
-                        response = None
+                        continue
+                    best_candidate = ScriptCandidate(
+                        response=candidate_response,
+                        warnings=advisory_warnings,
+                        warning_count=len(advisory_warnings),
+                        generation_source=generation_source,
+                        provider=llm_attempt.provider,
+                        model=llm_attempt.model,
+                    )
+                    previous_policy_discard_risk = bool(advisory_warnings and attempt_index == 0)
+                    logger.info(
+                        "LLM script passing candidate accepted request_id=%s tier=%s warning_count=%d stopping_ladder=true previous_policy_discard_risk=%s",
+                        request_id, generation_source, best_candidate.warning_count, previous_policy_discard_risk,
+                    )
+                    break
                 except HTTPException as exc:
-                    response = None
                     feedback = [{"rule": "provider_or_schema", "reason": self._script_error_feedback(exc)}]
-                if response is None and mode == "strict" and not feedback:
-                    feedback = [{"rule": "script_contract", "reason": "Return exactly six valid sections in the requested JSON contract."}]
-            if response is None:
+                    logger.warning(
+                        "LLM script tier failed request_id=%s tier=%s category=%s advancing_tier=%s",
+                        request_id, generation_source, _failure_category(exc), attempt_index < len(ladder) - 1,
+                    )
+            if best_candidate is None:
                 response = {"sections": self._assemble_script_sections(context, language, call_direction, configuration)}
                 configuration["script_source"] = "assembled"
+                configuration["generation_source"] = "fallback_template"
+                configuration.pop("script_generation_warnings", None)
             else:
+                response = best_candidate.response
                 configuration["script_source"] = "model"
+                configuration["generation_source"] = best_candidate.generation_source
                 configuration["script_review_required"] = False
+                if best_candidate.warnings:
+                    configuration["script_generation_warnings"] = best_candidate.warnings
+                else:
+                    configuration.pop("script_generation_warnings", None)
 
         logger.info(
-            "LLM script generation completed request_id=%s request_count=%d retry_count=%d final_provider=%s final_model=%s final_tier=%s script_source=%s",
-            request_id, request_count, max(0, request_count - 1),
-            last_provider or "none", last_model or "none",
-            (
-                "deterministic_fallback" if configuration.get("script_source") == "assembled"
-                else "primary_model" if attempts and last_provider == attempts[0].provider and last_model == attempts[0].model
-                else "fallback_model" if str(last_provider).casefold() in {"gemini", "google", "google-gemini"}
-                else "provider_fallback"
-            ),
-            configuration.get("script_source"),
+            "LLM script generation completed request_id=%s tiers_attempted=%d request_count=%d retry_count=%d winning_tier=%s final_tier=%s final_provider=%s final_model=%s script_source=%s previous_policy_discard_risk=%s",
+            request_id, request_count, request_count, max(0, request_count - 1),
+            configuration.get("generation_source", "fallback_template"),
+            configuration.get("generation_source", "fallback_template"),
+            best_candidate.provider if best_candidate else last_provider or "none",
+            best_candidate.model if best_candidate else last_model or "none",
+            configuration.get("script_source"), previous_policy_discard_risk,
         )
         sections = response["sections"]
         configuration["conversation_sections"] = sections
@@ -1125,8 +1158,22 @@ class RealLLMService(LLMService):
         return response
     @staticmethod
     def _validate_script_response(response: dict[str, Any], request_id: UUID, language: str | None = None) -> dict[str, Any]:
+        if isinstance(response, dict) and isinstance(response.get("sections"), list) and any(
+            isinstance(section, dict) and "instructions" not in section and "content" in section
+            for section in response["sections"]
+        ):
+            # Preserve the explicitly supported legacy conversation-design
+            # aliases, but discard its old top-level design metadata before
+            # applying the current exact six-section contract.
+            response = {"sections": response["sections"]}
         sections = response.get("sections") if isinstance(response, dict) else None
         detail = {"message": "The LLM returned an invalid employee script shape.", "request_id": str(request_id), "failure_category": "llm_schema_failure"}
+        if not isinstance(response, dict) or set(response) != {"sections"}:
+            raise HTTPException(status_code=502, detail={**detail, "diagnostic": {
+                "path": "$", "expected": "object containing only sections",
+                "actual_type": type(response).__name__,
+                "actual_keys": sorted(str(key) for key in response) if isinstance(response, dict) else None,
+            }})
         if not isinstance(sections, list) or len(sections) != 6:
             raise HTTPException(status_code=502, detail={**detail, "diagnostic": {
                 "path": "sections", "expected": "list[object] with exactly 6 items",
@@ -1140,20 +1187,18 @@ class RealLLMService(LLMService):
             # equivalent of the newer six-section response contract.
             if isinstance(section, dict) and "instructions" not in section and "content" in section:
                 section = {
-                    **section,
+                    "title": section.get("title"),
+                    "purpose": section.get("purpose"),
                     "instructions": section.get("content"),
                     "handling": section.get("handling") or section.get("objective"),
                     "examples": section.get("examples") or section.get("spoken_examples") or [],
                     "questions": [item.get("text", "") if isinstance(item, dict) else item for item in section.get("questions", [])],
                 }
-            if isinstance(section, dict):
-                section = dict(section)
-                for key in ("title", "purpose", "instructions", "handling"):
-                    if key in section and not isinstance(section[key], str):
-                        section[key] = json.dumps(section[key], ensure_ascii=False) if isinstance(section[key], (dict, list)) else str(section[key])
-                for key in ("questions", "examples"):
-                    if isinstance(section.get(key), list):
-                        section[key] = [json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item) for item in section[key]]
+            if isinstance(section, dict) and set(section) != {"title", "purpose", "instructions", "questions", "examples", "handling"}:
+                raise HTTPException(status_code=502, detail={**detail, "message": "The LLM returned unsupported employee section fields.", "diagnostic": {
+                    "section_index": index, "field": "$",
+                    "expected": "exact section fields", "actual_keys": sorted(str(key) for key in section),
+                }})
             if not isinstance(section, dict) or any(not isinstance(section.get(key), str) or not section[key].strip() for key in ("title", "purpose", "instructions", "handling")):
                 actual = section if isinstance(section, dict) else {"type": type(section).__name__}
                 missing_or_invalid = next((key for key in ("title", "purpose", "instructions", "handling") if not isinstance(section, dict) or not isinstance(section.get(key), str) or not section[key].strip()), "unknown")

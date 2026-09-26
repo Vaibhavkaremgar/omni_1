@@ -91,19 +91,22 @@ def test_groq_primary_success_does_not_call_fallback():
     assert calls == ["openai/gpt-oss-120b"]
 
 
-def test_primary_failure_repairs_with_same_model_once():
+def test_primary_failure_advances_to_the_next_configured_tier():
     service, calls = service_for((503, 200))
-    generate(service)
-    assert calls == ["openai/gpt-oss-120b", "openai/gpt-oss-120b"]
+    config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
+    generate(service, config=config)
+    assert calls == ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"]
+    assert config["generation_source"] == "groq"
 
 
-def test_three_failures_use_assembled_script_without_raising():
+def test_all_configured_tier_failures_use_assembled_script_without_raising():
     service, calls = service_for((503, 503))
     config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
     assert len(generate(service, config=config)) == 6
     assert config["script_source"] == "assembled"
     assert config["assembled_source_context"] == REQUIREMENT
-    assert len(calls) == 3
+    assert len(calls) == 2
+    assert config["generation_source"] == "fallback_template"
 
 
 def test_wedding_generation_is_context_first_and_persistable_shape():
@@ -140,10 +143,11 @@ def test_malformed_json_uses_assembled_script_after_bounded_attempts():
     config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
     assert len(generate(service, config=config)) == 6
     assert config["script_source"] == "assembled"
-    assert len(calls) == 3
+    assert len(calls) == 2
+    assert config["generation_source"] == "fallback_template"
 
 
-def test_invalid_primary_language_uses_bounded_fallback_correction():
+def test_invalid_primary_language_is_advisory_and_stops_the_ladder():
     calls = []
     valid = response("Telugu")
 
@@ -155,11 +159,14 @@ def test_invalid_primary_language_uses_bounded_fallback_correction():
     service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
     config = {"original_requirement": REQUIREMENT, "language": "Telugu", "call_type": "outbound"}
     result = service.generate_call_script(SimpleNamespace(name="Invite Assistant", purpose=REQUIREMENT, call_type="outbound", language="Telugu"), config)
-    assert len(result) == 6 and calls == ["openai/gpt-oss-120b", "openai/gpt-oss-120b"]
+    assert len(result) == 6 and calls == ["openai/gpt-oss-120b"]
+    assert config["generation_source"] == "primary"
+    assert config["script_generation_warnings"]
 
 
-def test_persistent_content_warnings_are_returned_for_review_instead_of_discarding_script():
+def test_persistent_content_warnings_are_returned_for_review_instead_of_discarding_script(caplog):
     calls = []
+    caplog.set_level(logging.INFO, logger="app.services.employee_interview")
 
     def handler(request):
         calls.append(json.loads(request.content)["model"])
@@ -170,9 +177,32 @@ def test_persistent_content_warnings_are_returned_for_review_instead_of_discardi
     result = generate(service, language="Telugu", config=config)
 
     assert len(result) == 6
-    assert calls == ["openai/gpt-oss-120b", "openai/gpt-oss-120b"]
+    assert calls == ["openai/gpt-oss-120b"]
     assert config["script_source"] == "model"
+    assert config["generation_source"] == "primary"
     assert config["script_generation_warnings"]
+    assert "stopping_ladder=true" in caplog.text
+    assert "previous_policy_discard_risk=True" in caplog.text
+
+
+def test_outbound_questions_are_hard_failure_and_advance_to_next_tier():
+    calls = []
+    invalid = response("English")
+    invalid["sections"][3]["questions"] = ["Can you attend?"]
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        payload = invalid if len(calls) == 1 else response("English")
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)}}]})
+
+    service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
+    config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
+    result = generate(service, config=config)
+
+    assert len(result) == 6
+    assert calls == ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"]
+    assert config["generation_source"] == "groq"
+    assert "script_generation_warnings" not in config
 
 
 @pytest.mark.parametrize("language,codepoint", [("Telugu", 0x0C00), ("Hindi", 0x0900)])
@@ -296,7 +326,7 @@ def test_503_unavailable_backs_off_before_gemini_fallback(monkeypatch, caplog):
     assert calls[0].endswith("/models/gemini-3.6-flash:generateContent")
     assert calls[1].endswith("/models/gemini-2.5-flash:generateContent")
     assert sleeps == [2.0]
-    assert "final_tier=fallback_model" in caplog.text
+    assert "winning_tier=fallback_2_5" in caplog.text
 
 
 def test_non_503_failure_does_not_back_off(monkeypatch):
@@ -361,26 +391,26 @@ def test_malformed_section_reports_exact_index_field_and_type_without_content():
     service = RealLLMService(settings=llm_settings(groq_fallback_model=None, groq_model_2=None, groq_api_key_2=None), client=httpx.Client(transport=httpx.MockTransport(handler)))
     config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
     assert len(generate(service, config=config)) == 6
-    assert config["script_source"] == "model"
+    assert config["script_source"] == "assembled"
+    assert config["generation_source"] == "fallback_template"
 
 
-def test_schema_400_retries_primary_then_uses_strict_groq_fallback():
+def test_schema_400_exhausts_configured_tiers_then_uses_template():
     calls = []
 
     def handler(request):
         calls.append(json.loads(request.content)["response_format"]["type"])
-        if len(calls) < 3:
-            return httpx.Response(400, json={"error": {"message": "does not match expected schema", "failed_generation": "missing sections"}})
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(response("English"))}}]})
+        return httpx.Response(400, json={"error": {"message": "does not match expected schema", "failed_generation": "missing sections"}})
 
     service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
     config = {"original_requirement": REQUIREMENT, "language": "English", "call_type": "outbound"}
     assert len(generate(service, config=config)) == 6
-    assert calls == ["json_schema", "json_schema", "json_schema"]
-    assert config["script_source"] == "model"
+    assert calls == ["json_schema", "json_schema"]
+    assert config["script_source"] == "assembled"
+    assert config["generation_source"] == "fallback_template"
 
 
-def test_no_telugu_unicode_goes_to_repair_instead_of_immediate_502():
+def test_no_telugu_unicode_is_advisory_and_stops_the_ladder():
     calls = []
 
     def handler(request):
@@ -391,8 +421,10 @@ def test_no_telugu_unicode_goes_to_repair_instead_of_immediate_502():
     service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
     config = {"original_requirement": REQUIREMENT, "language": "Telugu", "call_type": "outbound"}
     assert len(generate(service, language="Telugu", config=config)) == 6
-    assert calls == [1, 2]
+    assert calls == [1]
     assert config["script_source"] == "model"
+    assert config["generation_source"] == "primary"
+    assert config["script_generation_warnings"]
 
 
 def test_telugu_opening_introduces_explicit_agent_before_purpose_without_literal_behalf():
@@ -414,7 +446,7 @@ def test_telugu_opening_introduces_explicit_agent_before_purpose_without_literal
     assert payload["sections"][0]["examples"][0] in result["Invitation Step 0"]
 
 
-def test_literal_behalf_opening_is_repaired_before_acceptance():
+def test_literal_behalf_opening_is_advisory_and_stops_the_ladder():
     bad = response("Telugu")
     bad["sections"][0]["examples"] = [
         "Hello అండి, Vaibhav and Muskan గారి behalf లో AI assistant గా wedding invitation కోసం call చేస్తున్నాను."
@@ -429,8 +461,10 @@ def test_literal_behalf_opening_is_repaired_before_acceptance():
     service = RealLLMService(settings=llm_settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
     config = {"original_requirement": REQUIREMENT, "language": "Telugu", "call_type": "outbound"}
     generate(service, language="Telugu", config=config)
-    assert calls == ["json_schema", "json_schema"]
+    assert calls == ["json_schema"]
     assert config["script_source"] == "model"
+    assert config["generation_source"] == "primary"
+    assert config["script_generation_warnings"]
 
 
 def test_enforced_validators_reject_outbound_questions_without_forcing_english():

@@ -733,7 +733,7 @@ def test_call_script_generation_failure_uses_reviewable_assembled_draft():
     assert configuration["script_review_required"] is True
 
 
-def test_question_relevance_retry_contains_targeted_repair_feedback():
+def test_outbound_question_is_hard_failure_without_same_tier_retry():
     settings = SimpleNamespace(
         effective_llm_provider="openai", effective_llm_api_key="test-key",
         effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1",
@@ -765,13 +765,12 @@ def test_question_relevance_retry_contains_targeted_repair_feedback():
         "business_name": "HDFC", "original_requirement": "Call existing customers whose KYC documents need updating",
         "purpose": "Call existing customers whose KYC documents need updating", "language": "English", "call_type": "outbound",
     })
-    assert tuple(result) == tuple(titles)
-    assert len(calls) == 2
-    correction = calls[1]["messages"][0]["content"]
-    assert "REPAIR REQUEST" in correction
+    assert len(result) == 6
+    assert tuple(result) != tuple(titles)
+    assert len(calls) == 1
 
 
-def test_groq_schema_failure_retries_once_and_accepts_valid_script():
+def test_single_configured_groq_schema_failure_uses_template_without_retry():
     settings = SimpleNamespace(
         effective_llm_provider="groq", effective_llm_api_key="test-key",
         effective_llm_model="openai/gpt-oss-20b", effective_llm_base_url="https://api.groq.com/openai/v1",
@@ -794,9 +793,9 @@ def test_groq_schema_failure_retries_once_and_accepts_valid_script():
     service = RealLLMService(settings=settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
     employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
     result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "original_requirement": "Renew policies", "language": "Telugu"})
-    assert tuple(result) == tuple(titles)
-    assert len(calls) == 2
-    assert "REPAIR REQUEST" in calls[1]["messages"][0]["content"]
+    assert len(result) == 6
+    assert tuple(result) != tuple(titles)
+    assert len(calls) == 1
 def test_groq_schema_failure_retry_is_bounded():
     settings = SimpleNamespace(
         effective_llm_provider="groq", effective_llm_api_key="test-key",
@@ -813,10 +812,10 @@ def test_groq_schema_failure_retry_is_bounded():
     result = service.generate_call_script(employee, configuration)
     assert len(result) == 6
     assert configuration["script_source"] == "assembled"
-    assert len(calls) == 3
+    assert len(calls) == 1
 
 
-def test_call_script_language_failure_retries_once_and_accepts_corrected_telugu():
+def test_call_script_language_failure_is_advisory_and_stops_ladder():
     settings = SimpleNamespace(
         effective_llm_provider="openai", effective_llm_api_key="test-key",
         effective_llm_model="gpt-4o-mini", effective_llm_base_url="https://example.invalid/v1",
@@ -841,6 +840,5 @@ def test_call_script_language_failure_retries_once_and_accepts_corrected_telugu(
     employee = SimpleNamespace(name="Mani", purpose="Renewal reminder", call_type="outbound", language="Telugu")
     result = service.generate_call_script(employee, {"business_name": "KMG Insurance", "original_requirement": "Renew policies", "language": "Telugu"})
     assert tuple(result) == tuple(titles)
-    assert len(calls) == 2
-    assert "REPAIR REQUEST" in calls[1]["messages"][0]["content"]
+    assert len(calls) == 1
 
