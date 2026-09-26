@@ -258,9 +258,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         {"title": "Critical Runtime Guardrails", "body": (
             "The caller's latest words always have priority over the script sequence. First identify whether the caller asked a question, "
             "gave an answer, changed the topic, objected, or requested repetition. Answer that exact question before continuing. "
-            "An out-of-script question is not permission to recite the next script line: answer it from the generated script, supplied business "
-            "context, and verified knowledge when the answer is available. If it is not available, say briefly that you do not have that "
-            "detail and offer a callback or human follow-up; never guess and never repeat an unrelated script answer. "
+            "An out-of-script question is not permission to recite the next script line. Pause briefly with a natural holding phrase such as "
+            "'One moment, let me check that for you,' then use your live Gemini LLM reasoning and any connected knowledge source to answer "
+            "the exact question. Never use an unrelated script answer. If no verified answer is available, say that you do not have that detail "
+            "and offer a callback or human follow-up; never guess, invent, or present uncertainty as fact. "
             "After answering, continue only from the next relevant unfinished step. Never repeat the same sentence, question, greeting, or section. "
             "If unclear, ask briefly for repetition and adapt. Respect stop, decline, and callback requests. Complete the identity-and-purpose "
             "opening in one turn. Keep every response conversational and specific to what the caller just said. "
