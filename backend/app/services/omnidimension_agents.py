@@ -186,6 +186,18 @@ class OmniDimensionAgentService:
         except Exception as exc:
             readback_error = exc
             logger.warning("Omni agent readback unavailable agent_id=%s exception_class=%s", provider_agent.provider_id, type(exc).__name__)
+        # Omni can return 200 while silently dropping mutable settings. Retry
+        # one update when the readback proves a requested setting was lost.
+        if readback is not None:
+            returned_now = _returned_configuration(readback) or {}
+            verify_fields = ("webhook_enabled", "webhook_url", "idle_threshold_sec", "end_call_enabled", "end_call_condition", "six_section_titles", "model")
+            if any(not _values_match(field, intended_configuration.get(field), returned_now.get(field)) for field in verify_fields):
+                logger.warning("Omni agent readback mismatch; retrying update agent_id=%s fields=%s", provider_agent.provider_id, [field for field in verify_fields if not _values_match(field, intended_configuration.get(field), returned_now.get(field))])
+                try:
+                    self.provider.update_agent(provider_agent.provider_id, payload)
+                    readback = self.provider.get_agent(provider_agent.provider_id)
+                except Exception as exc:
+                    logger.warning("Omni agent retry verification failed agent_id=%s exception_class=%s", provider_agent.provider_id, type(exc).__name__)
         verification = _provider_verification(
             intended_configuration,
             sent_configuration,
@@ -245,7 +257,22 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     # Omni receives one source of truth: the generated/edited call script.
     # Behavioral rules belong in the script-generation prompt, not as competing
     # runtime instruction fragments.
-    context = [{"title": "Generated Call Script", "body": _format_call_script(saved_script), "is_enabled": True}]
+    # The script is a conversation framework, not a turn-by-turn monologue.
+    # Explicitly tell Omni to respond to what the candidate actually says and
+    # use the next relevant script step only after addressing that response.
+    conversation_guardrail = (
+        "CONVERSATION GUARDRAIL: Answer the candidate based on their latest response. "
+        "Use the call script below as a reference for goals, questions, facts, and "
+        "handling—not as text to recite mechanically. Do not move to the next script "
+        "step until you have acknowledged and responded naturally to the candidate's "
+        "answer. Ask only relevant follow-up questions, adapt to what they say, and "
+        "skip or reorder steps when their response already provides the information."
+    )
+    context = [{
+        "title": "Generated Call Script",
+        "body": f"{conversation_guardrail}\n\n{_format_call_script(saved_script)}",
+        "is_enabled": True,
+    }]
     post_call_actions = _automatic_post_call_actions()
     extraction = configuration.get("conversation_variables")
     if not isinstance(extraction, list):
@@ -829,7 +856,7 @@ def _extract_six_section_prompt(value: Any) -> str:
             if not isinstance(item, dict):
                 continue
             title = item.get("context_title") or item.get("title")
-            if title == "Published Call Script Source of Truth":
+            if title in {"Published Call Script Source of Truth", "Generated Call Script"}:
                 return _script_body(item.get("body") or item.get("context") or item.get("content"))
         return ""
     return _script_body(value)
