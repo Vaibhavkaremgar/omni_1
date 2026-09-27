@@ -10,13 +10,13 @@ from app.services.call_script_master_prompt import CALL_SCRIPT_MASTER_SYSTEM_PRO
 def test_master_prompt_uses_application_json_contract_without_markdown_output():
     prompt = CALL_SCRIPT_MASTER_SYSTEM_PROMPT
 
-    assert "UNIVERSAL OUTBOUND VOICE AGENT — MASTER SYSTEM PROMPT" in prompt
-    assert "The user gives you the objective. You design the employee." in prompt
-    assert "Return only valid JSON in exactly this top-level shape:" in prompt
-    assert "The `sections` array must contain exactly 6 objects." in prompt
-    assert '"title": "Concise English heading"' in prompt
-    assert '"questions": ["Actual spoken question"]' in prompt
-    assert "Do not wrap the JSON in Markdown fences." in prompt
+    assert "UNIVERSAL AI VOICE EMPLOYEE — STANDARD V2" in prompt
+    assert "Build a capable employee, not a script-reading bot." in prompt
+    assert "Return JSON only." in prompt
+    assert "Exactly 6 section objects." in prompt
+    assert '“title”: “”,' in prompt
+    assert '“questions”: [],' in prompt
+    assert "No code fences." in prompt
     assert "approximately **5–6 logical sections**" not in prompt
 
 

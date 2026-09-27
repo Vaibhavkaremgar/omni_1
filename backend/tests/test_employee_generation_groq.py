@@ -260,7 +260,7 @@ def test_gemini_is_primary_and_receives_only_system_and_user_prompts(caplog):
     assert set(body) == {"systemInstruction", "contents", "generationConfig"}
     system_prompt = body["systemInstruction"]["parts"][0]["text"]
     user_prompt = body["contents"][0]["parts"][0]["text"]
-    assert "UNIVERSAL OUTBOUND VOICE AGENT" in system_prompt
+    assert "UNIVERSAL AI VOICE EMPLOYEE — STANDARD V2" in system_prompt
     assert "{{USER_CONTEXT}}" not in system_prompt
     assert json.loads(user_prompt)["USER_CONTEXT"]["original_requirement"] == REQUIREMENT
     assert body["generationConfig"]["responseFormat"]["text"]["mimeType"] == "APPLICATION_JSON"
