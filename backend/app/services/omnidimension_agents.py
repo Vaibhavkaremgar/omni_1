@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 # Omni live-call agent model.  Keep this independent from the build-time
 # script-generation model; Flash-Lite is the lower-latency Gemini option.
 OMNI_LIVE_MODEL = "gemini-2.5-flash-lite"
-MAX_CALL_DURATION_SECONDS = 180
-CLOSING_START_SECONDS = 170
+DEFAULT_CALL_DURATION_SECONDS = 180
+MIN_CALL_DURATION_SECONDS = 30
+MAX_CALL_DURATION_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -196,7 +197,7 @@ class OmniDimensionAgentService:
             returned_now = _returned_configuration(readback) or {}
             verify_fields = (
                 "webhook_enabled", "webhook_url", "idle_threshold_sec", "end_call_enabled", "end_call_condition",
-                "six_section_titles", "model",
+                "max_call_duration_in_sec", "six_section_titles", "model",
             )
             if any(not _values_match(field, intended_configuration.get(field), returned_now.get(field)) for field in verify_fields):
                 logger.warning("Omni agent readback mismatch; retrying update agent_id=%s fields=%s", provider_agent.provider_id, [field for field in verify_fields if not _values_match(field, intended_configuration.get(field), returned_now.get(field))])
@@ -239,6 +240,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     employee's exact rules rather than behaving as a generic assistant.
     """
     configuration = dict(configuration)
+    call_duration_seconds = _call_duration_seconds(configuration)
+    closing_start_seconds = max(1, call_duration_seconds - 10)
     lang = _language_name(_text(configuration.get("language"), employee.language))
     saved_script = _canonical_call_script(configuration)
     # The editable generated prompt is the publishing source of truth.
@@ -283,8 +286,9 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             f"{interruption_guidance} "
             "When the caller clearly confirms the conversation is finished, invoke the configured end-call action without first saying a "
             "separate closing; the end-call action speaks the thank-you message once, lets it finish, waits silently for two seconds, and then disconnects. "
-            "The call has a hard three-minute limit. At exactly two minutes fifty seconds of elapsed call time, stop the normal conversation "
-            "and immediately invoke the end-call action so its thanks closing starts before the three-minute cutoff. "
+            f"The call has a hard limit of {_spoken_duration(call_duration_seconds)}. At exactly "
+            f"{_spoken_duration(closing_start_seconds)} of elapsed call time, stop the normal conversation and immediately "
+            "invoke the end-call action so its thanks closing starts before the configured cutoff. "
             "Say thank you, thanks, sorry, and okay in English. Speak numbers, dates, years, times, prices, percentages, phone numbers, "
             "OTPs, IDs, codes, and references in English; speak identifiers digit by digit when appropriate."
         ), "is_enabled": True},
@@ -329,7 +333,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         # still guaranteeing that a completed conversation is disconnected.
         "is_end_call_enabled": True,
         "end_call": {
-            "condition": _default_end_call_condition(),
+            "condition": _default_end_call_condition(call_duration_seconds),
             "message": _default_end_call_message(lang),
             "message_prompt": _end_call_message_prompt(),
         },
@@ -362,7 +366,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     configured_end_call = configuration.get("end_call")
     if isinstance(configured_end_call, dict) and _text(configured_end_call.get("condition")):
         payload["end_call"] = {
-            "condition": _end_call_condition(_text(configured_end_call["condition"])),
+            "condition": _end_call_condition(_text(configured_end_call["condition"]), call_duration_seconds),
             "message": _text(configured_end_call.get("message")) or _default_end_call_message(lang),
             "message_prompt": _end_call_message_prompt(_text(configured_end_call.get("message_prompt"))),
         }
@@ -485,6 +489,7 @@ def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any])
     voice = configuration.get("voice") if isinstance(configuration.get("voice"), dict) else {}
     selected_voice = voice_definition(str(voice.get("id", ""))) if voice else None
     end_call = configuration.get("end_call") if isinstance(configuration.get("end_call"), dict) else {}
+    call_duration_seconds = _call_duration_seconds(configuration)
     script = _canonical_call_script(configuration)
     voice_provider = voice.get("provider") or (selected_voice or {}).get("provider") if voice else None
     voice_id = voice.get("provider_voice_id") or voice.get("voice_id") or (selected_voice or {}).get("provider_voice_id") if voice else None
@@ -505,7 +510,8 @@ def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any])
         "interruption_min_words": 2,
         "idle_threshold_sec": 5,
         "end_call_enabled": True,
-        "end_call_condition": _end_call_condition(_text(end_call.get("condition"))),
+        "end_call_condition": _end_call_condition(_text(end_call.get("condition")), call_duration_seconds),
+        "max_call_duration_in_sec": call_duration_seconds,
         "webhook_enabled": True,
         "webhook_url": _automatic_post_call_actions()["webhook"]["url"],
         "webhook_statuses": _automatic_post_call_actions()["webhook"]["trigger_call_statuses"],
@@ -534,6 +540,7 @@ def _sent_configuration(payload: dict[str, Any]) -> dict[str, Any]:
         "idle_threshold_sec": payload.get("user_idle_threshold_sec"),
         "end_call_enabled": payload.get("is_end_call_enabled"),
         "end_call_condition": end_call.get("condition"),
+        "max_call_duration_in_sec": transcriber.get("max_call_duration_in_sec"),
         "webhook_enabled": bool(webhook),
         "webhook_url": webhook.get("url") if isinstance(webhook, dict) else None,
         "webhook_statuses": webhook.get("trigger_call_statuses") if isinstance(webhook, dict) else None,
@@ -572,6 +579,7 @@ def _returned_configuration(readback: dict[str, Any] | None) -> dict[str, Any] |
         "idle_threshold_sec": readback.get("user_idle_threshold_sec"),
         "end_call_enabled": readback.get("is_end_call_enabled"),
         "end_call_condition": end_call.get("condition") or readback.get("end_call_condition"),
+        "max_call_duration_in_sec": readback.get("max_call_duration_in_sec") or transcriber_dict.get("max_call_duration_in_sec"),
         "webhook_enabled": bool(webhook) if ("post_call_actions" in readback or isinstance(post_call_configs, list)) else None,
         "webhook_url": (webhook.get("url") or webhook.get("webhook_url")) if isinstance(webhook, dict) else readback.get("webhook_url"),
         "webhook_statuses": webhook.get("trigger_call_statuses") if isinstance(webhook, dict) else readback.get("trigger_call_statuses"),
@@ -590,7 +598,7 @@ def _provider_verification(
         "call_type", "language", "model", "transcriber_provider", "transcriber_language",
         "voice_provider", "voice_id", "welcome_message", "six_section_prompt",
         "six_section_titles", "interruption_enabled", "interruption_min_words",
-        "idle_threshold_sec", "end_call_enabled", "end_call_condition",
+        "idle_threshold_sec", "end_call_enabled", "end_call_condition", "max_call_duration_in_sec",
         "webhook_enabled", "webhook_url", "webhook_statuses",
     ]
     checks: list[dict[str, Any]] = []
@@ -644,7 +652,7 @@ def _transcriber_configuration(configuration: dict[str, Any], language: str) -> 
         # noisy phone lines may need a larger value.
         "silence_timeout_ms": getattr(get_settings(), "live_speech_silence_timeout_ms", 500),
         "interruption_min_words": 2,
-        "max_call_duration_in_sec": MAX_CALL_DURATION_SECONDS,
+        "max_call_duration_in_sec": _call_duration_seconds(configuration),
     }
     if isinstance(configured, dict):
         legacy_provider = str(configured.get("provider") or "").casefold()
@@ -655,8 +663,9 @@ def _transcriber_configuration(configuration: dict[str, Any], language: str) -> 
             result["model"] = configured["soniox_model"]
         result["provider"] = "soniox"
         result["language"] = _soniox_language_code(language)
-    # This is a product-level hard limit and cannot be extended per employee.
-    result["max_call_duration_in_sec"] = MAX_CALL_DURATION_SECONDS
+    # Duration is a product-controlled choice stored on the employee rather
+    # than an arbitrary nested provider override.
+    result["max_call_duration_in_sec"] = _call_duration_seconds(configuration)
     return result
 
 
@@ -889,21 +898,41 @@ def _complete_opening(text: str) -> str:
     return re.sub(r"\s+", " ", _text(text)).strip()
 
 
-def _default_end_call_condition() -> str:
-    return _end_call_condition()
+def _call_duration_seconds(configuration: dict[str, Any]) -> int:
+    """Return a supported per-employee duration, defaulting safely for legacy records."""
+    try:
+        value = int(configuration.get("max_call_duration_in_sec", DEFAULT_CALL_DURATION_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_CALL_DURATION_SECONDS
+    return value if MIN_CALL_DURATION_SECONDS <= value <= MAX_CALL_DURATION_SECONDS else DEFAULT_CALL_DURATION_SECONDS
 
 
-def _end_call_condition(custom_condition: str = "") -> str:
+def _spoken_duration(seconds: int) -> str:
+    minutes, remaining_seconds = divmod(seconds, 60)
+    parts = []
+    if minutes:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    if remaining_seconds:
+        parts.append(f"{remaining_seconds} second{'s' if remaining_seconds != 1 else ''}")
+    return " ".join(parts) or "0 seconds"
+
+
+def _default_end_call_condition(call_duration_seconds: int = DEFAULT_CALL_DURATION_SECONDS) -> str:
+    return _end_call_condition("", call_duration_seconds)
+
+
+def _end_call_condition(custom_condition: str = "", call_duration_seconds: int = DEFAULT_CALL_DURATION_SECONDS) -> str:
     completion_condition = custom_condition or (
         "End the call only after the caller clearly says goodbye, asks to end the call, says they need nothing else, "
         "or explicitly confirms they are finished after being asked whether they need anything else. Do not end merely "
         "because the business objective is complete, the caller says thank you during the conversation, there is a short "
         "silence, or the caller interrupts."
     )
+    closing_start_seconds = max(1, call_duration_seconds - 10)
     return (
-        f"{completion_condition.rstrip()} Independently of that condition, when elapsed call time reaches 2 minutes "
-        f"50 seconds ({CLOSING_START_SECONDS} seconds), immediately trigger the end-call action so the thanks message "
-        f"starts then and the call disconnects before the hard {MAX_CALL_DURATION_SECONDS}-second limit."
+        f"{completion_condition.rstrip()} Independently of that condition, when elapsed call time reaches "
+        f"{_spoken_duration(closing_start_seconds)} ({closing_start_seconds} seconds), immediately trigger the end-call action so the thanks message "
+        f"starts then and the call disconnects before the hard {call_duration_seconds}-second limit."
     )
 
 

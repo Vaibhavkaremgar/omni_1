@@ -698,6 +698,41 @@ def test_three_minute_call_limit_cannot_be_extended_by_employee_configuration():
     assert "thanks message starts then" in payload["end_call"]["condition"]
 
 
+def test_selected_call_duration_is_sent_to_omni_and_updates_the_closing_window():
+    employee = SimpleNamespace(
+        name="Telugu Assistant", purpose="Book appointments", call_type="outbound",
+        llm_model="gpt-4o-mini", language="Telugu",
+    )
+    payload = map_employee_configuration(employee, {
+        "name": employee.name,
+        "purpose": employee.purpose,
+        "language": employee.language,
+        "max_call_duration_in_sec": 600,
+    })
+
+    assert payload["transcriber"]["max_call_duration_in_sec"] == 600
+    assert "9 minutes 50 seconds (590 seconds)" in payload["end_call"]["condition"]
+    assert "hard 600-second limit" in payload["end_call"]["condition"]
+    assert "hard limit of 10 minutes" in payload["context_breakdown"][0]["body"]
+
+
+def test_custom_call_duration_minutes_and_seconds_is_sent_to_omni():
+    employee = SimpleNamespace(
+        name="Support Assistant", purpose="Answer questions", call_type="inbound",
+        llm_model="gpt-4o-mini", language="English",
+    )
+    payload = map_employee_configuration(employee, {
+        "name": employee.name,
+        "purpose": employee.purpose,
+        "language": employee.language,
+        "max_call_duration_in_sec": 245,
+    })
+
+    assert payload["transcriber"]["max_call_duration_in_sec"] == 245
+    assert "3 minutes 55 seconds (235 seconds)" in payload["end_call"]["condition"]
+    assert "hard 245-second limit" in payload["end_call"]["condition"]
+
+
 @pytest.mark.parametrize(("language", "silence_prompt", "audio_acknowledgement"), [
     ("Telugu", "Vinipisthunda andi?", "Vinipisthundi andi, cheppandi."),
     ("Hindi", "Kya aap sun rahe hain ji?", "Haan ji, boliye."),
