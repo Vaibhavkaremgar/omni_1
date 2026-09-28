@@ -629,6 +629,7 @@ def test_payload_explicitly_configures_listening_and_post_call_delivery(monkeypa
     assert payload["transcriber"] == {
         "provider": "soniox", "language": "en",
         "silence_timeout_ms": 500, "interruption_min_words": 2,
+        "max_call_duration_in_sec": 180,
     }
     webhook = payload["post_call_actions"]["webhook"]
     assert webhook["url"] == "https://voice.example.com/api/v1/webhooks/omnidimension/post-call"
@@ -650,7 +651,11 @@ def test_end_call_preserves_employee_condition_and_enforces_two_second_hold():
     })
     assert payload["is_end_call_enabled"] is True
     assert payload["end_call"] == {
-        "condition": "Only end after the caller says goodbye.",
+        "condition": (
+            "Only end after the caller says goodbye. Independently of that condition, when elapsed call time reaches "
+            "2 minutes 50 seconds (170 seconds), immediately trigger the end-call action so the thanks message starts "
+            "then and the call disconnects before the hard 180-second limit."
+        ),
         "message": "Goodbye.",
         "message_prompt": (
             "Say goodbye briefly. Let the complete closing message finish playing. Then remain silent for two seconds "
@@ -672,6 +677,81 @@ def test_telugu_default_end_call_message_uses_thanks_andi():
     })
 
     assert payload["end_call"]["message"] == "thanks andi, have a nice day."
+    assert "2 minutes 50 seconds (170 seconds)" in payload["end_call"]["condition"]
+    assert payload["transcriber"]["max_call_duration_in_sec"] == 180
+
+
+def test_three_minute_call_limit_cannot_be_extended_by_employee_configuration():
+    employee = SimpleNamespace(
+        name="Telugu Assistant", purpose="Book appointments", call_type="outbound",
+        llm_model="gpt-4o-mini", language="Telugu",
+    )
+    payload = map_employee_configuration(employee, {
+        "name": employee.name,
+        "purpose": employee.purpose,
+        "language": employee.language,
+        "transcriber": {"max_call_duration_in_sec": 600},
+    })
+
+    assert payload["transcriber"]["max_call_duration_in_sec"] == 180
+    assert payload["end_call"]["message"] == "thanks andi, have a nice day."
+    assert "thanks message starts then" in payload["end_call"]["condition"]
+
+
+@pytest.mark.parametrize(("language", "silence_prompt", "audio_acknowledgement"), [
+    ("Telugu", "Vinipisthunda andi?", "Vinipisthundi andi, cheppandi."),
+    ("Hindi", "Kya aap sun rahe hain ji?", "Haan ji, boliye."),
+    ("English", "Are you still there?", "Yes, I can hear you. Please go ahead."),
+])
+def test_live_prompt_handles_silence_and_caller_audio_checks(
+    language, silence_prompt, audio_acknowledgement,
+):
+    employee = SimpleNamespace(
+        name="Interview Assistant", purpose="Interview candidates", call_type="outbound",
+        llm_model="gpt-4o-mini", language=language,
+    )
+    payload = map_employee_configuration(employee, {
+        "name": employee.name,
+        "purpose": employee.purpose,
+        "language": language,
+    })
+
+    guardrails = next(
+        section["body"] for section in payload["context_breakdown"]
+        if section["title"] == "Critical Runtime Guardrails"
+    )
+    assert silence_prompt in guardrails
+    assert audio_acknowledgement in guardrails
+    assert "then stop and wait" in guardrails
+
+
+@pytest.mark.parametrize(("language", "interruption_acknowledgement"), [
+    ("Telugu", "Haa, cheppandi."),
+    ("Hindi", "Haan ji, boliye."),
+    ("English", "Yes, please go ahead."),
+])
+def test_live_prompt_yields_and_listens_when_caller_interrupts(
+    language, interruption_acknowledgement,
+):
+    employee = SimpleNamespace(
+        name="Interview Assistant", purpose="Interview candidates", call_type="outbound",
+        llm_model="gpt-4o-mini", language=language,
+    )
+    payload = map_employee_configuration(employee, {
+        "name": employee.name,
+        "purpose": employee.purpose,
+        "language": language,
+    })
+
+    guardrails = next(
+        section["body"] for section in payload["context_breakdown"]
+        if section["title"] == "Critical Runtime Guardrails"
+    )
+    assert interruption_acknowledgement in guardrails
+    assert "immediately stop speaking" in guardrails
+    assert "remain silent and listen" in guardrails
+    assert payload["is_welcome_message_interruption"] is False
+    assert payload["is_interruption_allowed"] is True
 
 
 def test_voice_payload_keeps_objective_completion_active_and_requires_explicit_end():

@@ -45,7 +45,7 @@ def test_global_provider_catalog_is_not_treated_as_account_cloned_voices(monkeyp
     ]
 
 
-def test_builtin_ramana_voice_is_available_without_catalog_configuration(monkeypatch):
+def test_builtin_telugu_cloned_voices_are_available_without_catalog_configuration(monkeypatch):
     monkeypatch.setattr(
         voice_catalog_service,
         "get_settings",
@@ -57,6 +57,15 @@ def test_builtin_ramana_voice_is_available_without_catalog_configuration(monkeyp
     assert ramana["provider"] == "cartesia"
     assert ramana["is_cloned"] is True
     assert voice_catalog_service.provider_voice_id("cloned_cartesia_ramana") == "9242c388-deef-42b1-b4dd-20552eff448b"
+
+    siri = next(item for item in voice_catalog_service.public_voice_catalog() if item["id"] == "cloned_cartesia_siri")
+    assert siri["name"] == "Siri"
+    assert siri["gender"] == "female"
+    assert siri["languages"] == ["Telugu"]
+    assert siri["provider"] == "cartesia"
+    assert siri["tier"] == "cloned"
+    assert siri["is_cloned"] is True
+    assert voice_catalog_service.provider_voice_id("cloned_cartesia_siri") == "23231a29-80b7-4589-ae79-302bae0741e1"
 
 
 def test_configured_cloned_voices_are_normalized_and_resolved(monkeypatch):

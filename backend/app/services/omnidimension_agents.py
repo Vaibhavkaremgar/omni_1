@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 # Omni live-call agent model.  Keep this independent from the build-time
 # script-generation model; Flash-Lite is the lower-latency Gemini option.
 OMNI_LIVE_MODEL = "gemini-2.5-flash-lite"
+MAX_CALL_DURATION_SECONDS = 180
+CLOSING_START_SECONDS = 170
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,8 @@ class OmniDimensionAgentService:
             if existing_provider_id
             else self.provider.create_agent(payload)
         )
+        transcriber_config = payload.get("transcriber") if isinstance(payload.get("transcriber"), dict) else {}
+        end_call_config = payload.get("end_call") if isinstance(payload.get("end_call"), dict) else {}
         logger.info(
             "[OMNI_END_CALL_CONFIG] agent_id=%s is_end_call_enabled=%s "
             "user_idle_threshold_sec=%s max_call_duration_in_sec=%s silence_timeout=%s "
@@ -106,9 +110,9 @@ class OmniDimensionAgentService:
             provider_agent.provider_id,
             payload.get("is_end_call_enabled", "provider_default"),
             payload.get("user_idle_threshold_sec", "provider_default"),
-            payload.get("max_call_duration_in_sec", "provider_default"),
-            payload.get("silence_timeout", "provider_default"),
-            bool(payload.get("end_call_condition")),
+            transcriber_config.get("max_call_duration_in_sec", "provider_default"),
+            transcriber_config.get("silence_timeout_ms", "provider_default"),
+            bool(end_call_config.get("condition")),
         )
         readback: dict[str, Any] | None = None
         readback_error: Exception | None = None
@@ -258,6 +262,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     else:
         canonical_prompt = str(configuration.get("final_prompt") or build_employee_prompt(configuration))
     welcome_message = _welcome_message_from_first_section(saved_script) or _welcome_message(employee, configuration, lang)
+    audio_connection_guidance = _audio_connection_guidance(lang)
+    interruption_guidance = _interruption_guidance(lang)
     context = [
         {"title": "Critical Runtime Guardrails", "body": (
             "The Generated Call Script is reference material for facts, goals, and possible handling; it is not a line-by-line response queue. "
@@ -273,8 +279,12 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             "After answering, continue only from the next relevant unfinished step. Never repeat the same sentence, question, greeting, or section. "
             "If unclear, ask briefly for repetition and adapt. Respect stop, decline, and callback requests. Complete the identity-and-purpose "
             "opening in one turn. Keep every response conversational and specific to what the caller just said. "
+            f"{audio_connection_guidance} "
+            f"{interruption_guidance} "
             "When the caller clearly confirms the conversation is finished, invoke the configured end-call action without first saying a "
             "separate closing; the end-call action speaks the thank-you message once, lets it finish, waits silently for two seconds, and then disconnects. "
+            "The call has a hard three-minute limit. At exactly two minutes fifty seconds of elapsed call time, stop the normal conversation "
+            "and immediately invoke the end-call action so its thanks closing starts before the three-minute cutoff. "
             "Say thank you, thanks, sorry, and okay in English. Speak numbers, dates, years, times, prices, percentages, phone numbers, "
             "OTPs, IDs, codes, and references in English; speak identifiers digit by digit when appropriate."
         ), "is_enabled": True},
@@ -352,7 +362,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     configured_end_call = configuration.get("end_call")
     if isinstance(configured_end_call, dict) and _text(configured_end_call.get("condition")):
         payload["end_call"] = {
-            "condition": _text(configured_end_call["condition"]),
+            "condition": _end_call_condition(_text(configured_end_call["condition"])),
             "message": _text(configured_end_call.get("message")) or _default_end_call_message(lang),
             "message_prompt": _end_call_message_prompt(_text(configured_end_call.get("message_prompt"))),
         }
@@ -495,7 +505,7 @@ def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any])
         "interruption_min_words": 2,
         "idle_threshold_sec": 5,
         "end_call_enabled": True,
-        "end_call_condition": _text(end_call.get("condition")) or _default_end_call_condition(),
+        "end_call_condition": _end_call_condition(_text(end_call.get("condition"))),
         "webhook_enabled": True,
         "webhook_url": _automatic_post_call_actions()["webhook"]["url"],
         "webhook_statuses": _automatic_post_call_actions()["webhook"]["trigger_call_statuses"],
@@ -634,6 +644,7 @@ def _transcriber_configuration(configuration: dict[str, Any], language: str) -> 
         # noisy phone lines may need a larger value.
         "silence_timeout_ms": getattr(get_settings(), "live_speech_silence_timeout_ms", 500),
         "interruption_min_words": 2,
+        "max_call_duration_in_sec": MAX_CALL_DURATION_SECONDS,
     }
     if isinstance(configured, dict):
         legacy_provider = str(configured.get("provider") or "").casefold()
@@ -644,12 +655,62 @@ def _transcriber_configuration(configuration: dict[str, Any], language: str) -> 
             result["model"] = configured["soniox_model"]
         result["provider"] = "soniox"
         result["language"] = _soniox_language_code(language)
+    # This is a product-level hard limit and cannot be extended per employee.
+    result["max_call_duration_in_sec"] = MAX_CALL_DURATION_SECONDS
     return result
 
 
 def _soniox_language_code(language: str) -> str:
     value = _language_code(language)
     return value.split("-", 1)[0]
+
+
+def _audio_connection_guidance(language: str) -> str:
+    """Return language-specific silence and caller audio-check behavior."""
+    if language == "Telugu":
+        return (
+            "If the caller is silent, ask exactly 'Vinipisthunda andi?', then stop and wait for their response. "
+            "If the caller or candidate asks 'Can you hear me?' or otherwise checks the audio connection, acknowledge "
+            "immediately with 'Vinipisthundi andi, cheppandi.', then listen."
+        )
+    if language == "Hindi":
+        return (
+            "If the caller is silent, ask exactly 'Kya aap sun rahe hain ji?', then stop and wait for their response. "
+            "If the caller or candidate asks 'Can you hear me?' or otherwise checks the audio connection, acknowledge "
+            "immediately with 'Haan ji, boliye.', then listen."
+        )
+    if language in {"English", "English (India)", "English (UK)"}:
+        return (
+            "If the caller is silent, ask exactly 'Are you still there?', then stop and wait for their response. "
+            "If the caller or candidate asks 'Can you hear me?' or otherwise checks the audio connection, acknowledge "
+            "immediately with 'Yes, I can hear you. Please go ahead.', then listen."
+        )
+    return (
+        f"If the caller is silent, ask a short natural equivalent of 'Can you hear me?' in {language}, then stop and wait. "
+        "If the caller or candidate asks whether the agent can hear them or otherwise checks the audio connection, "
+        f"confirm clearly in {language} that they can be heard, invite them to continue, and then listen."
+    )
+
+
+def _interruption_guidance(language: str) -> str:
+    """Tell the agent how to yield when the caller interrupts a normal turn."""
+    if language == "Telugu":
+        acknowledgement = "Haa, cheppandi."
+    elif language == "Hindi":
+        acknowledgement = "Haan ji, boliye."
+    elif language in {"English", "English (India)", "English (UK)"}:
+        acknowledgement = "Yes, please go ahead."
+    else:
+        return (
+            f"If the caller interrupts during a normal response, immediately stop speaking, give a short natural "
+            f"acknowledgement in {language} meaning 'Yes, please go ahead,' and then remain silent and listen. Do not "
+            "finish the interrupted sentence or resume it until the caller has finished."
+        )
+    return (
+        "If the caller interrupts during a normal response, immediately stop speaking and say exactly "
+        f"'{acknowledgement}' Then remain silent and listen. Do not finish the interrupted sentence or resume it until "
+        "the caller has finished."
+    )
 
 
 def _language_code(language: str) -> str:
@@ -829,11 +890,20 @@ def _complete_opening(text: str) -> str:
 
 
 def _default_end_call_condition() -> str:
-    return (
+    return _end_call_condition()
+
+
+def _end_call_condition(custom_condition: str = "") -> str:
+    completion_condition = custom_condition or (
         "End the call only after the caller clearly says goodbye, asks to end the call, says they need nothing else, "
         "or explicitly confirms they are finished after being asked whether they need anything else. Do not end merely "
         "because the business objective is complete, the caller says thank you during the conversation, there is a short "
         "silence, or the caller interrupts."
+    )
+    return (
+        f"{completion_condition.rstrip()} Independently of that condition, when elapsed call time reaches 2 minutes "
+        f"50 seconds ({CLOSING_START_SECONDS} seconds), immediately trigger the end-call action so the thanks message "
+        f"starts then and the call disconnects before the hard {MAX_CALL_DURATION_SECONDS}-second limit."
     )
 
 
