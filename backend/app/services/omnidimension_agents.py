@@ -190,7 +190,10 @@ class OmniDimensionAgentService:
         # one update when the readback proves a requested setting was lost.
         if readback is not None:
             returned_now = _returned_configuration(readback) or {}
-            verify_fields = ("webhook_enabled", "webhook_url", "idle_threshold_sec", "end_call_enabled", "end_call_condition", "six_section_titles", "model")
+            verify_fields = (
+                "webhook_enabled", "webhook_url", "idle_threshold_sec", "end_call_enabled", "end_call_condition",
+                "is_welcome_message_interruption", "six_section_titles", "model",
+            )
             if any(not _values_match(field, intended_configuration.get(field), returned_now.get(field)) for field in verify_fields):
                 logger.warning("Omni agent readback mismatch; retrying update agent_id=%s fields=%s", provider_agent.provider_id, [field for field in verify_fields if not _values_match(field, intended_configuration.get(field), returned_now.get(field))])
                 try:
@@ -270,6 +273,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             "After answering, continue only from the next relevant unfinished step. Never repeat the same sentence, question, greeting, or section. "
             "If unclear, ask briefly for repetition and adapt. Respect stop, decline, and callback requests. Complete the identity-and-purpose "
             "opening in one turn. Keep every response conversational and specific to what the caller just said. "
+            "When the caller clearly confirms the conversation is finished, invoke the configured end-call action without first saying a "
+            "separate closing; the end-call action speaks the thank-you message once, lets it finish, waits silently for two seconds, and then disconnects. "
             "Say thank you, thanks, sorry, and okay in English. Speak numbers, dates, years, times, prices, percentages, phone numbers, "
             "OTPs, IDs, codes, and references in English; speak identifiers digit by digit when appropriate."
         ), "is_enabled": True},
@@ -306,14 +311,18 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         # defaults. All values can be overridden by employee configuration.
         "transcriber": _transcriber_configuration(configuration, lang),
         "is_welcome_message_dynamic": True,
-        # Finish the identity + purpose turn before listening for a reply.
-        "is_welcome_message_interruption": False,
+        # Barge-in must work during the welcome as well as later turns.
+        "is_welcome_message_interruption": True,
         "is_interruption_allowed": True,
         "interruption_min_words": 2,
-        # Automatic end_call is deliberately opt-in. If it is enabled for
-        # every agent, the provider's internal LLM tool can hang up after a
-        # single answered question or after a false silence detection.
-        "is_end_call_enabled": False,
+        # Use a strict completion condition to avoid premature hang-ups while
+        # still guaranteeing that a completed conversation is disconnected.
+        "is_end_call_enabled": True,
+        "end_call": {
+            "condition": _default_end_call_condition(),
+            "message": _default_end_call_message(lang),
+            "message_prompt": _end_call_message_prompt(),
+        },
         # Provider-level idle handling: prompt the caller once after a short
         # pause and wait for speech instead of advancing the workflow.
         "user_idle_threshold_sec": 5,
@@ -342,13 +351,10 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
 
     configured_end_call = configuration.get("end_call")
     if isinstance(configured_end_call, dict) and _text(configured_end_call.get("condition")):
-        payload["is_end_call_enabled"] = True
         payload["end_call"] = {
             "condition": _text(configured_end_call["condition"]),
             "message": _text(configured_end_call.get("message")) or _default_end_call_message(lang),
-            "message_prompt": _text(configured_end_call.get("message_prompt")) or (
-                "End politely only after the caller clearly indicates they are finished."
-            ),
+            "message_prompt": _end_call_message_prompt(_text(configured_end_call.get("message_prompt"))),
         }
 
     voice = configuration.get("voice")
@@ -482,14 +488,14 @@ def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any])
         "voice_id": str(voice_id) if voice_id else None,
         "welcome_message": _welcome_message(employee, configuration, language),
         "is_welcome_message_dynamic": True,
-        "is_welcome_message_interruption": False,
+        "is_welcome_message_interruption": True,
         "six_section_prompt": _format_call_script(script) if script else "",
         "six_section_titles": list(script) if script else [],
         "interruption_enabled": True,
         "interruption_min_words": 2,
         "idle_threshold_sec": 5,
-        "end_call_enabled": bool(end_call and _text(end_call.get("condition"))),
-        "end_call_condition": _text(end_call.get("condition")) if end_call else None,
+        "end_call_enabled": True,
+        "end_call_condition": _text(end_call.get("condition")) or _default_end_call_condition(),
         "webhook_enabled": True,
         "webhook_url": _automatic_post_call_actions()["webhook"]["url"],
         "webhook_statuses": _automatic_post_call_actions()["webhook"]["trigger_call_statuses"],
@@ -511,6 +517,7 @@ def _sent_configuration(payload: dict[str, Any]) -> dict[str, Any]:
         "voice_provider": voice.get("provider"),
         "voice_id": voice.get("voice_id"),
         "welcome_message": payload.get("welcome_message"),
+        "is_welcome_message_interruption": payload.get("is_welcome_message_interruption"),
         "six_section_prompt": _extract_six_section_prompt(payload.get("context_breakdown")),
         "six_section_titles": _extract_six_section_titles(_extract_six_section_prompt(payload.get("context_breakdown"))),
         "interruption_enabled": payload.get("is_interruption_allowed"),
@@ -549,6 +556,7 @@ def _returned_configuration(readback: dict[str, Any] | None) -> dict[str, Any] |
         "voice_provider": voice.get("provider") or readback.get("voice_provider"),
         "voice_id": voice.get("voice_id") or readback.get("voice_external_id") or readback.get("provider_voice_id"),
         "welcome_message": readback.get("welcome_message"),
+        "is_welcome_message_interruption": readback.get("is_welcome_message_interruption"),
         "six_section_prompt": prompt,
         "six_section_titles": _extract_six_section_titles(prompt),
         "interruption_enabled": readback.get("is_interruption_allowed"),
@@ -572,7 +580,7 @@ def _provider_verification(
 ) -> dict[str, Any]:
     fields = [
         "call_type", "language", "model", "transcriber_provider", "transcriber_language",
-        "voice_provider", "voice_id", "welcome_message", "six_section_prompt",
+        "voice_provider", "voice_id", "welcome_message", "is_welcome_message_interruption", "six_section_prompt",
         "six_section_titles", "interruption_enabled", "interruption_min_words",
         "idle_threshold_sec", "end_call_enabled", "end_call_condition",
         "webhook_enabled", "webhook_url", "webhook_statuses",
@@ -820,9 +828,28 @@ def _contains_raw_description(text: str, configuration: dict[str, Any], minimum_
 def _complete_opening(text: str) -> str:
     """Send identity and purpose as one uninterrupted opening turn."""
     return re.sub(r"\s+", " ", _text(text)).strip()
+
+
+def _default_end_call_condition() -> str:
+    return (
+        "End the call only after the caller clearly says goodbye, asks to end the call, says they need nothing else, "
+        "or explicitly confirms they are finished after being asked whether they need anything else. Do not end merely "
+        "because the business objective is complete, the caller says thank you during the conversation, there is a short "
+        "silence, or the caller interrupts."
+    )
+
+
+def _end_call_message_prompt(custom_prompt: str = "") -> str:
+    base = custom_prompt or "Speak the configured thank-you closing exactly once."
+    return (
+        f"{base.rstrip()} Let the complete closing message finish playing. Then remain silent for two seconds before "
+        "disconnecting the call. Do not speak during the two-second wait."
+    )
+
+
 def _default_end_call_message(language: str) -> str:
     if language == "Telugu":
-        return "Thank you. Have a nice day."
+        return "thanks andi, have a nice day."
     return "Thank you for your time."
 
 

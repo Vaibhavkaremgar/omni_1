@@ -612,7 +612,9 @@ def test_payload_explicitly_configures_listening_and_post_call_delivery(monkeypa
     from app.services import omnidimension_agents as service
 
     monkeypatch.setattr(service, "get_settings", lambda: SimpleNamespace(
-        backend_public_url="https://voice.example.com"
+        backend_public_url="https://voice.example.com",
+        environment="test",
+        live_speech_silence_timeout_ms=500,
     ))
     employee = SimpleNamespace(
         name="Sales Assistant", purpose="Qualify demo requests", call_type="outbound",
@@ -626,14 +628,14 @@ def test_payload_explicitly_configures_listening_and_post_call_delivery(monkeypa
     assert payload["is_interruption_allowed"] is True
     assert payload["transcriber"] == {
         "provider": "soniox", "language": "en",
-        "silence_timeout_ms": 500, "interruption_min_words": 3,
+        "silence_timeout_ms": 500, "interruption_min_words": 2,
     }
     webhook = payload["post_call_actions"]["webhook"]
     assert webhook["url"] == "https://voice.example.com/api/v1/webhooks/omnidimension/post-call"
-    assert set(webhook["trigger_call_statuses"]) == {"completed", "failed", "no_answer", "busy", "voicemail_detected"}
+    assert set(webhook["trigger_call_statuses"]) == {"completed", "failed", "no_answer", "busy"}
 
 
-def test_end_call_is_opt_in_and_preserves_employee_condition():
+def test_end_call_preserves_employee_condition_and_enforces_two_second_hold():
     employee = SimpleNamespace(
         name="Support Assistant", purpose="Answer support questions", call_type="inbound",
         llm_model="gpt-4o-mini", language="English",
@@ -650,7 +652,10 @@ def test_end_call_is_opt_in_and_preserves_employee_condition():
     assert payload["end_call"] == {
         "condition": "Only end after the caller says goodbye.",
         "message": "Goodbye.",
-        "message_prompt": "Say goodbye briefly.",
+        "message_prompt": (
+            "Say goodbye briefly. Let the complete closing message finish playing. Then remain silent for two seconds "
+            "before disconnecting the call. Do not speak during the two-second wait."
+        ),
     }
 
 
@@ -682,9 +687,10 @@ def test_voice_payload_keeps_objective_completion_active_and_requires_explicit_e
     assert "explicit end-of-call confirmation" in bodies
     assert "An interruption is a normal barge-in, not a request to hang up" in bodies
     assert "ఇంకా ఏమైనా help కావాలా?" in bodies
-    assert payload["is_end_call_enabled"] is False
+    assert payload["is_end_call_enabled"] is True
     assert payload["interruption_min_words"] == 3
-    assert "end_call" not in payload
+    assert "caller clearly says goodbye" in payload["end_call"]["condition"]
+    assert "remain silent for two seconds" in payload["end_call"]["message_prompt"]
 
 
 def test_business_identity_uses_explicit_company_name_and_keeps_requirement_as_description():
@@ -970,7 +976,9 @@ def test_voice_payload_treats_fillers_and_short_answers_as_non_terminal():
     bodies = "\n".join(section["body"] for section in payload["context_breakdown"])
     assert "ahh" in bodies and "hmm" in bodies and "one second" in bodies
     assert "not goodbye or hang-up intent" in bodies
-    assert payload["is_end_call_enabled"] is False
+    assert payload["is_end_call_enabled"] is True
+    assert "caller says thank you during the conversation" in payload["end_call"]["condition"]
+    assert "remain silent for two seconds" in payload["end_call"]["message_prompt"]
     assert payload["user_idle_threshold_sec"] == 5
 
 
