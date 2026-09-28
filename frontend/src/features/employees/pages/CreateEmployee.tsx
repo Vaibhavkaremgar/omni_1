@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Loader2, MessageCircle, PhoneCall, Save, Sparkles } from 'lucide-react';
+import { ArrowLeft, Check, Loader2, MessageCircle, PhoneCall, Save, Sparkles } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { backendJson } from '../../../services/backend/api';
 
@@ -9,6 +9,67 @@ type Voice = { id: string; name: string; tier: string; gender: string; languages
 type Employee = { id: string; name: string; purpose: string; language: string; configuration?: Config | null };
 type Phone = { id: string; e164_number: string; status: string; label?: string | null };
 type Session = { messages: Array<{ role: string; content: string }>; current_question: string | null; is_complete: boolean; extracted_configuration: Config };
+
+const buildStages = [
+  { title: 'Gathering your requirements', detail: 'Reading the goal, audience, and call type' },
+  { title: 'Understanding the business context', detail: 'Organizing the details that shape each conversation' },
+  { title: 'Defining the employee role', detail: 'Setting responsibilities, behavior, and guardrails' },
+  { title: 'Designing the conversation flow', detail: 'Creating a natural path through the call' },
+  { title: 'Preparing language and voice', detail: 'Applying the selected speaking style and voice' },
+];
+
+function EmployeeBuildProgress() {
+  const [activeStage, setActiveStage] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveStage(current => Math.min(current + 1, buildStages.length - 1));
+    }, 1300);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const progress = Math.min(92, 14 + activeStage * 19);
+
+  return <main className="flex-1 overflow-y-auto bg-slate-50">
+    <div className="mx-auto flex min-h-full max-w-2xl items-center justify-center p-6 lg:p-10">
+      <section className="relative w-full overflow-hidden rounded-3xl border border-blue-100 bg-white p-7 shadow-xl shadow-blue-100/60 sm:p-10">
+        <div className="absolute -right-20 -top-20 h-52 w-52 rounded-full bg-blue-100/70 blur-3xl" />
+        <div className="absolute -bottom-24 -left-20 h-52 w-52 rounded-full bg-indigo-100/60 blur-3xl" />
+        <div className="relative">
+          <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200">
+            <Sparkles className="h-7 w-7 animate-pulse" />
+          </div>
+          <div className="mt-6 text-center">
+            <p className="text-xs font-bold uppercase tracking-[0.24em] text-blue-600">Shabdha is working</p>
+            <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">Building your employee</h1>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">Turning your brief into a ready-to-review voice employee. This may take a moment.</p>
+          </div>
+
+          <div className="mt-8 h-2 overflow-hidden rounded-full bg-slate-100" aria-label={`Build progress: ${progress}%`}>
+            <div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-all duration-700 ease-out" style={{ width: `${progress}%` }} />
+          </div>
+
+          <div className="mt-7 space-y-2">
+            {buildStages.map((stage, index) => {
+              const complete = index < activeStage;
+              const active = index === activeStage;
+              return <div key={stage.title} className={`flex items-center gap-4 rounded-2xl border px-4 py-3.5 transition-all duration-500 ${active ? 'border-blue-200 bg-blue-50 shadow-sm' : complete ? 'border-emerald-100 bg-emerald-50/60' : 'border-transparent bg-slate-50/70'}`}>
+                <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full transition-colors ${complete ? 'bg-emerald-500 text-white' : active ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                  {complete ? <Check className="h-4 w-4" strokeWidth={3} /> : active ? <Loader2 className="h-4 w-4 animate-spin" /> : <span className="h-2 w-2 rounded-full bg-current" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className={`block text-sm font-semibold ${active ? 'text-blue-900' : complete ? 'text-emerald-900' : 'text-slate-500'}`}>{stage.title}</span>
+                  <span className={`mt-0.5 block text-xs ${active ? 'text-blue-600' : complete ? 'text-emerald-600' : 'text-slate-400'}`}>{stage.detail}</span>
+                </span>
+                {active && <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.3s]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.15s]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500" /></span>}
+              </div>;
+            })}
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>;
+}
 
 function NewEmployeeChat() {
   const navigate = useNavigate();
@@ -36,7 +97,7 @@ function NewEmployeeChat() {
       navigate(`/employees/${employee.id}`);
     } catch (e) { setError(e instanceof Error ? e.message : 'Shabdha could not build the employee. Your requirement is still here—please try again.'); setGenerating(false); }
   };
-  if (generating) return <main className="flex-1 bg-slate-50"><div className="mx-auto flex min-h-full max-w-xl items-center justify-center p-6"><section className="w-full rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm"><div className="mx-auto mb-5 h-12 w-12 animate-pulse rounded-2xl bg-blue-100" /><h1 className="text-2xl font-bold text-slate-950">Creating your employee<span className="animate-pulse">...</span></h1><p className="mt-2 text-sm text-slate-500">Shabdha is turning your brief into a ready-to-review workspace.</p><div className="mt-7 space-y-3 text-left text-sm">{['Understanding your requirement', 'Defining the employee role', 'Building the conversation flow', 'Preparing language and voice behavior'].map((stage, index) => <div key={stage} className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3 text-slate-700"><span className="grid h-6 w-6 place-items-center rounded-full bg-emerald-100 text-emerald-700">{index < 2 ? '✓' : '•'}</span>{stage}</div>)}</div></section></div></main>;
+  if (generating) return <EmployeeBuildProgress />;
   return <main className="flex-1 overflow-y-auto bg-slate-50"><div className="mx-auto flex min-h-full max-w-3xl items-center justify-center p-6 lg:p-10"><section className="w-full rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-10"><button onClick={() => navigate('/employees')} className="mb-10 flex items-center gap-2 text-sm text-slate-500"><ArrowLeft size={16} /> My Employees</button><div className="mx-auto max-w-2xl"><div className="mb-8 flex items-center gap-4"><div className="grid h-12 w-12 place-items-center rounded-2xl bg-blue-600 text-lg font-bold text-white">S</div><div><p className="text-sm font-semibold text-blue-600">Shabdha</p><h1 className="text-3xl font-bold tracking-tight text-slate-950">Create your employee</h1></div></div><div className="space-y-3">{messages.map((message, index) => <div key={index} className={`max-w-xl rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'assistant' ? 'bg-slate-100 text-slate-700' : 'ml-auto bg-blue-600 text-white'}`}>{message.content}</div>)}</div><fieldset className="mt-6"><legend className="text-sm font-semibold text-slate-700">Call Type *</legend><div className="mt-2 flex gap-4"><label className="text-sm"><input type="radio" name="callType" checked={callType === 'inbound'} onChange={() => setCallType('inbound')} /> Inbound Calls</label><label className="text-sm"><input type="radio" name="callType" checked={callType === 'outbound'} onChange={() => setCallType('outbound')} /> Outbound Calls</label></div></fieldset><div className="mt-6 flex flex-wrap gap-2">{suggestions.map(item => <button key={item} onClick={() => setRequirement(item.replace(/^(Build|Create) (a |an )?/, ''))} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-blue-300 hover:text-blue-700">{item}</button>)}</div><label className="mt-6 block text-sm font-semibold text-slate-700">Company Name (optional)<span className="mt-1 block text-xs font-normal text-slate-500">Add this only when the call represents a business.</span><input value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="e.g. KMG Insurance" className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-normal outline-none focus:border-blue-500" /></label><label className="mt-4 block text-sm font-semibold text-slate-700">Calling on behalf of<span className="mt-1 block text-xs font-normal text-slate-500">Optional. Adding the person or organisation improves the generated call script.</span><input value={hostName} onChange={e => setHostName(e.target.value)} placeholder="e.g. Vaibhav and Muskan" className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-normal outline-none focus:border-blue-500" /></label><label className="mt-4 block text-sm font-semibold text-slate-700">What should this employee do?<span className="mt-1 block text-xs font-normal text-slate-500">Describe the job, business process, customers, or goal.</span><textarea value={requirement} onChange={e => setRequirement(e.target.value)} placeholder="Call customers whose insurance renewal date is within 7 days and remind them about renewal." rows={4} className="mt-2 w-full rounded-2xl border border-slate-200 p-4 text-sm font-normal outline-none focus:border-blue-500" /></label><div className="mt-4 grid gap-3 sm:grid-cols-3"><input value={name} onChange={e => setName(e.target.value)} placeholder="Agent name spoken on calls (optional)" className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500" /><select value={language} onChange={e => setLanguage(e.target.value)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm"><>{languages.map(item => <option key={item}>{item}</option>)}</></select><select value={voiceId} onChange={e => setVoiceId(e.target.value)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm"><option value="">Recommended voice</option>{compatibleVoices.slice(0, 2).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></div>{error && <p className="mt-4 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}<div className="mt-6 flex justify-end"><button onClick={() => { setMessages(current => [...current, { role: 'user', content: requirement.trim() }]); void build(); }} disabled={!requirement.trim()} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white disabled:opacity-40"><Sparkles size={16} /> Build employee</button></div></div></section></div></main>;
  }
 
