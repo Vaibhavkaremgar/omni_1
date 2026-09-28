@@ -624,7 +624,7 @@ def test_payload_explicitly_configures_listening_and_post_call_delivery(monkeypa
         "name": employee.name, "purpose": employee.purpose,
         "language": employee.language, "llm_model": employee.llm_model,
     })
-    assert payload["is_welcome_message_interruption"] is True
+    assert payload["is_welcome_message_interruption"] is False
     assert payload["is_interruption_allowed"] is True
     assert payload["transcriber"] == {
         "provider": "soniox", "language": "en",

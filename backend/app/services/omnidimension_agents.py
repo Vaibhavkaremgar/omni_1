@@ -192,7 +192,7 @@ class OmniDimensionAgentService:
             returned_now = _returned_configuration(readback) or {}
             verify_fields = (
                 "webhook_enabled", "webhook_url", "idle_threshold_sec", "end_call_enabled", "end_call_condition",
-                "is_welcome_message_interruption", "six_section_titles", "model",
+                "six_section_titles", "model",
             )
             if any(not _values_match(field, intended_configuration.get(field), returned_now.get(field)) for field in verify_fields):
                 logger.warning("Omni agent readback mismatch; retrying update agent_id=%s fields=%s", provider_agent.provider_id, [field for field in verify_fields if not _values_match(field, intended_configuration.get(field), returned_now.get(field))])
@@ -311,8 +311,8 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         # defaults. All values can be overridden by employee configuration.
         "transcriber": _transcriber_configuration(configuration, lang),
         "is_welcome_message_dynamic": True,
-        # Barge-in must work during the welcome as well as later turns.
-        "is_welcome_message_interruption": True,
+        # Finish the identity + purpose turn before listening for a reply.
+        "is_welcome_message_interruption": False,
         "is_interruption_allowed": True,
         "interruption_min_words": 2,
         # Use a strict completion condition to avoid premature hang-ups while
@@ -488,7 +488,7 @@ def _intended_configuration(employee: AIEmployee, configuration: dict[str, Any])
         "voice_id": str(voice_id) if voice_id else None,
         "welcome_message": _welcome_message(employee, configuration, language),
         "is_welcome_message_dynamic": True,
-        "is_welcome_message_interruption": True,
+        "is_welcome_message_interruption": False,
         "six_section_prompt": _format_call_script(script) if script else "",
         "six_section_titles": list(script) if script else [],
         "interruption_enabled": True,
@@ -517,7 +517,6 @@ def _sent_configuration(payload: dict[str, Any]) -> dict[str, Any]:
         "voice_provider": voice.get("provider"),
         "voice_id": voice.get("voice_id"),
         "welcome_message": payload.get("welcome_message"),
-        "is_welcome_message_interruption": payload.get("is_welcome_message_interruption"),
         "six_section_prompt": _extract_six_section_prompt(payload.get("context_breakdown")),
         "six_section_titles": _extract_six_section_titles(_extract_six_section_prompt(payload.get("context_breakdown"))),
         "interruption_enabled": payload.get("is_interruption_allowed"),
@@ -556,7 +555,6 @@ def _returned_configuration(readback: dict[str, Any] | None) -> dict[str, Any] |
         "voice_provider": voice.get("provider") or readback.get("voice_provider"),
         "voice_id": voice.get("voice_id") or readback.get("voice_external_id") or readback.get("provider_voice_id"),
         "welcome_message": readback.get("welcome_message"),
-        "is_welcome_message_interruption": readback.get("is_welcome_message_interruption"),
         "six_section_prompt": prompt,
         "six_section_titles": _extract_six_section_titles(prompt),
         "interruption_enabled": readback.get("is_interruption_allowed"),
@@ -580,7 +578,7 @@ def _provider_verification(
 ) -> dict[str, Any]:
     fields = [
         "call_type", "language", "model", "transcriber_provider", "transcriber_language",
-        "voice_provider", "voice_id", "welcome_message", "is_welcome_message_interruption", "six_section_prompt",
+        "voice_provider", "voice_id", "welcome_message", "six_section_prompt",
         "six_section_titles", "interruption_enabled", "interruption_min_words",
         "idle_threshold_sec", "end_call_enabled", "end_call_condition",
         "webhook_enabled", "webhook_url", "webhook_statuses",
