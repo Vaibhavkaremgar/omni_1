@@ -76,6 +76,16 @@ BUILTIN_VOICES = [{
     "supports_cloning": True,
     "languages": ["Telugu"],
     "is_cloned": True,
+}, {
+    "id": "cloned_cartesia_sravani",
+    "name": "Sravani",
+    "tier": "cloned",
+    "gender": "female",
+    "provider": "cartesia",
+    "provider_voice_id": "af808057-cc36-429b-8041-7773fe043600",
+    "supports_cloning": True,
+    "languages": ["Telugu"],
+    "is_cloned": True,
 }]
 
 def voice_catalog() -> list[dict[str, Any]]:

@@ -4,7 +4,7 @@ import { Loader2, PhoneCall, RefreshCw, ToggleLeft, ToggleRight } from 'lucide-r
 import { backendFetch, backendJson } from '../../../services/backend/api';
 import { CountryCodeSelect } from '../../../components/forms/CountryCodeSelect';
 
-interface Employee { id: string; name: string; status: string; provider_agent_id?: string | null }
+interface Employee { id: string; name: string; status: string; provider_status?: string | null }
 interface PhoneNumber { id: string; e164_number: string; provider_name: string | null; status: string }
 interface CallResult {
   id: string; employee_id: string; customer_phone_number: string; provider_call_id: string | null;
@@ -47,7 +47,7 @@ export default function InstantLeads() {
           backendJson<TenantSettings>('/settings'),
           backendJson<LeadSource | null>('/instant-leads/source'),
         ]);
-        setEmployees(employeeData.filter(e => e.status === 'published' && e.provider_agent_id));
+        setEmployees(employeeData.filter(e => e.status === 'published' && e.provider_status !== 'failed'));
         setNumbers(numberData.filter(n => n.status === 'active'));
         setEnabled(settings.instant_leads_enabled);
         setSource(sourceData);

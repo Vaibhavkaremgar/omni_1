@@ -67,6 +67,15 @@ def test_builtin_telugu_cloned_voices_are_available_without_catalog_configuratio
     assert siri["is_cloned"] is True
     assert voice_catalog_service.provider_voice_id("cloned_cartesia_siri") == "23231a29-80b7-4589-ae79-302bae0741e1"
 
+    sravani = next(item for item in voice_catalog_service.public_voice_catalog() if item["id"] == "cloned_cartesia_sravani")
+    assert sravani["name"] == "Sravani"
+    assert sravani["gender"] == "female"
+    assert sravani["languages"] == ["Telugu"]
+    assert sravani["provider"] == "cartesia"
+    assert sravani["tier"] == "cloned"
+    assert sravani["is_cloned"] is True
+    assert voice_catalog_service.provider_voice_id("cloned_cartesia_sravani") == "af808057-cc36-429b-8041-7773fe043600"
+
 
 def test_configured_cloned_voices_are_normalized_and_resolved(monkeypatch):
     configured = [
