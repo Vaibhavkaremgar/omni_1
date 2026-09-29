@@ -91,6 +91,7 @@ interface DashboardSummary {
 export default function Dashboard() {
   const { user } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [visibleEmployeeCount, setVisibleEmployeeCount] = useState(5);
   const [numbers, setNumbers] = useState<PhoneNumber[]>([]);
   const [recentCalls, setRecentCalls] = useState<Call[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -363,7 +364,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-2">
-                {employees.map(emp => {
+                {employees.slice(0, visibleEmployeeCount).map(emp => {
                   const phone = numbers.find(n => n.id === emp.phone_number_id);
                   return (
                     <div
@@ -421,6 +422,27 @@ export default function Dashboard() {
                     </div>
                   );
                 })}
+                {employees.length > 5 && (
+                  <div className="flex justify-center pt-3">
+                    {visibleEmployeeCount < employees.length ? (
+                      <button
+                        type="button"
+                        onClick={() => setVisibleEmployeeCount(current => Math.min(current + 5, employees.length))}
+                        className="rounded-lg px-4 py-2 text-sm font-medium text-blue-600 transition hover:bg-blue-50 hover:text-blue-700"
+                      >
+                        Show more
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setVisibleEmployeeCount(5)}
+                        className="rounded-lg px-4 py-2 text-sm font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-700"
+                      >
+                        Show less
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </section>

@@ -340,6 +340,168 @@
   background: rgba(255, 255, 255, 0.10);
 }
 
+.instant-leads-page {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 4% 4%, rgba(124, 77, 206, 0.17), transparent 28rem),
+    radial-gradient(circle at 96% 24%, rgba(16, 185, 129, 0.11), transparent 25rem),
+    linear-gradient(145deg, #f7f5fc 0%, #eee9f9 48%, #f5faf8 100%);
+}
+
+.instant-leads-header {
+  min-height: 5rem;
+  border-color: rgba(124, 77, 206, 0.14);
+  background: rgba(255, 255, 255, 0.90);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 24px rgba(48, 35, 75, 0.05);
+}
+
+.instant-leads-header > div > div:first-child {
+  background: #f0e8ff;
+}
+
+.instant-leads-header .text-emerald-600 {
+  color: #7c4dce;
+}
+
+.instant-leads-content > div {
+  max-width: 52rem;
+  padding-top: 0.5rem;
+  padding-bottom: 2rem;
+}
+
+.instant-leads-content > div > div {
+  border-color: rgba(124, 77, 206, 0.13);
+  border-radius: 1.25rem;
+  background: rgba(255, 255, 255, 0.91);
+  box-shadow: 0 16px 36px rgba(49, 35, 78, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.instant-leads-content > div > div:first-child {
+  background: linear-gradient(135deg, rgba(246, 240, 255, 0.96), rgba(255, 255, 255, 0.94));
+  border-color: rgba(124, 77, 206, 0.20);
+}
+
+.instant-leads-content > div > div:nth-child(2) {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(244, 251, 248, 0.94));
+  border-color: rgba(16, 185, 129, 0.16);
+}
+
+.instant-leads-content > div > div:hover {
+  border-color: rgba(124, 77, 206, 0.25);
+  box-shadow: 0 20px 44px rgba(49, 35, 78, 0.11);
+}
+
+.instant-leads-content input,
+.instant-leads-content select {
+  min-height: 2.75rem;
+  border: 1px solid rgba(124, 77, 206, 0.18);
+  border-radius: 0.75rem;
+  background-color: rgba(249, 247, 253, 0.94);
+  color: #273449;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.instant-leads-content input {
+  padding-left: 0.85rem;
+  padding-right: 0.85rem;
+}
+
+.instant-leads-content select {
+  appearance: none;
+  padding-left: 0.85rem;
+  padding-right: 2.5rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237c4dce' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.8rem center;
+  background-size: 1rem;
+  cursor: pointer;
+}
+
+.instant-leads-content input:focus,
+.instant-leads-content select:focus {
+  border-color: rgba(124, 77, 206, 0.65);
+  background-color: #fff;
+  box-shadow: 0 0 0 4px rgba(124, 77, 206, 0.10);
+  outline: none;
+}
+
+.instant-leads-content input::placeholder {
+  color: #9aa4b5;
+}
+
+.instant-leads-content button.bg-emerald-600,
+.instant-leads-content label.bg-emerald-600 {
+  background: #7c4dce;
+  border-color: #7c4dce;
+  box-shadow: 0 8px 18px rgba(124, 77, 206, 0.18);
+}
+
+.instant-leads-content button.bg-emerald-600:hover,
+.instant-leads-content label.bg-emerald-600:hover {
+  background: #6d3fc0;
+}
+
+.instant-leads-content .text-blue-700,
+.instant-leads-content .text-blue-600 {
+  color: #7041c8;
+}
+
+.instant-leads-content .border-blue-200 {
+  border-color: #ddcff8;
+}
+
+.instant-leads-content .hover\:bg-blue-50:hover {
+  background: #f4efff;
+}
+
+.country-code-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237c4dce' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  background-size: 0.9rem;
+  padding-right: 2rem;
+}
+
+.phone-number-field {
+  min-height: 2.75rem;
+  border-color: rgba(124, 77, 206, 0.18);
+  background: rgba(249, 247, 253, 0.94);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.phone-number-field:focus-within {
+  border-color: rgba(124, 77, 206, 0.65);
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(124, 77, 206, 0.10);
+}
+
+.instant-leads-content .phone-number-field input {
+  min-height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.instant-leads-content .phone-number-field input:focus {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.phone-code-prefix {
+  margin-left: 0.75rem;
+  padding-right: 0.75rem;
+  border-right: 1px solid rgba(124, 77, 206, 0.16);
+  color: #7041c8;
+  font-size: 0.875rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .create-employee-card > div > div:last-child {
   display: flex;
   justify-content: flex-end;

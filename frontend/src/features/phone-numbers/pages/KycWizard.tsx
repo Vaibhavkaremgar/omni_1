@@ -220,13 +220,13 @@ export default function KycWizard({ region, carrier, phoneNumber, onComplete, on
           India requires identity verification before purchasing a number. Enter your mobile number to begin.
         </p>
         <label className="block text-sm font-medium text-slate-700 mb-1">Mobile number</label>
-        <div className="flex gap-2"><CountryCodeSelect value={phoneCode} onChange={setPhoneCode} disabled={busy} /><input
+        <div className="mb-4 flex gap-2"><CountryCodeSelect value={phoneCode} onChange={setPhoneCode} disabled={busy} /><div className="phone-number-field min-w-0 flex flex-1 items-center rounded-xl border border-gray-300"><span className="phone-code-prefix">{phoneCode || '+'}</span><input
           type="tel"
           value={phone}
           onChange={e => setPhone(e.target.value)}
           placeholder="98765 43210"
-          className="min-w-0 flex-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        /></div>
+          className="min-w-0 flex-1 w-full border-0 bg-transparent px-3 py-2 text-sm outline-none"
+        /></div></div>
         {error && <p className="text-sm text-rose-600 mb-3">{error}</p>}
         <button
           onClick={() => void initialize()}

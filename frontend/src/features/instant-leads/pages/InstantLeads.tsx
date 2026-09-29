@@ -185,8 +185,8 @@ export default function InstantLeads() {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="h-16 border-b border-gray-200 px-6 flex items-center bg-white">
+    <div className="instant-leads-page flex-1 flex flex-col overflow-hidden">
+      <div className="instant-leads-header h-16 border-b border-gray-200 px-6 flex items-center bg-white">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
             <PhoneCall className="w-4 h-4 text-emerald-600" />
@@ -198,7 +198,7 @@ export default function InstantLeads() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="instant-leads-content flex-1 overflow-y-auto p-6">
         <div className="max-w-2xl mx-auto space-y-4">
           {/* ON/OFF Toggle card */}
           <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between gap-4">
@@ -340,13 +340,13 @@ export default function InstantLeads() {
               </label>
               <label className="block text-sm font-medium text-gray-700">
                   Customer phone *
-                <div className="mt-1 flex gap-2"><CountryCodeSelect value={destinationCode} onChange={setDestinationCode} disabled={calling} /><input
+                <div className="mt-1 flex gap-2"><CountryCodeSelect value={destinationCode} onChange={setDestinationCode} disabled={calling} /><div className="phone-number-field min-w-0 flex flex-1 items-center rounded-xl border border-gray-300"><span className="phone-code-prefix">{destinationCode || '+'}</span><input
                   value={destination}
                   onChange={e => setDestination(e.target.value)}
                   disabled={calling}
                   placeholder="98765 43210"
-                  className="mt-1 min-w-0 flex-1 w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm font-mono"
-                /></div>
+                  className="min-w-0 flex-1 w-full border-0 bg-transparent px-3 py-2.5 text-sm font-mono outline-none"
+                /></div></div>
               </label>
             </div>
 

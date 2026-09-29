@@ -25,7 +25,7 @@ export default function Sidebar({ collapsed, mobileOpen = false, onToggle }: Sid
 
   return (
     <aside
-      className={`${mobileOpen ? 'fixed inset-y-0 left-0 z-40' : 'hidden lg:flex'} h-screen sticky top-0 flex-col bg-white border-r border-gray-200 transition-all duration-300 ${
+      className={`${mobileOpen ? 'fixed inset-y-0 left-0 z-40' : 'hidden lg:flex'} h-full shrink-0 flex-col bg-white border-r border-gray-200 transition-all duration-300 ${
         collapsed ? 'w-[68px]' : 'w-60'
       }`}
     >
