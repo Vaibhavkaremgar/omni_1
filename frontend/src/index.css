@@ -1,1 +1,352 @@
 @import "tailwindcss";
+
+/* Employee workspace visual layer. Scoped so existing behavior and the rest
+   of the dashboard remain unchanged. */
+.employee-workspace {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(99, 102, 241, 0.12), transparent 30rem),
+    radial-gradient(circle at 96% 12%, rgba(14, 165, 233, 0.10), transparent 28rem),
+    linear-gradient(135deg, #f8fafc 0%, #eef2ff 52%, #f8fafc 100%);
+}
+
+.employee-workspace > div {
+  position: relative;
+}
+
+.employee-workspace section.rounded-2xl.border-slate-200 {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 16px 40px rgba(51, 65, 85, 0.07);
+  backdrop-filter: blur(12px);
+}
+
+.employee-workspace section.rounded-2xl.border-slate-200:hover {
+  border-color: rgba(99, 102, 241, 0.28);
+}
+
+.employee-workspace section.rounded-2xl.border-blue-100 {
+  border-color: rgba(129, 140, 248, 0.28);
+  background: linear-gradient(145deg, rgba(239, 246, 255, 0.94), rgba(245, 243, 255, 0.90));
+}
+
+.employee-workspace textarea,
+.employee-workspace input,
+.employee-workspace select {
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.employee-workspace textarea:focus,
+.employee-workspace input:focus,
+.employee-workspace select:focus {
+  border-color: rgb(99 102 241 / 0.65);
+  box-shadow: 0 0 0 4px rgb(99 102 241 / 0.10);
+  outline: none;
+}
+
+.employee-workspace label.block.rounded-xl.border-slate-200 {
+  border-color: rgba(148, 163, 184, 0.25);
+  background: rgba(248, 250, 252, 0.62);
+  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.employee-workspace label.block.rounded-xl.border-slate-200:hover {
+  border-color: rgba(99, 102, 241, 0.32);
+  background: rgba(255, 255, 255, 0.90);
+  transform: translateY(-1px);
+}
+
+.employee-workspace button {
+  transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.employee-workspace button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.employee-workspace button.bg-blue-600:not(:disabled) {
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.20);
+}
+
+/* Shared product palette: violet actions, emerald readiness, quiet neutrals. */
+.employee-workspace .bg-blue-600,
+.employees-page .bg-blue-600 {
+  background-color: #7c4dce;
+}
+
+.employee-workspace .bg-blue-600:hover,
+.employees-page .bg-blue-600:hover {
+  background-color: #6d3fc0;
+}
+
+.employee-workspace .text-blue-600,
+.employees-page .text-blue-600 {
+  color: #7041c8;
+}
+
+.employee-workspace .bg-blue-50,
+.employees-page .bg-blue-50 {
+  background-color: #f2edff;
+}
+
+.employee-workspace .border-blue-100,
+.employees-page .border-blue-100 {
+  border-color: #e8ddff;
+}
+
+.employee-workspace .text-emerald-700,
+.employees-page .text-emerald-700 {
+  color: #079669;
+}
+
+.employee-workspace .bg-emerald-50,
+.employees-page .bg-emerald-50 {
+  background-color: #e8faf2;
+}
+
+.employee-workspace .border-emerald-200,
+.employees-page .border-emerald-200 {
+  border-color: #b9ead4;
+}
+
+.employee-workspace button.bg-blue-600:not(:disabled),
+.employees-page button.bg-blue-600:not(:disabled),
+.employees-page .employees-create-button {
+  box-shadow: 0 10px 24px rgba(124, 77, 206, 0.23);
+}
+
+.employees-page {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(59, 130, 246, 0.13), transparent 28rem),
+    radial-gradient(circle at 95% 18%, rgba(168, 85, 247, 0.10), transparent 26rem),
+    linear-gradient(135deg, #f8fafc 0%, #eef4ff 52%, #faf5ff 100%);
+}
+
+.employees-page-header {
+  min-height: 5.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(16px);
+}
+
+.employees-page-header h1 {
+  letter-spacing: -0.02em;
+}
+
+.employees-create-button {
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.22);
+}
+
+.employees-page-main {
+  padding-top: 2rem;
+  padding-bottom: 3rem;
+}
+
+.employee-card {
+  min-height: 20rem;
+  overflow: hidden;
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 12px 30px rgba(51, 65, 85, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.employee-card:hover {
+  border-color: rgba(96, 165, 250, 0.55);
+  box-shadow: 0 20px 38px rgba(51, 65, 85, 0.13);
+}
+
+.employee-card > div:first-child {
+  padding: 1.15rem;
+}
+
+.employee-card > div:first-child > div:first-child > div:first-child {
+  background: linear-gradient(145deg, #f0e8ff, #f7f3ff);
+  color: #7c4dce;
+  box-shadow: inset 0 0 0 1px rgba(124, 77, 206, 0.14);
+}
+
+.employee-card h2 {
+  letter-spacing: -0.015em;
+}
+
+.employee-card p {
+  color: #64748b;
+}
+
+.employee-card .rounded-full {
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  background: rgba(241, 245, 249, 0.90);
+}
+
+.employee-card .bg-emerald-100 {
+  border-color: rgba(52, 211, 153, 0.25);
+  background: #d1fae5;
+  color: #047857;
+}
+
+.employee-card .bg-amber-100 {
+  border-color: rgba(251, 191, 36, 0.25);
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.employee-card-footer {
+  min-height: 4.5rem;
+  border-color: rgba(226, 232, 240, 0.85);
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.employee-open-button,
+.employee-publish-button,
+.employee-delete-button {
+  min-height: 2.75rem;
+}
+
+.employee-open-button {
+  border-color: rgba(148, 163, 184, 0.32);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.employee-open-button:hover {
+  border-color: rgba(124, 77, 206, 0.35);
+  background: #f3edff;
+  color: #7041c8;
+}
+
+.employee-publish-button {
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.20);
+}
+
+.employee-delete-button {
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.employees-delete-overlay {
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(5px);
+}
+
+.create-employee-page {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(124, 77, 206, 0.18), transparent 32rem),
+    radial-gradient(circle at 90% 90%, rgba(16, 185, 129, 0.08), transparent 28rem),
+    #f5f5f7;
+}
+
+.create-employee-card {
+  max-width: 58rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background:
+    radial-gradient(circle at 94% 0%, rgba(124, 77, 206, 0.32), transparent 23rem),
+    linear-gradient(145deg, #17102b 0%, #21143c 54%, #160e29 100%);
+  box-shadow: 0 30px 80px rgba(31, 18, 58, 0.25);
+  color: #fff;
+}
+
+.create-employee-card h1 {
+  color: #fff;
+}
+
+.create-employee-card > div {
+  max-width: none;
+}
+
+.create-employee-card label {
+  color: #f6f2ff;
+}
+
+.create-employee-card input,
+.create-employee-card textarea,
+.create-employee-card select {
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.075);
+  color: #fff;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.create-employee-card input::placeholder,
+.create-employee-card textarea::placeholder {
+  color: rgba(235, 229, 250, 0.56);
+}
+
+.create-employee-card option {
+  color: #17102b;
+  background: #fff;
+}
+
+.create-employee-card input:focus,
+.create-employee-card textarea:focus,
+.create-employee-card select:focus {
+  border-color: rgba(196, 164, 255, 0.85);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 4px rgba(174, 130, 255, 0.14);
+  outline: none;
+}
+
+.create-employee-card fieldset {
+  padding: 0.85rem 1rem;
+  border: 0;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.create-employee-card fieldset input {
+  accent-color: #b488ff;
+}
+
+.create-employee-card button.rounded-full {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #eee6ff;
+}
+
+.create-employee-card button.rounded-full:hover {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.create-employee-card .bg-slate-100 {
+  background: rgba(255, 255, 255, 0.10);
+  color: #eee6ff;
+}
+
+.create-employee-card .bg-blue-600 {
+  background: linear-gradient(135deg, #d09a30, #b97b16);
+  box-shadow: 0 12px 28px rgba(190, 131, 29, 0.28);
+}
+
+.create-employee-card .bg-blue-600:hover {
+  background: linear-gradient(135deg, #dfa943, #c4871f);
+}
+
+.create-employee-card .text-slate-500,
+.create-employee-card .text-slate-700 {
+  color: rgba(232, 224, 249, 0.68);
+}
+
+.create-employee-card .text-blue-600 {
+  color: #c19aff;
+}
+
+.create-employee-card .border-slate-200 {
+  border-color: rgba(255, 255, 255, 0.13);
+}
+
+.create-employee-card .bg-white {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.create-employee-card > div > div:last-child {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .create-employee-card {
+    padding: 1.25rem;
+  }
+}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Globe, Plus, Trash2, Users, Zap } from 'lucide-react';
+import { Globe, Plus, Trash2, Users } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { backendJson } from '../../../services/backend/api';
 
@@ -75,7 +75,7 @@ export default function EmployeesPage() {
 
   if (loading) {
     return (
-      <div className="flex-1 bg-slate-50 overflow-y-auto">
+      <div className="employees-page flex-1 overflow-y-auto">
         <header className="h-16 bg-white border-b border-gray-200 px-6 flex justify-between items-center">
           <div className="h-5 w-32 bg-gray-200 rounded animate-pulse" />
           <div className="h-9 w-36 bg-gray-200 rounded-xl animate-pulse" />
@@ -92,8 +92,8 @@ export default function EmployeesPage() {
   }
 
   return (
-    <div className="flex-1 bg-slate-50 overflow-y-auto">
-      <header className="h-16 bg-white border-b border-gray-200 px-6 flex justify-between items-center">
+    <div className="employees-page flex-1 overflow-y-auto">
+      <header className="employees-page-header px-6 flex justify-between items-center">
         <div>
           <h1 className="text-lg font-bold text-gray-900">My Employees</h1>
           <p className="text-xs text-gray-500">
@@ -102,14 +102,14 @@ export default function EmployeesPage() {
         </div>
         <Link
           to="/employees/new"
-          className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-4 py-2 text-sm font-semibold flex items-center gap-2 transition"
+          className="employees-create-button bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-4 py-2 text-sm font-semibold flex items-center gap-2 transition"
         >
           <Plus className="w-4 h-4" />
           Create Employee
         </Link>
       </header>
 
-      <main className="max-w-6xl mx-auto p-6">
+      <main className="employees-page-main max-w-6xl mx-auto p-6">
         {(error || notice) && (
           <p
             className={`mb-5 px-4 py-3 text-sm rounded-xl border ${
@@ -142,15 +142,15 @@ export default function EmployeesPage() {
               const tasks = taskCount(employee);
               const isPublished = employee.status === 'published';
               return (
-                <article
+              <article
                   key={employee.id}
-                  className="bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col hover:shadow-md hover:-translate-y-0.5 transition-all duration-150"
+                  className="employee-card bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col hover:shadow-md hover:-translate-y-0.5 transition-all duration-150"
                 >
                   {/* Card top */}
                   <div className="p-5 flex-1">
                     <div className="flex items-start justify-between mb-4">
                       <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 grid place-items-center">
-                        <Zap className="w-5 h-5" />
+                        <span className="text-lg font-bold uppercase">{employee.name.trim().charAt(0) || '?'}</span>
                       </div>
                       <span
                         className={`text-xs font-semibold rounded-full px-2.5 py-1 ${
@@ -190,10 +190,10 @@ export default function EmployeesPage() {
                   </div>
 
                   {/* Card footer */}
-                  <div className="px-5 py-4 border-t border-gray-100 flex items-center gap-2">
+                  <div className="employee-card-footer px-5 py-4 border-t border-gray-100 flex items-center gap-2">
                     <Link
                       to={`/employees/${employee.id}`}
-                      className="flex-1 border border-gray-200 rounded-xl py-2 text-center text-sm font-medium text-gray-700 hover:bg-gray-50 transition"
+                      className="employee-open-button flex-1 border border-gray-200 rounded-xl py-2 text-center text-sm font-medium text-gray-700 hover:bg-gray-50 transition"
                     >
                       Open
                     </Link>
@@ -201,7 +201,7 @@ export default function EmployeesPage() {
                       <button
                         onClick={() => void publish(employee)}
                         disabled={publishing === employee.id}
-                        className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-4 py-2 text-sm font-medium disabled:opacity-50 transition"
+                        className="employee-publish-button bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-4 py-2 text-sm font-medium disabled:opacity-50 transition"
                       >
                         {publishing === employee.id ? '…' : 'Publish'}
                       </button>
@@ -209,7 +209,7 @@ export default function EmployeesPage() {
                     <button
                       onClick={() => setTarget(employee)}
                       title="Delete employee"
-                      className="w-9 h-9 border border-gray-200 rounded-xl grid place-items-center text-gray-400 hover:border-rose-300 hover:text-rose-600 hover:bg-rose-50 transition"
+                      className="employee-delete-button w-9 h-9 border border-gray-200 rounded-xl grid place-items-center text-gray-400 hover:border-rose-300 hover:text-rose-600 hover:bg-rose-50 transition"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -223,7 +223,7 @@ export default function EmployeesPage() {
 
       {/* Delete confirmation modal */}
       {target && (
-        <div className="fixed inset-0 z-50 bg-black/40 grid place-items-center p-4">
+        <div className="employees-delete-overlay fixed inset-0 z-50 grid place-items-center p-4">
           <section className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-200">
             <h2 className="font-semibold text-lg text-gray-900">Delete this employee?</h2>
             <p className="mt-2 text-sm text-gray-600">
