@@ -83,7 +83,7 @@ export default function EmployeesPage() {
         <main className="max-w-6xl mx-auto p-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {[...Array(6)].map((_, i) => (
-              <div key={i} className="h-64 bg-white border border-gray-200 rounded-2xl animate-pulse" />
+              <div key={i} className="h-64 bg-white border border-gray-200 rounded-3xl animate-pulse" />
             ))}
           </div>
         </main>
@@ -144,7 +144,7 @@ export default function EmployeesPage() {
               return (
               <article
                   key={employee.id}
-                  className="employee-card bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col hover:shadow-md hover:-translate-y-0.5 transition-all duration-150"
+                  className="employee-card bg-white border border-gray-200 rounded-3xl shadow-sm flex flex-col hover:shadow-md hover:-translate-y-0.5 transition-all duration-150"
                 >
                   {/* Card top */}
                   <div className="p-5 flex-1">

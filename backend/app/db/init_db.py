@@ -361,6 +361,8 @@ def _ensure_tenant_feature_columns() -> None:
     with engine.begin() as connection:
         if "instant_leads_enabled" not in existing:
             connection.execute(text(f"ALTER TABLE tenants ADD COLUMN instant_leads_enabled BOOLEAN NOT NULL DEFAULT {_boolean_default(True)}"))
+        if "brand_logo_data_url" not in existing:
+            connection.execute(text("ALTER TABLE tenants ADD COLUMN brand_logo_data_url TEXT"))
         for column in ("notify_campaign_completed", "notify_low_balance"):
             if column not in existing:
                 connection.execute(text(f"ALTER TABLE tenants ADD COLUMN {column} BOOLEAN NOT NULL DEFAULT {_boolean_default(True)}"))

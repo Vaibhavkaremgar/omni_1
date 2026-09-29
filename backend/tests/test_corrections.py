@@ -473,6 +473,36 @@ def test_settings_notification_persists(db_session):
         app.dependency_overrides.clear()
 
 
+def test_settings_business_branding_persists(db_session):
+    db, tenant, user = db_session
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user=user, tenant=tenant)
+    logo = "data:image/png;base64,iVBORw0KGgo="
+    try:
+        with TestClient(app) as client:
+            response = client.patch("/api/v1/settings", json={"business_name": "Acme Calls", "logo_data_url": logo})
+            assert response.status_code == 200
+            assert response.json()["business_name"] == "Acme Calls"
+            assert response.json()["logo_data_url"] == logo
+            saved = client.get("/api/v1/settings").json()
+            assert saved["business_name"] == "Acme Calls"
+            assert saved["logo_data_url"] == logo
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_settings_rejects_non_image_logo_data(db_session):
+    db, tenant, user = db_session
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user=user, tenant=tenant)
+    try:
+        with TestClient(app) as client:
+            response = client.patch("/api/v1/settings", json={"logo_data_url": "data:text/html;base64,PHNjcmlwdD4="})
+            assert response.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_settings_notification_tenant_scoped(db_session):
     """Notification preference change for tenant A must not affect tenant B."""
     db, tenant_a, user_a = db_session

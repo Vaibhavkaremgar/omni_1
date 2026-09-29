@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../../auth/hooks/useAuth';
-import { Settings, User, Bell, Shield, ChevronRight } from 'lucide-react';
+import { Settings, User, Bell, Shield, ChevronRight, ImagePlus, Trash2 } from 'lucide-react';
 import { backendJson } from '../../../services/backend/api';
 
 interface TenantSettings {
+  business_name: string;
+  logo_data_url: string | null;
   instant_leads_enabled: boolean;
   notify_campaign_completed: boolean;
   notify_low_balance: boolean;
@@ -15,17 +17,61 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [settings, setSettings] = useState<TenantSettings | null>(null);
   const [notifSaving, setNotifSaving] = useState(false);
+  const [businessName, setBusinessName] = useState('');
+  const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null);
+  const [brandSaving, setBrandSaving] = useState(false);
+  const [brandError, setBrandError] = useState('');
 
   useEffect(() => {
     backendJson<TenantSettings>('/settings')
-      .then(setSettings)
+      .then(data => {
+        setSettings(data);
+        setBusinessName(data.business_name);
+        setLogoDataUrl(data.logo_data_url);
+      })
       .catch(() => {/* non-fatal */});
   }, []);
 
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const handleSave = async () => {
+    if (!businessName.trim()) return setBrandError('Business name is required.');
+    setBrandSaving(true);
+    setBrandError('');
+    try {
+      const updated = await backendJson<TenantSettings>('/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ business_name: businessName.trim(), logo_data_url: logoDataUrl }),
+      });
+      setSettings(updated);
+      setBusinessName(updated.business_name);
+      setLogoDataUrl(updated.logo_data_url);
+      window.dispatchEvent(new CustomEvent('pontis:branding-updated', { detail: updated }));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (saveError) {
+      setBrandError(saveError instanceof Error ? saveError.message : 'Unable to save branding.');
+    } finally {
+      setBrandSaving(false);
+    }
   };
+
+  const chooseLogo = (file: File | undefined) => {
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) return setBrandError('Choose a PNG, JPEG, or WebP image.');
+    if (file.size > 700_000) return setBrandError('Logo image must be smaller than 700 KB.');
+    const reader = new FileReader();
+    reader.onload = () => {
+      setLogoDataUrl(String(reader.result));
+      setBrandError('');
+    };
+    reader.onerror = () => setBrandError('Unable to read that image.');
+    reader.readAsDataURL(file);
+  };
+
+  const initials = (() => {
+    const words = businessName.trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return 'PC';
+    return (words.length === 1 ? words[0].slice(0, 2) : `${words[0][0]}${words[1][0]}`).toUpperCase();
+  })();
 
   const saveNotification = async (key: keyof TenantSettings, value: boolean) => {
     if (!settings) return;
@@ -114,12 +160,40 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              <div>
+                <h2 className="mb-1 text-base font-semibold text-gray-900">Business branding</h2>
+                <p className="mb-4 text-xs text-gray-500">This name and logo appear at the top of the dashboard sidebar.</p>
+                <div className="rounded-xl border border-violet-100 bg-white p-5 shadow-sm">
+                  <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+                    {logoDataUrl
+                      ? <img src={logoDataUrl} alt="Business logo preview" className="h-20 w-20 rounded-2xl border border-slate-200 object-cover shadow-sm" />
+                      : <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 text-xl font-bold text-white shadow-lg shadow-violet-200">{initials}</div>}
+                    <div className="flex-1">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Business name
+                        <input value={businessName} onChange={event => setBusinessName(event.target.value)} maxLength={255} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-100" />
+                      </label>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 transition hover:bg-violet-100">
+                          <ImagePlus className="h-4 w-4" /> {logoDataUrl ? 'Replace logo' : 'Upload logo'}
+                          <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={event => chooseLogo(event.target.files?.[0])} />
+                        </label>
+                        {logoDataUrl && <button type="button" onClick={() => setLogoDataUrl(null)} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50"><Trash2 className="h-4 w-4" /> Remove logo</button>}
+                      </div>
+                      <p className="mt-2 text-xs text-slate-400">PNG, JPEG, or WebP. Maximum 700 KB.</p>
+                    </div>
+                  </div>
+                  {brandError && <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{brandError}</p>}
+                </div>
+              </div>
+
               <div className="flex items-center justify-between">
                 <button
-                  onClick={handleSave}
+                  onClick={() => void handleSave()}
+                  disabled={brandSaving || !businessName.trim()}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition"
                 >
-                  {saved ? 'Saved!' : 'Save changes'}
+                  {brandSaving ? 'Saving…' : saved ? 'Saved!' : 'Save changes'}
                 </button>
                 <button
                   onClick={signOut}

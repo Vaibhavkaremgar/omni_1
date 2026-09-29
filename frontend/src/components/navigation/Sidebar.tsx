@@ -1,5 +1,15 @@
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../features/auth/hooks/useAuth';
+import { backendJson } from '../../services/backend/api';
+
+type Branding = { business_name: string; logo_data_url: string | null };
+
+function businessInitials(name: string) {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return 'PC';
+  return (words.length === 1 ? words[0].slice(0, 2) : `${words[0][0]}${words[1][0]}`).toUpperCase();
+}
 
 const NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: '📊' },
@@ -22,6 +32,18 @@ interface SidebarProps {
 export default function Sidebar({ collapsed, mobileOpen = false, onToggle }: SidebarProps) {
   const location = useLocation();
   const { user } = useAuth();
+  const [branding, setBranding] = useState<Branding>({ business_name: 'Pontis Calls', logo_data_url: null });
+
+  useEffect(() => {
+    void backendJson<Branding>('/settings').then(setBranding).catch(() => undefined);
+    const updateBranding = (event: Event) => setBranding((event as CustomEvent<Branding>).detail);
+    window.addEventListener('pontis:branding-updated', updateBranding);
+    return () => window.removeEventListener('pontis:branding-updated', updateBranding);
+  }, []);
+
+  const brandMark = branding.logo_data_url
+    ? <img src={branding.logo_data_url} alt="" className="h-7 w-7 rounded-md object-cover" />
+    : <span className="flex h-7 w-7 items-center justify-center rounded-md bg-blue-600 text-xs font-bold text-white">{businessInitials(branding.business_name)}</span>;
 
   return (
     <aside
@@ -33,17 +55,13 @@ export default function Sidebar({ collapsed, mobileOpen = false, onToggle }: Sid
       <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200">
         {!collapsed && (
           <Link to="/dashboard" className="flex items-center gap-2 font-semibold text-gray-900">
-            <span className="w-7 h-7 rounded-md bg-blue-600 flex items-center justify-center text-white text-sm font-bold">
-              PC
-            </span>
-            <span>Pontis Calls</span>
+            {brandMark}
+            <span className="max-w-32 truncate">{branding.business_name}</span>
           </Link>
         )}
         {collapsed && (
           <Link to="/dashboard" className="flex items-center justify-center w-full">
-            <span className="w-7 h-7 rounded-md bg-blue-600 flex items-center justify-center text-white text-sm font-bold">
-              PC
-            </span>
+            {brandMark}
           </Link>
         )}
         <button
@@ -100,10 +118,7 @@ export default function Sidebar({ collapsed, mobileOpen = false, onToggle }: Sid
               {(user?.full_name || user?.email || 'U').slice(0, 2).toUpperCase()}
           </div>
           {!collapsed && (
-            <div className="text-sm leading-tight">
-              <div className="font-medium text-gray-900 truncate">{user?.full_name || user?.email}</div>
-              <div className="text-xs text-gray-500 truncate">{user?.email}</div>
-            </div>
+            <div className="min-w-0 flex-1 truncate text-sm font-medium text-gray-700">{user?.email}</div>
           )}
         </div>
       </div>
