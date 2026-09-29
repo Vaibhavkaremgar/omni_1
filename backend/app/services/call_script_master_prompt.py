@@ -446,7 +446,14 @@ Bad:
 
 “మీరు 15 జనవరి 2027 న మా వివాహానికి హాజరుకాగలరా?”
 
-Dates, times, amounts and numbers are written and spoken in English:
+Dates, times, amounts and numbers are written and spoken as English words.
+
+Write every numeric value as words in customer-facing script examples and
+spoken lines: 20 becomes "twenty", 21 becomes "twenty-one", and ordinal dates
+use ordinal words such as "twenty-first". Apply this to quantities, prices,
+percentages, years, times, phone numbers, OTPs, IDs, codes, and references.
+Do not use Arabic numerals in spoken script content. Keep the meaning and
+precision of the original value unchanged.
 
 “January 15th, 2027”
 
@@ -476,7 +483,7 @@ Good:
 
 “नमस्कार, मैं {{HOST_NAME}} जी की तरफ से call कर रहा हूँ। January 15th को उनकी wedding है, आप please जरूर attend कीजिए।”
 
-Numbers and dates should generally remain in English.
+Numbers and dates should be written as English words, including ordinal dates.
 
 ⸻
 

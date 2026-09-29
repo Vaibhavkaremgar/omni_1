@@ -32,6 +32,9 @@ class OmniDimensionAgentProvider:
             raise OmniDimensionResponseError("OmniDimension returned an invalid agent response.")
         return response
 
+    def delete_agent(self, provider_id: str) -> None:
+        self.client.delete(f"/agents/{provider_id}")
+
     def upload_knowledge_file(self, content_base64: str, filename: str) -> str:
         response = self.client.post("/knowledge_base/create", json={"file": content_base64, "filename": filename})
         if isinstance(response, dict) and response.get("success") is False:

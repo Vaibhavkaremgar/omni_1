@@ -494,6 +494,24 @@ def delete_employee(
     employee = get_employee_or_404(employee_id, current_user.tenant.id, db)
     provider_linked = bool(employee.published_version_id) or any(version.provider_agent_id for version in employee.versions)
     if provider_linked or employee.status == EmployeeStatus.published.value:
+        provider_agent_id = employee.published_version.provider_agent_id if employee.published_version else next(
+            (version.provider_agent_id for version in employee.versions if version.provider_agent_id),
+            None,
+        )
+        if provider_agent_id:
+            try:
+                get_agent_service().provider.delete_agent(provider_agent_id)
+            except OmniDimensionError as exc:
+                logger.exception(
+                    "Employee deletion blocked because OmniDimension agent deletion failed "
+                    "employee_id=%s provider_agent_id=%s",
+                    employee.id,
+                    provider_agent_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Unable to delete the linked OmniDimension agent. The employee was not deleted.",
+                ) from exc
         employee.status = EmployeeStatus.archived.value
         for version in employee.versions:
             if version.status == VersionStatus.draft.value:

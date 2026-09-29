@@ -292,8 +292,28 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
             "Say thank you, thanks, sorry, and okay in English. Speak numbers, dates, years, times, prices, percentages, phone numbers, "
             "OTPs, IDs, codes, and references in English; speak identifiers digit by digit when appropriate."
         ), "is_enabled": True},
-        {"title": "Generated Call Script", "body": _format_call_script(saved_script), "is_enabled": True},
     ]
+    # Preserve the generated six-section structure when publishing.  The
+    # script formatter remains available for verification/diagnostic metadata,
+    # but must not be used as the provider context body because it collapses
+    # all six sections into one OmniDimension section.
+    context.extend(
+        {"title": title, "body": body, "is_enabled": True}
+        for title, body in saved_script.items()
+    )
+    # Custom steps are authored in the publish-page workspace and persisted
+    # separately from the generated six-section call_script. Append them after
+    # the generated sections so the generated script remains unchanged and in
+    # its original order.
+    custom_sections = configuration.get("custom_sections")
+    if isinstance(custom_sections, list):
+        for section in custom_sections:
+            if not isinstance(section, dict):
+                continue
+            title = _text(section.get("title"))
+            body = _text(section.get("content"))
+            if title and body:
+                context.append({"title": title, "body": body, "is_enabled": True})
     post_call_actions = _automatic_post_call_actions()
     extraction = configuration.get("conversation_variables")
     if not isinstance(extraction, list):
