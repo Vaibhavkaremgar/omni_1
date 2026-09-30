@@ -21,8 +21,8 @@ class CouponPayload(ORMBaseModel):
 
     @field_validator("code")
     @classmethod
-    def normalize_code(cls, value: str) -> str:
-        return value.strip().upper()
+    def normalize_code(cls, value: str | None) -> str | None:
+        return value.strip().upper() if value else value
 
     @model_validator(mode="after")
     def validate_dates(self):
@@ -31,6 +31,11 @@ class CouponPayload(ORMBaseModel):
         if self.discount_type == "promotional_minutes" and (self.promotional_minutes is None or self.promotional_minutes <= 0):
             raise ValueError("promotional_minutes must be greater than zero for this coupon type")
         return self
+
+class CouponCreate(CouponPayload):
+    # Coupon codes are deliberately never accepted from the admin UI.
+    code: str | None = None
+    tenant_ids: list[UUID] = Field(default_factory=list)
 
 class CouponRead(CouponPayload):
     id: UUID

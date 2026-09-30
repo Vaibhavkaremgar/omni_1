@@ -6,7 +6,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, get_db
 from app.models.coupon import Coupon
-from app.schemas.coupon import CouponPayload, CouponRead
+from app.schemas.coupon import CouponCreate, CouponPayload, CouponRead
+from app.models.coupon_tenant_share import CouponTenantShare
+from app.models.tenant import Tenant
+import secrets
+import string
 from app.services.auth import AuthenticatedUser, require_admin
 
 router = APIRouter(prefix="/admin/coupons", tags=["admin-coupons"])
@@ -17,8 +21,10 @@ def _admin(user: AuthenticatedUser = Depends(get_current_user)):
 def _status(coupon: Coupon) -> str:
     if not coupon.is_active: return "disabled"
     now = datetime.now(timezone.utc)
-    if coupon.starts_at and coupon.starts_at > now: return "scheduled"
-    if coupon.expires_at and coupon.expires_at <= now: return "expired"
+    starts_at = coupon.starts_at.replace(tzinfo=timezone.utc) if coupon.starts_at and coupon.starts_at.tzinfo is None else coupon.starts_at
+    expires_at = coupon.expires_at.replace(tzinfo=timezone.utc) if coupon.expires_at and coupon.expires_at.tzinfo is None else coupon.expires_at
+    if starts_at and starts_at > now: return "scheduled"
+    if expires_at and expires_at <= now: return "expired"
     return "active"
 
 def _read(c: Coupon) -> CouponRead:
@@ -29,13 +35,29 @@ def list_coupons(_: AuthenticatedUser = Depends(_admin), db: Session = Depends(g
     return [_read(c) for c in db.scalars(select(Coupon).order_by(Coupon.created_at.desc())).all()]
 
 @router.post("", response_model=CouponRead, status_code=status.HTTP_201_CREATED)
-def create_coupon(payload: CouponPayload, _: AuthenticatedUser = Depends(_admin), db: Session = Depends(get_db)):
-    coupon = Coupon(**payload.model_dump())
+def create_coupon(payload: CouponCreate, _: AuthenticatedUser = Depends(_admin), db: Session = Depends(get_db)):
+    tenant_ids = list(dict.fromkeys(payload.tenant_ids))
+    if tenant_ids:
+        valid = set(db.scalars(select(Tenant.id).where(Tenant.id.in_(tenant_ids))).all())
+        if len(valid) != len(tenant_ids):
+            raise HTTPException(status_code=422, detail="One or more customers could not be found")
+    alphabet = string.ascii_uppercase + string.digits
+    for _attempt in range(10):
+        code = ''.join(secrets.choice(alphabet) for _ in range(12))
+        if db.scalar(select(Coupon.id).where(Coupon.code == code)) is None:
+            break
+    else:
+        raise HTTPException(status_code=503, detail="Unable to generate a unique coupon code")
+    coupon = Coupon(**payload.model_dump(exclude={"tenant_ids", "code"}), code=code)
     db.add(coupon)
+    db.flush()
+    now = datetime.now(timezone.utc)
+    for tenant_id in tenant_ids:
+        db.add(CouponTenantShare(coupon_id=coupon.id, tenant_id=tenant_id, shared_at=now, status="SHARED"))
     try:
         db.commit(); db.refresh(coupon)
     except IntegrityError:
-        db.rollback(); raise HTTPException(status_code=409, detail="Coupon code already exists")
+        db.rollback(); raise HTTPException(status_code=409, detail="Coupon could not be created; please retry")
     return _read(coupon)
 
 @router.patch("/{coupon_id}", response_model=CouponRead)
@@ -48,6 +70,14 @@ def update_coupon(coupon_id: UUID, payload: CouponPayload, _: AuthenticatedUser 
     except IntegrityError:
         db.rollback(); raise HTTPException(status_code=409, detail="Coupon code already exists")
     return _read(coupon)
+
+@router.delete("/{coupon_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_coupon(coupon_id: UUID, _: AuthenticatedUser = Depends(_admin), db: Session = Depends(get_db)):
+    coupon = db.get(Coupon, coupon_id)
+    if not coupon:
+        raise HTTPException(status_code=404, detail="Coupon not found")
+    db.delete(coupon)
+    db.commit()
 
 @router.post("/{coupon_id}/activate", response_model=CouponRead)
 def activate_coupon(coupon_id: UUID, _: AuthenticatedUser = Depends(_admin), db: Session = Depends(get_db)):

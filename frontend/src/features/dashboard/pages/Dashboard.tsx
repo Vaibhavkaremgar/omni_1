@@ -79,7 +79,7 @@ interface Notification {
   time: string;
   read: boolean;
 }
-interface CouponOffer { id: string; title: string; description?: string; promotional_minutes?: number; expires_at?: string; status: string }
+interface CouponOffer { id: string; title: string; description?: string; code: string; promotional_minutes?: number; expires_at?: string; status: string }
 interface DashboardSummary {
   calls_today: number; connected_today: number; credits: number;
   recent_calls: Array<{ id: string; customer_phone_number: string | null; status: string; duration_seconds: number | null; direction: string; started_at: string; employee_id: string | null; outcome: string | null }>;
@@ -154,6 +154,7 @@ export default function Dashboard() {
     fetchData();
   }, []);
   useEffect(() => { void backendJson<CouponOffer[]>('/coupons/offers').then(setOffers).catch(() => setOffers([])); }, []);
+  useEffect(() => { const handler = (event: Event) => { const target = (event.target as HTMLElement).closest('button'); if (target?.textContent?.includes('View offer') && offers[0]) window.alert(`Coupon: ${offers[0].code}\n${offers[0].description || `${offers[0].promotional_minutes} free calling minutes`}`); }; document.addEventListener('click', handler); return () => document.removeEventListener('click', handler); }, [offers]);
 
   useEffect(() => {
     let cancelled = false;

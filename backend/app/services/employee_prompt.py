@@ -12,6 +12,7 @@ SCRIPT_SECTION_NAMES = (
     "Closing",
 )
 SUPPORTED_VARIABLE_TYPES = {"text", "number", "boolean", "date", "datetime", "phone", "email"}
+TELUGU_NUMBER_WORD_RULE = " Always say the label 'number' in English; never translate it into Telugu, including 'sankyalu', for phone number, reference number, account number, or any other number label."
 
 TELUGU_ENGINE_CONTRACT = """TELUGU LANGUAGE ENGINE: Write Telugu words in Telugu Unicode and familiar English terms in Latin script. Use natural spoken Telugu grammar and sentence order. Introduce an explicitly configured agent name after 'నేను', then state the specific reason for calling as an action involving the recipient. Put a host name next to the event or service it belongs to. Never assemble an introduction by joining identity and purpose fields with 'behalf'. Choose English words where people naturally use them for this context; do not force an English percentage or append Telugu words just to make a line mixed. Avoid literary, archaic, Sanskrit-heavy and word-for-word translated Telugu. Keep turns short and phone-natural. Never write Telugu words in Roman letters."""
 HINDI_ENGINE_CONTRACT = """HINDI LANGUAGE ENGINE: For customer-facing Hindi-English dialogue, write Hindi words in Devanagari and familiar English terms in Latin script. Use natural spoken Hindi word order and context-appropriate Hinglish, without a fixed language ratio. Avoid Roman Hindi, formal/literary or Sanskritized language, and word-for-word translation. Keep answers short, conversational and relevant to the actual call objective."""
@@ -214,6 +215,7 @@ def _language_conversation_guidance(language: str) -> str:
         hello = f"For repeated hello or attention-seeking, acknowledge the caller with varied, natural responses in {selected}, rather than repeating the same greeting."
     if _is_telugu(normalized):
         fillers = TELUGU_ENGINE_CONTRACT + "\n\n" + fillers
+        fillers += TELUGU_NUMBER_WORD_RULE
         fillers += " Use the saved call objective to form complete spoken sentences. Include the named agent only when agent_name was explicitly configured; keep the host in third person and use a direct reason for the call."
         fillers += " SCRIPT RULE: write Telugu words in Telugu script and use English terms only where natural for this call's actual subject. Never write Telugu in Roman letters."
         fillers += " TELUGU THANKS RULE: close gratitude in English only, for example 'Thank you. Have a nice day.' Never translate thanks or have-a-nice-day into Telugu and do not add Telugu suffixes to the thanks message."

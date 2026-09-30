@@ -20,7 +20,9 @@ class ShareRequest(BaseModel):
 def admin(user: AuthenticatedUser = Depends(get_current_user)): return require_admin(user)
 def eligible(c: Coupon) -> bool:
     now = datetime.now(timezone.utc)
-    return c.is_active and (c.starts_at is None or c.starts_at <= now) and (c.expires_at is None or c.expires_at > now)
+    starts_at = c.starts_at.replace(tzinfo=timezone.utc) if c.starts_at and c.starts_at.tzinfo is None else c.starts_at
+    expires_at = c.expires_at.replace(tzinfo=timezone.utc) if c.expires_at and c.expires_at.tzinfo is None else c.expires_at
+    return c.is_active and (starts_at is None or starts_at <= now) and (expires_at is None or expires_at > now)
 def safe(c: Coupon, share: CouponTenantShare):
     return {"id": share.id, "title": c.title, "description": c.description, "code": c.code, "promotional_minutes": c.promotional_minutes, "discount_type": c.discount_type, "discount_value": c.discount_value, "valid_from": c.starts_at, "expires_at": c.expires_at, "status": share.status}
 
@@ -42,7 +44,7 @@ def share_coupon(coupon_id: UUID, payload: ShareRequest, _: AuthenticatedUser = 
     return {"newly_shared": len([x for x in tenant_ids if x not in existing]), "already_shared": len(existing), "tenant_ids": [str(x) for x in tenant_ids if x not in existing]}
 
 @router.get("/offers")
-def offers(current: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)):
+def offers(current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)):
     rows = db.execute(select(CouponTenantShare, Coupon).join(Coupon, Coupon.id == CouponTenantShare.coupon_id).where(CouponTenantShare.tenant_id == current_user.tenant.id)).all()
     return [safe(c, s) for s, c in rows if eligible(c)]
 
