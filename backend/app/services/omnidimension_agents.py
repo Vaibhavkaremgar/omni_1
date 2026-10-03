@@ -20,6 +20,7 @@ from app.services.employee_prompt import (
     normalize_business_identity,
 )
 from app.services.employee_templates import UNIVERSAL_TELUGU_VOICE_GUIDANCE
+from app.services.spoken_text_normalizer import normalize_spoken_text
 from app.services.voice_catalog import voice_definition
 from app.core.config import get_settings
 
@@ -264,7 +265,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
         )
     else:
         canonical_prompt = str(configuration.get("final_prompt") or build_employee_prompt(configuration))
-    welcome_message = _welcome_message_from_first_section(saved_script) or _welcome_message(employee, configuration, lang)
+    welcome_message = normalize_spoken_text(_welcome_message_from_first_section(saved_script) or _welcome_message(employee, configuration, lang))
     audio_connection_guidance = _audio_connection_guidance(lang)
     interruption_guidance = _interruption_guidance(lang)
     context = [
@@ -298,7 +299,7 @@ def map_employee_configuration(employee: AIEmployee, configuration: dict[str, An
     # but must not be used as the provider context body because it collapses
     # all six sections into one OmniDimension section.
     context.extend(
-        {"title": title, "body": body, "is_enabled": True}
+        {"title": title, "body": normalize_spoken_text(body), "is_enabled": True}
         for title, body in saved_script.items()
     )
     # Custom steps are authored in the publish-page workspace and persisted
