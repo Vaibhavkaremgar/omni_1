@@ -17,6 +17,7 @@ from app.api.v1.endpoints.debug import router as debug_router
 from app.api.v1.endpoints.dashboard import router as dashboard_router
 from app.api.v1.endpoints.coupons import router as coupons_router
 from app.api.v1.endpoints.coupon_offers import admin_router as coupon_share_router, router as coupon_offers_router
+from app.api.v1.endpoints.omnidimension_capabilities import router as omnidimension_capabilities_router
 
 
 api_router = APIRouter(prefix="/api/v1")
@@ -38,3 +39,4 @@ api_router.include_router(dashboard_router)
 api_router.include_router(coupons_router)
 api_router.include_router(coupon_share_router)
 api_router.include_router(coupon_offers_router)
+api_router.include_router(omnidimension_capabilities_router)
