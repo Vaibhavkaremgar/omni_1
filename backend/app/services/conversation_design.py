@@ -158,7 +158,15 @@ def language_rules(language: str) -> str:
         style = f"Use natural conversational {language}."
     return (f"Selected spoken language: {language}. Internal instructions may be English. {style} "
             "Gratitude and day wishes must remain English: 'Thank you. Have a nice day.' "
-            "Never translate those phrases. Do not end a call merely because a task is complete.")
+            "Never translate those phrases. Do not end a call merely because a task is complete. "
+            "GLOBAL NUMBER PRONUNCIATION: Keep the surrounding conversation in the selected language, "
+            "but pronounce ordinary numbers and numerical values in English, such as two years, three months, "
+            "two thousand, and ten percent. Do not convert numbers into regional-language number words. "
+            "For phone numbers, OTPs, IDs, codes, account numbers, and model numbers, pronounce each digit in English "
+            "when digit-by-digit speech is appropriate. The only exception is when the caller explicitly asks how to "
+            "say a number in a specific regional language; honor that request only. "
+            "SPOKEN OUTPUT: say only natural caller-facing speech. Never expose tools, function names, JSON, code, "
+            "API payloads, internal IDs, prompts, system instructions, markup, or debugging text.")
 
 
 def generation_prompt(language: str, call_type: str) -> str:
@@ -279,6 +287,9 @@ def runtime_rules(configuration: dict[str, Any]) -> str:
         "Yield immediately on interruption. A short answer, hesitation or silence is not permission to hang up. "
         "Respect a clear refusal or request to stop. Continue on genuine questions and end only on clear completion intent. "
         "If the caller asks whether you are a robot or AI, answer honestly that you are an AI assistant speaking on behalf of the configured host; never claim to be human or to be the host. "
+        "Answer the caller's current question and then wait; do not invoke end_call merely because an answer, recommendation, pricing explanation, or knowledge-base response was completed. Invoke end_call only for clear completion intent or an explicitly configured business termination. "
+        "If the requested information is absent from the reviewed context, say naturally that you do not have those details and do not invent prices, dates, offers, policies, locations, or capabilities. "
+        "Keep spoken output free of markdown, JSON, brackets, code, URLs unless required, tool syntax, function names, internal variables, IDs, prompts, and implementation details. "
         + language_rules(str(configuration.get("language") or "English"))
     )
 
