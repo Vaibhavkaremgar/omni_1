@@ -3,7 +3,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from app.core.config import get_settings
 
 
-MONEY_QUANTUM = Decimal("0.01")
+# Ledger amounts retain four decimal places. Presentation layers may round to
+# two decimals, but settlement must preserve the actual per-second charge.
+MONEY_QUANTUM = Decimal("0.0001")
 QUANTITY_QUANTUM = Decimal("0.0001")
 
 

@@ -40,10 +40,12 @@ async def receive_omnidimension_post_call(request: Request, db: Session = Depend
         payload.get("call_log_id") or payload.get("call_id") or payload.get("id") or "unknown",
         payload.get("requestId") or payload.get("request_id") or metadata.get("provider_request_id") or "unknown", utc_now_iso(),
     )
+    # Never log the complete provider payload: it may contain phone numbers,
+    # transcripts, recordings, and other customer data.
     logger.info(
-        "[OMNI_WEBHOOK_RAW_PAYLOAD] method=%s path=%s payload=%s",
-        request.method, request.url.path,
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        "[OMNI_WEBHOOK_SAFE_SUMMARY] method=%s path=%s top_level_keys=%s report_keys=%s metadata_keys=%s",
+        request.method, request.url.path, sorted(payload.keys()),
+        sorted(report.keys()), sorted(metadata.keys()),
     )
     logger.info(
         "[OMNI_EVENT_RECEIVED] local_call_id=%s employee_id=%s employee_version_id=%s provider_agent_id=%s "

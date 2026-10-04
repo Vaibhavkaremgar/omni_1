@@ -22,6 +22,8 @@ class BillingAttemptError(Exception):
 def charge_completed_call(db: Session, call: Call) -> UsageRecord | None:
     existing = db.scalar(select(UsageRecord).where(UsageRecord.call_id == call.id))
     if existing is not None:
+        call.billing_status = "settled"
+        call.billed_duration_seconds = existing.duration_seconds
         return existing
     if call.duration_seconds is None or call.duration_seconds < 0:
         return None
@@ -68,4 +70,6 @@ def charge_completed_call(db: Session, call: Call) -> UsageRecord | None:
         reference_type="call",
         reference_id=str(call.id),
     ))
+    call.billing_status = "settled"
+    call.billed_duration_seconds = call.duration_seconds
     return usage

@@ -48,6 +48,9 @@ class Call(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     follow_up_required: Mapped[bool | None] = mapped_column(nullable=True)
     follow_up_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # Durable settlement state; metadata is diagnostic only.
+    billing_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    billed_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     tenant = relationship("Tenant", back_populates="calls")
     employee = relationship("AIEmployee", back_populates="calls")

@@ -22,6 +22,10 @@ from app.services.campaign_execution import (
     recover_stale_slots,
 )
 from app.core.config import get_settings
+from app.models.call import Call
+from app.models.enums import CallStatus
+from app.services.call_results import CallResultService
+from app.integrations.omnidimension import OmniDimensionCallProvider, OmniDimensionClient
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +111,7 @@ class CampaignScheduler:
             logger.info("[SCHEDULER_HEARTBEAT] tick=%s pid=%s thread=%s timestamp=%s", self._tick_number, os.getpid(), threading.get_ident(), now.isoformat())
         recover_stale_contacts(db)
         recover_stale_slots(db)
+        self.reconcile_calls(db)
         campaigns = db.scalars(select(Campaign).where(
             Campaign.status.in_([
                 CampaignStatus.scheduled.value,
@@ -172,6 +177,39 @@ class CampaignScheduler:
                 logger.info("Campaign scheduler campaign paused_or_cancelled campaign_id=%s status=%s", campaign.id, campaign.status)
         logger.info("Campaign scheduler tick finished dispatched=%s", dispatched)
         return dispatched
+
+    def reconcile_calls(self, db: Session) -> int:
+        """Recover delayed provider events and retry durable call settlement."""
+        provider = OmniDimensionCallProvider(OmniDimensionClient(get_settings()))
+        rows = db.scalars(select(Call).where(
+            Call.status.in_([CallStatus.queued.value, CallStatus.ringing.value, CallStatus.in_progress.value, CallStatus.completed.value]),
+        ).order_by(Call.updated_at.asc()).limit(100)).all()
+        recovered = 0
+        for call in rows:
+            payload = None
+            metadata = call.dispatch_metadata or {}
+            request_id = metadata.get("provider_request_id")
+            try:
+                if call.status != CallStatus.completed.value:
+                    payload = provider.get_call_log(call.provider_call_id) if call.provider_call_id else (
+                        provider.get_call_log_by_request_id(str(request_id)) if request_id else None
+                    )
+                if isinstance(payload, dict):
+                    rows_payload = payload.get("call_log_data")
+                    event = rows_payload[0] if isinstance(rows_payload, list) and rows_payload else payload
+                    if isinstance(event, dict):
+                        event = {**event, "metadata": {"local_call_id": str(call.id), "tenant_id": str(call.tenant_id)}}
+                        if CallResultService().process_post_call(db, event) is not None:
+                            recovered += 1
+                elif call.status == CallStatus.completed.value and call.billing_status != "settled":
+                    # The terminal event is already local; retry settlement without a provider call.
+                    event = {"metadata": {"local_call_id": str(call.id), "tenant_id": str(call.tenant_id)}, "status": call.status, "duration_seconds": call.duration_seconds}
+                    if CallResultService().process_post_call(db, event) is not None:
+                        recovered += 1
+            except Exception:
+                db.rollback()
+                logger.exception("[CALL_RECONCILIATION_FAILED] local_call_id=%s tenant_id=%s", call.id, call.tenant_id)
+        return recovered
 
 
 from app.db.session import SessionLocal

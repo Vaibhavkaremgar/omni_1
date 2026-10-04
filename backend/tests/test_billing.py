@@ -39,7 +39,7 @@ def completed_payload(call, duration="4:30"):
 
 def test_pricing_uses_decimal_and_rounds_half_up():
     assert calculate_call_charge(270) == (Decimal("4.5000"), Decimal("36.00"))
-    assert calculate_call_charge(272) == (Decimal("4.5333"), Decimal("36.27"))
+    assert calculate_call_charge(272) == (Decimal("4.5333"), Decimal("36.2667"))
 
 
 def test_initial_promotion_is_exact_and_idempotent(call_database):

@@ -9,6 +9,8 @@ from app.models.user import User
 from app.schemas.admin import ClientCreate, ClientRead, ClientCreated, ClientStatusUpdate
 from app.services.auth import AuthenticatedUser, hash_password, require_admin
 from app.services.wallets import grant_initial_promotional_credit
+from app.models.phone_number import PhoneNumber
+from app.services.phone_numbers import PhoneNumberAssignmentError, PhoneNumberService
 
 router = APIRouter(prefix="/admin/clients", tags=["admin"])
 
@@ -45,3 +47,19 @@ def deactivate_client(client_id: UUID, payload: ClientStatusUpdate, _: Authentic
     user.tenant.status = payload.status
     db.commit(); db.refresh(user)
     return _read(user)
+
+@router.post("/{client_id}/phone-numbers/{phone_number_id}")
+def assign_phone_number(client_id: UUID, phone_number_id: UUID, _: AuthenticatedUser = Depends(_admin), db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.id == client_id, User.role != "admin"))
+    if user is None:
+        raise HTTPException(status_code=404, detail="Client not found")
+    number = db.get(PhoneNumber, phone_number_id)
+    if number is None:
+        raise HTTPException(status_code=404, detail="Phone number not found")
+    if number.ownership == "platform_demo":
+        raise HTTPException(status_code=409, detail="Platform demo numbers are not assigned")
+    try:
+        assigned = PhoneNumberService.assign_to_tenant(db, phone_number_id, user.tenant_id)
+    except PhoneNumberAssignmentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"id": str(assigned.id), "tenant_id": str(assigned.tenant_id), "e164_number": assigned.e164_number, "status": assigned.status}

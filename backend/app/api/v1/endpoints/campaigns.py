@@ -210,7 +210,10 @@ def _campaign_progress(campaign_id: UUID, db: Session) -> CampaignProgress:
 
 
 def _campaign_detail(campaign: Campaign, db: Session) -> CampaignDetail:
-    employee = db.scalar(select(AIEmployee).where(AIEmployee.id == campaign.employee_id))
+    employee = db.scalar(select(AIEmployee).where(
+        AIEmployee.id == campaign.employee_id,
+        AIEmployee.tenant_id == campaign.tenant_id,
+    ))
     progress = _campaign_progress(campaign.id, db)
     return CampaignDetail(
         id=campaign.id,
@@ -378,7 +381,10 @@ def list_contacts(
 ) -> list[dict]:
     _get_campaign(campaign_id, current_user.tenant.id, db)
     contacts = db.scalars(
-        select(CampaignContact).where(CampaignContact.campaign_id == campaign_id)
+        select(CampaignContact).where(
+            CampaignContact.campaign_id == campaign_id,
+            CampaignContact.tenant_id == current_user.tenant.id,
+        )
     ).all()
     return [
         {

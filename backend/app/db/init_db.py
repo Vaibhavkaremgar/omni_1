@@ -21,6 +21,7 @@ def init_db() -> None:
     _ensure_call_dispatch_columns()
     _ensure_call_post_call_columns()
     _ensure_billing_columns()
+    _ensure_call_billing_columns()
     _ensure_tenant_reseller_columns()
     _ensure_phone_number_lifecycle_columns()
     _ensure_phone_number_demo_columns()
@@ -248,6 +249,16 @@ def _ensure_billing_columns() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_transactions_provider_payment_id "
             "ON billing_transactions(provider_payment_id) WHERE provider_payment_id IS NOT NULL"
         ))
+
+def _ensure_call_billing_columns() -> None:
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    existing = {column["name"] for column in inspect(engine).get_columns("calls")}
+    with engine.begin() as connection:
+        if "billing_status" not in existing:
+            connection.execute(text("ALTER TABLE calls ADD COLUMN billing_status VARCHAR(32) NOT NULL DEFAULT 'pending'"))
+        if "billed_duration_seconds" not in existing:
+            connection.execute(text("ALTER TABLE calls ADD COLUMN billed_duration_seconds INTEGER"))
 
 
 def _ensure_tenant_reseller_columns() -> None:

@@ -94,14 +94,16 @@ class CallResultService:
         non_chargeable_outcome = terminal_reason in {"wrong_number", "wrongnumber", "do_not_call", "donotcall", "dnc"} or terminal_outcome in {"wrong_number", "wrongnumber", "do_not_call", "donotcall", "dnc"}
         if call.status == CallStatus.completed.value and call.duration_seconds is not None and not non_chargeable_outcome:
             metadata = {**(call.dispatch_metadata or {})}
-            if not metadata.get("billing_attempted"):
-                metadata["billing_attempted"] = True
+            if call.billing_status != "settled":
+                call.billing_status = "processing"
                 try:
                     with db.begin_nested():
                         charge_completed_call(db, call)
                 except WalletError as exc:
+                    call.billing_status = "retryable"
                     metadata["billing_error"] = str(exc)
                 except Exception:
+                    call.billing_status = "retryable"
                     metadata["billing_error"] = "Unable to record call usage."
                 call.dispatch_metadata = metadata
         # Update campaign contact progress
